@@ -10,6 +10,7 @@ type ServerlessCompileResult = {
   diagnostics: BuildDiagnostic[];
   durationMs: number;
 };
+
 const runnerPath = resolve(
   process.cwd(),
   "lib",
