@@ -250,10 +250,10 @@ This workspace is stateless by design.
 
 - No per-session filesystem
 - No per-session node_modules
-- No child Vite process
+- No long-lived dev server
 - No terminal
 
-Preview builds use the repo's installed libraries and a browser-supplied file snapshot.`,
+Preview builds use the repo's installed libraries, an esbuild compiler, and a browser-supplied file snapshot.`,
       },
       {
         path: "index.html",
@@ -305,7 +305,7 @@ const facts = [
   {
     icon: Zap,
     title: "Shared deps",
-    body: "This route uses the repo's installed React, Vite, lucide-react, and motion packages.",
+    body: "This route uses the repo's installed React, lucide-react, and motion packages through a stateless esbuild bundle step.",
   },
   {
     icon: ArrowRight,

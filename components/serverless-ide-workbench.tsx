@@ -377,8 +377,8 @@ export function ServerlessIdeWorkbench({
               Explorer
             </p>
             <p className="mt-2 text-sm text-[#cccccc]">
-              This route sends the current file snapshot to a stateless Vite build
-              API. No workspace dir, no child process, no terminal.
+              This route sends the current file snapshot to a stateless esbuild
+              compile API. No workspace dir, no long-lived dev server, no terminal.
             </p>
           </div>
 
