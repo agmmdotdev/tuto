@@ -96,9 +96,18 @@ const serverlessCompileTraceGlobs = [
   ]),
 ];
 
+const serverlessTypeTraceGlobs = collectRuntimePackageGlobs([
+  "react",
+  "react-dom",
+  "motion",
+  "@types/react",
+  "@types/react-dom",
+]);
+
 const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/api/serverless/compile": serverlessCompileTraceGlobs,
+    "/api/serverless/types": serverlessTypeTraceGlobs,
   },
 };
 
