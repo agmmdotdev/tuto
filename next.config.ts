@@ -1,19 +1,79 @@
 import type { NextConfig } from "next";
+import { createRequire } from "node:module";
+import { dirname, relative } from "node:path";
+import { readFileSync } from "node:fs";
+
+const require = createRequire(import.meta.url);
+const projectRoot = process.cwd();
+
+function toProjectGlob(absoluteDirectoryPath: string) {
+  const relativePath = relative(projectRoot, absoluteDirectoryPath).replaceAll("\\", "/");
+  return `./${relativePath}/**/*`;
+}
+
+function readPackageManifest(packageName: string) {
+  const manifestPath = require.resolve(`${packageName}/package.json`);
+  const packageDirectory = dirname(manifestPath);
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+    dependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+  };
+
+  return {
+    manifest,
+    packageDirectory,
+  };
+}
+
+function collectRuntimePackageGlobs(seedPackages: string[]) {
+  const visited = new Set<string>();
+  const packageGlobs = new Set<string>();
+  const queue = [...seedPackages];
+
+  while (queue.length > 0) {
+    const packageName = queue.shift();
+
+    if (!packageName || visited.has(packageName)) {
+      continue;
+    }
+
+    visited.add(packageName);
+
+    try {
+      const { manifest, packageDirectory } = readPackageManifest(packageName);
+      packageGlobs.add(toProjectGlob(packageDirectory));
+
+      for (const dependencyName of Object.keys({
+        ...(manifest.dependencies ?? {}),
+        ...(manifest.optionalDependencies ?? {}),
+      })) {
+        if (!visited.has(dependencyName)) {
+          queue.push(dependencyName);
+        }
+      }
+    } catch {
+      // Skip packages that are not installed for the current environment.
+    }
+  }
+
+  return [...packageGlobs].sort();
+}
+
+const serverlessCompileTraceGlobs = [
+  "./lib/serverless-vite/**/*.cjs",
+  "./node_modules/@esbuild/**/*",
+  ...collectRuntimePackageGlobs([
+    "esbuild",
+    "react",
+    "react-dom",
+    "lucide-react",
+    "motion",
+  ]),
+];
 
 const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
-    "/api/serverless/compile": [
-      "./lib/serverless-vite/**/*.cjs",
-      "./node_modules/esbuild/**/*",
-      "./node_modules/@esbuild/**/*",
-      "./node_modules/react/**/*",
-      "./node_modules/react-dom/**/*",
-      "./node_modules/scheduler/**/*",
-      "./node_modules/lucide-react/**/*",
-      "./node_modules/motion/**/*",
-      "./node_modules/framer-motion/**/*",
-      "./node_modules/tslib/**/*",
-    ],
+    "/api/serverless/compile": serverlessCompileTraceGlobs,
   },
 };
 
