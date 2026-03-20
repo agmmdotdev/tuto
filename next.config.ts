@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 import { createRequire } from "node:module";
-import { dirname, relative } from "node:path";
-import { readFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 
 const require = createRequire(import.meta.url);
 const projectRoot = process.cwd();
@@ -11,8 +11,33 @@ function toProjectGlob(absoluteDirectoryPath: string) {
   return `./${relativePath}/**/*`;
 }
 
+function findPackageManifestPath(packageName: string) {
+  try {
+    return require.resolve(`${packageName}/package.json`);
+  } catch {
+    const entryPath = require.resolve(packageName);
+    let currentDirectory = dirname(entryPath);
+
+    while (true) {
+      const candidatePath = join(currentDirectory, "package.json");
+
+      if (existsSync(candidatePath)) {
+        return candidatePath;
+      }
+
+      const parentDirectory = dirname(currentDirectory);
+
+      if (parentDirectory === currentDirectory) {
+        throw new Error(`Unable to locate package.json for ${packageName}.`);
+      }
+
+      currentDirectory = parentDirectory;
+    }
+  }
+}
+
 function readPackageManifest(packageName: string) {
-  const manifestPath = require.resolve(`${packageName}/package.json`);
+  const manifestPath = findPackageManifestPath(packageName);
   const packageDirectory = dirname(manifestPath);
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
     dependencies?: Record<string, string>;
