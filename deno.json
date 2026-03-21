@@ -2,9 +2,6 @@
   "deploy": {
     "framework": "nextjs",
     "install": "yarn install --immutable",
-    "build": "yarn build",
-    "runtime": {
-      "memory_limit": 2048
-    }
+    "build": "yarn build"
   }
 }
