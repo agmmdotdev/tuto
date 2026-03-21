@@ -1,9 +1,6 @@
 import { NextResponse } from "next/server";
 import { BuildDiagnostic, WorkspaceFile } from "@/lib/ide/types";
-import {
-  runServerlessNextjsRuntimeRequest,
-  ServerlessNextjsRuntimeRequestInput,
-} from "@/lib/serverless-nextjs-runtime/compiler";
+import type { ServerlessNextjsRuntimeRequestInput } from "@/lib/serverless-nextjs-runtime/compiler";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -66,11 +63,42 @@ function sanitizeNextPreviewHtml(html: string) {
 
 export async function POST(request: Request) {
   try {
+    if (process.env.VERCEL === "1") {
+      const diagnostics: BuildDiagnostic[] = [
+        {
+          id: crypto.randomUUID(),
+          level: "error",
+          message:
+            "The experimental real Next runtime is disabled on Vercel because its function bundle exceeds the 250 MB unzipped limit. Use the lighter /serverless/nextjs route on Vercel, or self-host this route.",
+          timestamp: new Date().toISOString(),
+        },
+      ];
+
+      return NextResponse.json(
+        {
+          success: false,
+          diagnostics,
+          logs: [],
+          response: null,
+          error: diagnostics[0].message,
+        },
+        {
+          headers: {
+            "cache-control": "no-store",
+          },
+          status: 501,
+        },
+      );
+    }
+
     const payload = (await request.json()) as {
       files?: WorkspaceFile[];
       workspaceKey?: string;
       request?: Partial<ServerlessNextjsRuntimeRequestInput>;
     };
+    const { runServerlessNextjsRuntimeRequest } = await import(
+      "@/lib/serverless-nextjs-runtime/compiler"
+    );
     const result = await runServerlessNextjsRuntimeRequest(payload.files ?? [], {
       method: payload.request?.method ?? "GET",
       path: payload.request?.path ?? "/",

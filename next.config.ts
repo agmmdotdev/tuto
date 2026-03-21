@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 
 const require = createRequire(import.meta.url);
 const projectRoot = process.cwd();
+const isVercel = process.env.VERCEL === "1";
 
 function toProjectGlob(absoluteDirectoryPath: string) {
   const relativePath = relative(projectRoot, absoluteDirectoryPath).replaceAll("\\", "/");
@@ -136,9 +137,14 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/api/serverless/compile": serverlessCompileTraceGlobs,
     "/api/serverless/expressjs/request": serverlessExpressRequestTraceGlobs,
-    "/api/serverless/nextjs-runtime/request": serverlessNextjsRuntimeRequestTraceGlobs,
     "/api/serverless/expressjs/types": serverlessExpressTypeTraceGlobs,
     "/api/serverless/types": serverlessTypeTraceGlobs,
+    ...(!isVercel
+      ? {
+          "/api/serverless/nextjs-runtime/request":
+            serverlessNextjsRuntimeRequestTraceGlobs,
+        }
+      : {}),
   },
 };
 
