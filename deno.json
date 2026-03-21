@@ -1,7 +1,0 @@
-{
-  "deploy": {
-    "framework": "nextjs",
-    "install": "yarn install --immutable",
-    "build": "yarn build"
-  }
-}
