@@ -68,6 +68,7 @@ export async function POST(request: Request) {
   try {
     const payload = (await request.json()) as {
       files?: WorkspaceFile[];
+      workspaceKey?: string;
       request?: Partial<ServerlessNextjsRuntimeRequestInput>;
     };
     const result = await runServerlessNextjsRuntimeRequest(payload.files ?? [], {
@@ -75,6 +76,7 @@ export async function POST(request: Request) {
       path: payload.request?.path ?? "/",
       headers: payload.request?.headers ?? {},
       body: payload.request?.body ?? "",
+      workspaceKey: payload.workspaceKey,
     });
 
     return NextResponse.json(

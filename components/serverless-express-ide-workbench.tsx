@@ -214,6 +214,7 @@ export function ServerlessExpressIdeWorkbench({
   const [requestPath, setRequestPath] = useState("/");
   const [requestHeadersText, setRequestHeadersText] = useState("{}");
   const [requestBodyText, setRequestBodyText] = useState("");
+  const [workspaceRequestKey, setWorkspaceRequestKey] = useState(() => crypto.randomUUID());
   const [activeRequest, setActiveRequest] = useState<ActiveRequest>({
     method: "GET",
     path: "/",
@@ -247,6 +248,7 @@ export function ServerlessExpressIdeWorkbench({
         requestPath?: string;
         requestHeadersText?: string;
         requestBodyText?: string;
+        workspaceRequestKey?: string;
       };
 
       if (parsed.files?.length) {
@@ -275,11 +277,16 @@ export function ServerlessExpressIdeWorkbench({
           : createDefaultHeadersText(nextMethod);
       const nextBodyText =
         typeof parsed.requestBodyText === "string" ? parsed.requestBodyText : "";
+      const nextWorkspaceRequestKey =
+        typeof parsed.workspaceRequestKey === "string" && parsed.workspaceRequestKey.trim()
+          ? parsed.workspaceRequestKey
+          : crypto.randomUUID();
 
       setRequestMethod(nextMethod);
       setRequestPath(nextPath);
       setRequestHeadersText(nextHeadersText);
       setRequestBodyText(nextBodyText);
+      setWorkspaceRequestKey(nextWorkspaceRequestKey);
 
       try {
         setActiveRequest({
@@ -313,6 +320,7 @@ export function ServerlessExpressIdeWorkbench({
         requestPath,
         requestHeadersText,
         requestBodyText,
+        workspaceRequestKey,
       }),
     );
   }, [
@@ -323,6 +331,7 @@ export function ServerlessExpressIdeWorkbench({
     requestHeadersText,
     requestMethod,
     requestPath,
+    workspaceRequestKey,
   ]);
 
   const selectedFile = useMemo(() => {
@@ -434,6 +443,7 @@ export function ServerlessExpressIdeWorkbench({
           body: JSON.stringify({
             files,
             request: activeRequest,
+            workspaceKey: workspaceRequestKey,
           }),
         });
         const payload = (await response.json()) as {
@@ -489,7 +499,7 @@ export function ServerlessExpressIdeWorkbench({
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [activeRequest, config.requestRoute, files, requestVersion]);
+  }, [activeRequest, config.requestRoute, files, requestVersion, workspaceRequestKey]);
 
   useEffect(() => {
     function handlePreviewMessage(event: MessageEvent) {

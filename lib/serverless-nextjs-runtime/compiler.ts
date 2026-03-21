@@ -23,6 +23,7 @@ export type ServerlessNextjsRuntimeRequestInput = {
   path: string;
   headers: Record<string, string>;
   body: string;
+  workspaceKey?: string;
 };
 
 export type ServerlessNextjsRuntimeRequestResult = {
