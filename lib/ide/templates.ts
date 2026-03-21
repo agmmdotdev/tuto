@@ -460,6 +460,811 @@ p {
     ],
   },
   {
+    id: "serverless-nextjs-playground",
+    name: "Serverless Next.js Playground",
+    previewPath: "app/page.tsx",
+    files: [
+      {
+        path: "README.md",
+        language: "md",
+        description: "A stateless App Router-like playground built on the shared esbuild compiler.",
+        content: `# Serverless Next.js Playground
+
+This workspace is a stateless, Next-flavored playground.
+
+- No session filesystem
+- No long-lived dev server
+- No route handlers
+- No React Server Components
+
+What it does support:
+
+- \`app/page.tsx\`
+- \`app/layout.tsx\`
+- \`app/globals.css\`
+- lightweight browser shims for \`next/link\`, \`next/image\`, and \`next/navigation\`
+
+So this feels like a small App Router workspace, but it is still compiled into a browser bundle from your saved snapshot.`,
+      },
+      {
+        path: "app/layout.tsx",
+        language: "tsx",
+        description: "Root layout for the stateless Next-style app.",
+        content: `import type { ReactNode } from "react";
+import "./globals.css";
+
+export default function RootLayout({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <body>
+        <div className="site-shell">
+          <header className="topbar">
+            <span className="brand">TUTO / NEXTJS</span>
+            <nav className="topnav">
+              <a href="#why">Why it works</a>
+              <a href="#cards">Cards</a>
+            </nav>
+          </header>
+          {children}
+        </div>
+      </body>
+    </html>
+  );
+}
+`,
+      },
+      {
+        path: "app/page.tsx",
+        language: "tsx",
+        description: "The main App Router page for the stateless Next-style app.",
+        content: `import { ArrowRight, Orbit, PanelsTopLeft } from "lucide-react";
+import { motion } from "motion/react";
+import Image from "next/image";
+import Link from "next/link";
+
+const cards = [
+  {
+    icon: PanelsTopLeft,
+    title: "App Router shape",
+    body: "This route lets you work inside app/page.tsx and app/layout.tsx instead of a plain src/main.tsx entry.",
+  },
+  {
+    icon: Orbit,
+    title: "Stateless compile",
+    body: "The preview still comes from a fresh esbuild bundle generated from your last saved snapshot.",
+  },
+  {
+    icon: ArrowRight,
+    title: "Subset of Next",
+    body: "It supports a small browser-friendly slice of Next APIs, not the full framework runtime.",
+  },
+];
+
+const heroArt = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 420 280'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' x2='1' y1='0' y2='1'%3E%3Cstop stop-color='%23d0682f'/%3E%3Cstop offset='1' stop-color='%23261a12'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='420' height='280' rx='28' fill='%23f7ecdb'/%3E%3Cpath d='M42 201c40-74 110-120 197-120 65 0 113 26 139 58' fill='none' stroke='url(%23g)' stroke-width='24' stroke-linecap='round'/%3E%3Ccircle cx='114' cy='108' r='28' fill='%23d0682f' fill-opacity='.16'/%3E%3Ccircle cx='297' cy='168' r='44' fill='%23261a12' fill-opacity='.08'/%3E%3C/svg%3E";
+
+export default function Page() {
+  return (
+    <main className="page-shell">
+      <section className="hero">
+        <div className="hero-copy">
+          <span className="badge">Serverless Next.js</span>
+          <h1>App Router feel, stateless compiler underneath.</h1>
+          <p>
+            Edit <code>app/page.tsx</code>, <code>app/layout.tsx</code>, and{" "}
+            <code>app/globals.css</code>. Save, and the serverless preview will
+            rebuild from the current snapshot.
+          </p>
+          <div className="hero-actions">
+            <Link className="cta" href="#cards">
+              Explore the cards
+            </Link>
+            <Link className="secondary" href="#why">
+              Read the tradeoffs
+            </Link>
+          </div>
+        </div>
+
+        <motion.div
+          animate={{ opacity: 1, y: 0 }}
+          className="hero-art"
+          initial={{ opacity: 0, y: 18 }}
+          transition={{ duration: 0.35, ease: "easeOut" }}
+        >
+          <Image
+            alt="Abstract orange arc artwork"
+            className="hero-image"
+            height={280}
+            src={heroArt}
+            width={420}
+          />
+        </motion.div>
+      </section>
+
+      <section className="card-grid" id="cards">
+        {cards.map(({ body, icon: Icon, title }, index) => (
+          <motion.article
+            animate={{ opacity: 1, y: 0 }}
+            className="card"
+            initial={{ opacity: 0, y: 20 }}
+            key={title}
+            transition={{ delay: index * 0.06, duration: 0.28, ease: "easeOut" }}
+          >
+            <span className="card-icon">
+              <Icon size={18} strokeWidth={2.2} />
+            </span>
+            <strong>{title}</strong>
+            <p>{body}</p>
+          </motion.article>
+        ))}
+      </section>
+
+      <section className="why" id="why">
+        <p>
+          This is not a real Next.js dev server. It is a browser-previewable App
+          Router subset rendered from a stateless compile step. That makes it
+          much easier to deploy than a per-user long-lived runtime.
+        </p>
+      </section>
+    </main>
+  );
+}
+`,
+      },
+      {
+        path: "app/globals.css",
+        language: "css",
+        description: "Global styles for the stateless Next-style app.",
+        content: `:root {
+  color-scheme: light;
+  --bg: #f4ead8;
+  --panel: rgba(255, 249, 240, 0.88);
+  --panel-strong: rgba(36, 25, 17, 0.95);
+  --ink: #261a12;
+  --accent: #d0682f;
+  --muted: #705a48;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Segoe UI", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top left, rgba(208, 104, 47, 0.18), transparent 24rem),
+    linear-gradient(180deg, #fff8ef 0%, #e9d5bb 100%);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+code {
+  padding: 0.08rem 0.35rem;
+  border-radius: 0.45rem;
+  background: rgba(38, 26, 18, 0.08);
+  font-family: Consolas, monospace;
+  font-size: 0.92em;
+}
+
+.site-shell {
+  width: min(1100px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 24px 0 56px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 0 0 22px;
+}
+
+.brand {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
+.topnav {
+  display: flex;
+  gap: 16px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.page-shell {
+  display: grid;
+  gap: 18px;
+}
+
+.hero,
+.card,
+.why {
+  border-radius: 28px;
+  border: 1px solid rgba(38, 26, 18, 0.08);
+  background: var(--panel);
+  box-shadow: 0 24px 60px rgba(56, 30, 12, 0.12);
+}
+
+.hero {
+  display: grid;
+  gap: 28px;
+  align-items: center;
+  padding: 34px;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
+}
+
+.badge {
+  display: inline-flex;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(208, 104, 47, 0.12);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 16px 0 12px;
+  font-size: clamp(40px, 7vw, 72px);
+  line-height: 0.94;
+}
+
+p {
+  margin: 0;
+  line-height: 1.65;
+}
+
+.hero-copy p {
+  max-width: 38rem;
+  font-size: 18px;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.cta,
+.secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.cta {
+  background: var(--panel-strong);
+  color: white;
+}
+
+.secondary {
+  border: 1px solid rgba(38, 26, 18, 0.12);
+}
+
+.hero-art {
+  position: relative;
+}
+
+.hero-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 24px;
+  border: 1px solid rgba(38, 26, 18, 0.08);
+}
+
+.card-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.card {
+  padding: 22px;
+}
+
+.card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  background: rgba(208, 104, 47, 0.12);
+  color: var(--accent);
+}
+
+.card strong {
+  display: block;
+  margin: 14px 0 10px;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.why {
+  padding: 24px 26px;
+  color: var(--muted);
+}
+
+@media (max-width: 840px) {
+  .hero {
+    grid-template-columns: 1fr;
+  }
+
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+`,
+      },
+    ],
+  },
+  {
+    id: "serverless-nextjs-runtime-playground",
+    name: "Serverless Next Runtime Playground",
+    previewPath: "app/page.tsx",
+    files: [
+      {
+        path: "README.md",
+        language: "md",
+        description: "A stateless real-Next runtime experiment using a short-lived temp workspace.",
+        content: `# Serverless Next Runtime Playground
+
+This route is an experiment in running a real Next app without keeping a long-lived session runtime alive.
+
+- A saved file snapshot is written into a temp workspace
+- A short-lived child process boots Next for one request
+- The response is captured and returned to the workbench
+- The workspace is then abandoned for later cleanup
+
+This is closer to real Next than the lightweight \`/serverless/nextjs\` route, but it is still request-scoped rather than an always-on dev server.`,
+      },
+      {
+        path: "package.json",
+        language: "json",
+        description: "Project manifest for the experimental runtime.",
+        content: `{
+  "name": "serverless-nextjs-runtime-playground",
+  "private": true
+}
+`,
+      },
+      {
+        path: "tsconfig.json",
+        language: "json",
+        description: "TypeScript configuration for the experimental runtime.",
+        content: `{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "es2022"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [{ "name": "next" }]
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"],
+  "exclude": ["node_modules"]
+}
+`,
+      },
+      {
+        path: "next-env.d.ts",
+        language: "ts",
+        description: "Next ambient types.",
+        content: `/// <reference types="next" />
+/// <reference types="next/image-types/global" />
+
+// This file is intentionally lightweight for the runtime experiment.
+`,
+      },
+      {
+        path: "app/layout.tsx",
+        language: "tsx",
+        description: "Root layout for the real runtime experiment.",
+        content: `import type { ReactNode } from "react";
+import "./globals.css";
+
+export default function RootLayout({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <body>
+        <div className="shell">{children}</div>
+      </body>
+    </html>
+  );
+}
+`,
+      },
+      {
+        path: "app/page.tsx",
+        language: "tsx",
+        description: "A server component page for the runtime experiment.",
+        content: `import Link from "next/link";
+
+async function getGreeting() {
+  return {
+    text: "Hello from a real Next request runtime.",
+    renderedAt: new Date().toISOString(),
+  };
+}
+
+export default async function Page() {
+  const greeting = await getGreeting();
+
+  return (
+    <main className="panel">
+      <span className="eyebrow">Runtime experiment</span>
+      <h1>{greeting.text}</h1>
+      <p>
+        This page is rendered by a short-lived Next process on the server. Save
+        the file, send a request, and the workbench will capture the fresh HTML.
+      </p>
+      <div className="meta-grid">
+        <article>
+          <strong>Rendered at</strong>
+          <span>{greeting.renderedAt}</span>
+        </article>
+        <article>
+          <strong>API route</strong>
+          <span>Try GET /api/hello in the request panel.</span>
+        </article>
+        <article>
+          <strong>Tradeoff</strong>
+          <span>No persistent dev server or HMR.</span>
+        </article>
+      </div>
+      <Link className="cta" href="/api/hello">
+        Open the JSON route
+      </Link>
+    </main>
+  );
+}
+`,
+      },
+      {
+        path: "app/api/hello/route.ts",
+        language: "ts",
+        description: "A simple route handler for API request testing.",
+        content: `export async function GET() {
+  return Response.json({
+    ok: true,
+    message: "Hello from app/api/hello/route.ts",
+    timestamp: new Date().toISOString(),
+  });
+}
+
+export async function POST(request: Request) {
+  const body = await request.json().catch(() => null);
+
+  return Response.json({
+    ok: true,
+    echo: body,
+    timestamp: new Date().toISOString(),
+  });
+}
+`,
+      },
+      {
+        path: "app/globals.css",
+        language: "css",
+        description: "Styles for the runtime experiment.",
+        content: `:root {
+  color-scheme: light;
+  --bg: #f3e6d5;
+  --panel: rgba(255, 249, 241, 0.92);
+  --ink: #251910;
+  --accent: #c7622f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Segoe UI", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top left, rgba(199, 98, 47, 0.18), transparent 22rem),
+    linear-gradient(180deg, #fff7ef 0%, #ead3b7 100%);
+}
+
+.shell {
+  width: min(900px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 32px 0 48px;
+}
+
+.panel {
+  border-radius: 28px;
+  border: 1px solid rgba(37, 25, 16, 0.08);
+  background: var(--panel);
+  box-shadow: 0 24px 60px rgba(56, 30, 12, 0.12);
+  padding: 36px;
+}
+
+.eyebrow {
+  display: inline-flex;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(199, 98, 47, 0.12);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 16px 0 12px;
+  font-size: clamp(38px, 6vw, 64px);
+  line-height: 0.95;
+}
+
+p {
+  margin: 0;
+  max-width: 38rem;
+  line-height: 1.6;
+  font-size: 18px;
+}
+
+.meta-grid {
+  display: grid;
+  gap: 14px;
+  margin-top: 22px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.meta-grid article {
+  border-radius: 18px;
+  padding: 18px;
+  background: white;
+  border: 1px solid rgba(37, 25, 16, 0.08);
+}
+
+.meta-grid strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 22px;
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 999px;
+  background: #241911;
+  color: white;
+  text-decoration: none;
+  font-weight: 600;
+}
+`,
+      },
+    ],
+  },
+  {
+    id: "serverless-express-playground",
+    name: "Serverless Express Playground",
+    previewPath: "src/server.ts",
+    files: [
+      {
+        path: "README.md",
+        language: "md",
+        description: "A stateless Express playground that compiles and serves one request at a time.",
+        content: `# Serverless Express Playground
+
+This workspace is stateless by design.
+
+- No session filesystem on disk
+- No long-lived Node process
+- No terminal
+- No installed session node_modules
+
+Each preview request sends the current browser snapshot to the server, bundles the Express app with esbuild, starts it on an ephemeral port, proxies one request, then shuts it down again.`,
+      },
+      {
+        path: "package.json",
+        language: "json",
+        description: "Informational manifest for the stateless Express playground.",
+        content: `{
+  "name": "serverless-express-playground",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}
+`,
+      },
+      {
+        path: "src/server.ts",
+        language: "ts",
+        description: "Express app entry exported for the stateless request runner.",
+        content: `import express from "express";
+
+const app = express();
+
+app.use(express.json());
+
+app.get("/", (_request, response) => {
+  response
+    .type("html")
+    .send(\`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Serverless Express</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f4e6d5;
+        --panel: rgba(255, 249, 241, 0.92);
+        --ink: #24180e;
+        --accent: #b65e2a;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Segoe UI", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(182, 94, 42, 0.2), transparent 22rem),
+          linear-gradient(180deg, #fff8ef 0%, #ecd8bc 100%);
+      }
+      main {
+        width: min(960px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 32px 0 48px;
+      }
+      .hero, .card {
+        border-radius: 28px;
+        border: 1px solid rgba(36, 24, 14, 0.08);
+        background: var(--panel);
+        box-shadow: 0 24px 60px rgba(65, 35, 13, 0.12);
+      }
+      .hero { padding: 42px 34px 26px; }
+      .badge {
+        display: inline-flex;
+        padding: 8px 14px;
+        border-radius: 999px;
+        background: rgba(182, 94, 42, 0.12);
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      h1 {
+        margin: 16px 0 12px;
+        font-size: clamp(42px, 7vw, 68px);
+        line-height: 0.94;
+      }
+      p {
+        margin: 0;
+        max-width: 40rem;
+        font-size: 18px;
+        line-height: 1.6;
+      }
+      .grid {
+        display: grid;
+        gap: 16px;
+        margin-top: 18px;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+      .card { padding: 22px; }
+      .card strong {
+        display: block;
+        margin-bottom: 10px;
+        font-size: 14px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <span class="badge">Serverless Express</span>
+        <h1>Stateless request, real Node handler.</h1>
+        <p>
+          This HTML was generated by an Express route compiled from the files in
+          your browser, started on a short-lived Node server, requested once,
+          then shut down.
+        </p>
+      </section>
+      <section class="grid">
+        <article class="card">
+          <strong>Compile</strong>
+          esbuild bundles src/server.ts on the server for each preview request.
+        </article>
+        <article class="card">
+          <strong>Runtime</strong>
+          Express handles one proxied request in an ephemeral Node process.
+        </article>
+        <article class="card">
+          <strong>Next route</strong>
+          Try /api/health in the path bar to hit a JSON endpoint instead of HTML.
+        </article>
+      </section>
+    </main>
+    <script>
+      console.log("Serverless Express route rendered.");
+    </script>
+  </body>
+</html>\`);
+});
+
+app.get("/api/health", (_request, response) => {
+  response.json({
+    ok: true,
+    runtime: "serverless-express",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.post("/api/echo", (request, response) => {
+  response.json({
+    ok: true,
+    method: request.method,
+    body: request.body,
+    headers: {
+      "content-type": request.header("content-type") ?? null,
+    },
+  });
+});
+
+export default app;
+`,
+      },
+    ],
+  },
+  {
     id: "vite-react-starter",
     name: "Vite React Starter",
     previewPath: "index.html",
@@ -774,4 +1579,16 @@ export function getTemplate(templateId = templates[0]?.id) {
 
 export function getServerlessTemplate() {
   return getTemplate("serverless-react-playground");
+}
+
+export function getServerlessNextjsTemplate() {
+  return getTemplate("serverless-nextjs-playground");
+}
+
+export function getServerlessNextjsRuntimeTemplate() {
+  return getTemplate("serverless-nextjs-runtime-playground");
+}
+
+export function getServerlessExpressTemplate() {
+  return getTemplate("serverless-express-playground");
 }

@@ -96,6 +96,24 @@ const serverlessCompileTraceGlobs = [
   ]),
 ];
 
+const serverlessExpressRequestTraceGlobs = [
+  "./lib/serverless-express/**/*.cjs",
+  "./node_modules/@esbuild/**/*",
+  ...collectRuntimePackageGlobs([
+    "esbuild",
+    "express",
+  ]),
+];
+
+const serverlessNextjsRuntimeRequestTraceGlobs = [
+  "./lib/serverless-nextjs-runtime/**/*.cjs",
+  ...collectRuntimePackageGlobs([
+    "next",
+    "react",
+    "react-dom",
+  ]),
+];
+
 const serverlessTypeTraceGlobs = collectRuntimePackageGlobs([
   "react",
   "react-dom",
@@ -104,9 +122,22 @@ const serverlessTypeTraceGlobs = collectRuntimePackageGlobs([
   "@types/react-dom",
 ]);
 
+const serverlessExpressTypeTraceGlobs = collectRuntimePackageGlobs([
+  "express",
+  "@types/express",
+  "@types/node",
+]);
+
 const nextConfig: NextConfig = {
+  allowedDevOrigins: [
+    "127.0.0.1",
+    "::1",
+  ],
   outputFileTracingIncludes: {
     "/api/serverless/compile": serverlessCompileTraceGlobs,
+    "/api/serverless/expressjs/request": serverlessExpressRequestTraceGlobs,
+    "/api/serverless/nextjs-runtime/request": serverlessNextjsRuntimeRequestTraceGlobs,
+    "/api/serverless/expressjs/types": serverlessExpressTypeTraceGlobs,
     "/api/serverless/types": serverlessTypeTraceGlobs,
   },
 };

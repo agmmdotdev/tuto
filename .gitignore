@@ -25,6 +25,7 @@
 *.pem
 .sessions/
 .vite-dependency-cache/
+.tmp/
 
 # debug
 npm-debug.log*

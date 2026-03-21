@@ -6,12 +6,23 @@ import { BuildDiagnostic, WorkspaceFile } from "@/lib/ide/types";
 
 type BuildState = "idle" | "building" | "ready" | "error";
 type ClientLogLevel = "log" | "info" | "warn" | "error";
+type RuntimeLogLevel = "info" | "warn" | "error";
+type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+type ResponseTab = "preview" | "body" | "headers";
 
 type FileTreeNode = {
   name: string;
   path: string;
   kind: "file" | "directory";
   children?: FileTreeNode[];
+};
+
+type RuntimeLogEntry = {
+  id: string;
+  source: "runtime";
+  level: RuntimeLogLevel;
+  message: string;
+  timestamp: string;
 };
 
 type ClientLogEntry = {
@@ -23,99 +34,75 @@ type ClientLogEntry = {
   timestamp: string;
 };
 
-type ServerlessWorkbenchMode = "react" | "nextjs";
+type ExpressResponseView = {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+  contentType: string;
+};
 
-const nextTypeLibraries = [
-  {
-    filePath: "types/next-link.d.ts",
-    content: `declare module "next/link" {
-  import * as React from "react";
-  export type LinkProps = React.AnchorHTMLAttributes<HTMLAnchorElement> & {
-    href: string | URL;
-  };
-  export default function Link(props: LinkProps): React.ReactElement;
-}`,
-  },
-  {
-    filePath: "types/next-image.d.ts",
-    content: `declare module "next/image" {
-  import * as React from "react";
-  export interface StaticImageData {
-    src: string;
-    width: number;
-    height: number;
-    blurDataURL?: string;
-  }
-  export type ImageProps = Omit<React.ImgHTMLAttributes<HTMLImageElement>, "src"> & {
-    src: string | StaticImageData;
-    alt: string;
-    fill?: boolean;
-    width?: number;
-    height?: number;
-    quality?: number;
-    priority?: boolean;
-    sizes?: string;
-  };
-  export default function Image(props: ImageProps): React.ReactElement;
-}`,
-  },
-  {
-    filePath: "types/next-navigation.d.ts",
-    content: `declare module "next/navigation" {
-  export interface AppRouterInstance {
-    push(href: string): void;
-    replace(href: string): void;
-    back(): void;
-    forward(): void;
-    refresh(): void;
-    prefetch(href: string): Promise<void>;
-  }
-  export function useRouter(): AppRouterInstance;
-  export function usePathname(): string;
-  export function useSearchParams(): URLSearchParams;
-}`,
-  },
-  {
-    filePath: "types/next-head.d.ts",
-    content: `declare module "next/head" {
-  import * as React from "react";
-  export default function Head(props: { children?: React.ReactNode }): React.ReactElement | null;
-}`,
-  },
-];
+type ActiveRequest = {
+  method: HttpMethod;
+  path: string;
+  headers: Record<string, string>;
+  body: string;
+};
 
-const modeConfig: Record<
-  ServerlessWorkbenchMode,
-  {
-    storageKey: string;
-    defaultFilePath: string;
-    title: string;
-    explorerCopy: string;
-    previewLabel: string;
-    statusMode: string;
-    footerHint: string;
-  }
-> = {
-  react: {
-    storageKey: "tuto-serverless-workspace-v3",
-    defaultFilePath: "src/App.tsx",
-    title: "Stateless React Playground",
-    explorerCopy:
-      "This route compiles only from the saved snapshot. Edit freely, then press Ctrl+S or use Save + Build.",
-    previewLabel: "Stateless preview from the last saved snapshot",
-    statusMode: "serverless",
-    footerHint: "Ctrl+S saves and rebuilds preview",
-  },
-  nextjs: {
-    storageKey: "tuto-serverless-nextjs-workspace-v1",
-    defaultFilePath: "app/page.tsx",
-    title: "Stateless Next.js Playground",
-    explorerCopy:
-      "This route compiles a small App Router-like workspace from the saved snapshot. Edit app/page.tsx or app/layout.tsx, then press Ctrl+S or use Save + Build.",
-    previewLabel: "Stateless Next-style preview from the last saved snapshot",
-    statusMode: "serverless-nextjs",
-    footerHint: "Ctrl+S saves and rebuilds the Next-style preview",
-  },
+export type ServerlessHttpWorkbenchConfig = {
+  storageKey: string;
+  defaultFilePath: string;
+  htmlPreviewSource: string;
+  title: string;
+  badge: string;
+  dependencyLabel: string;
+  explorerCopy: string;
+  modeValue: string;
+  runtimeValue: string;
+  requestPathPlaceholder: string;
+  requestRoute: string;
+  typeLibrariesUrl?: string;
+  extraTypeLibraries?: Array<{ filePath: string; content: string }>;
+  packageJsonSeed: string;
+  sessionId: string;
+  responseHeading: string;
+  responseEmptyPreview: string;
+  responseEmptyBody: string;
+  outputHeading: string;
+  footerMode: string;
+  footerHint: string;
+  previewTitle: string;
+  showPreviewAsStatic?: boolean;
+};
+
+const storageKey = "tuto-serverless-express-workspace-v3";
+const defaultFilePath = "src/server.ts";
+const htmlPreviewSource = "tuto-serverless-express-preview-log";
+
+const defaultConfig: ServerlessHttpWorkbenchConfig = {
+  storageKey,
+  defaultFilePath,
+  htmlPreviewSource,
+  title: "Stateless Express Playground",
+  badge: "SERVERLESS",
+  dependencyLabel: "Root express dependency",
+  explorerCopy:
+    "This route sends the current file snapshot to a stateless Express request runner. The server bundles the app, serves one request, returns the response, and tears the process down again.",
+  modeValue: "serverless",
+  runtimeValue: "express",
+  requestPathPlaceholder: "/api/health",
+  requestRoute: "/api/serverless/expressjs/request",
+  typeLibrariesUrl: "/api/serverless/expressjs/types",
+  extraTypeLibraries: undefined,
+  packageJsonSeed: "serverless-express-root-types",
+  sessionId: "serverless-express",
+  responseHeading: "API Response",
+  responseEmptyPreview: "Send a request that returns HTML to inspect the preview.",
+  responseEmptyBody: "Send a request to inspect the response.",
+  outputHeading: "Build, runtime, and client logs",
+  footerMode: "serverless",
+  footerHint: "Ctrl+S saves and reruns the active request",
+  previewTitle: "Serverless Express preview",
+  showPreviewAsStatic: false,
 };
 
 function buildFileTree(files: WorkspaceFile[]) {
@@ -165,93 +152,83 @@ function toTimestampLabel(timestamp: string) {
   });
 }
 
-function collectLucideImports(files: WorkspaceFile[]) {
-  const importedNames = new Set<string>();
-  const typeImportedNames = new Set<string>();
-  const namedImportPattern =
-    /import\s+(type\s+)?\{([^}]+)\}\s+from\s+["']lucide-react["']/g;
+function createDefaultHeadersText(method: HttpMethod) {
+  return method === "GET" ? "{}" : '{\n  "content-type": "application/json"\n}';
+}
 
-  for (const file of files) {
-    if (!["ts", "tsx", "js", "jsx"].includes(file.language)) {
-      continue;
-    }
+function parseHeadersText(headersText: string) {
+  if (!headersText.trim()) {
+    return {};
+  }
 
-    for (const match of file.content.matchAll(namedImportPattern)) {
-      const isTypeOnly = Boolean(match[1]);
-      const specifiers = match[2]
-        ?.split(",")
-        .map((part) => part.trim())
-        .filter(Boolean);
+  const parsed = JSON.parse(headersText) as unknown;
 
-      for (const specifier of specifiers ?? []) {
-        const importedName = specifier.split(/\s+as\s+/i)[0]?.trim();
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Headers must be a JSON object.");
+  }
 
-        if (!importedName) {
-          continue;
-        }
+  const headers = Object.fromEntries(
+    Object.entries(parsed).map(([key, value]) => [key, String(value)]),
+  );
 
-        if (isTypeOnly || importedName === "LucideIcon" || importedName === "LucideProps") {
-          typeImportedNames.add(importedName);
-          continue;
-        }
+  return headers;
+}
 
-        importedNames.add(importedName);
-      }
+function maybeFormatResponseBody(response: ExpressResponseView | null) {
+  if (!response) {
+    return null;
+  }
+
+  if (response.contentType.includes("application/json")) {
+    try {
+      return JSON.stringify(JSON.parse(response.body), null, 2);
+    } catch {
+      return response.body;
     }
   }
 
-  return {
-    importedNames: [...importedNames].sort(),
-    typeImportedNames: [...typeImportedNames].sort(),
-  };
+  return response.body;
 }
 
-function buildLucideTypeLibrary(files: WorkspaceFile[]) {
-  const { importedNames, typeImportedNames } = collectLucideImports(files);
+function normalizeRequestPath(input: string) {
+  const trimmed = input.trim();
 
-  if (importedNames.length === 0 && typeImportedNames.length === 0) {
-    return [];
+  if (!trimmed) {
+    return "/";
   }
 
-  const declarations = [
-    `import type { ForwardRefExoticComponent, RefAttributes, SVGProps } from "react";`,
-    `export type LucideProps = RefAttributes<SVGSVGElement> & Partial<SVGProps<SVGSVGElement>> & { size?: string | number; absoluteStrokeWidth?: boolean };`,
-    `export type LucideIcon = ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>;`,
-    ...importedNames.map((name) => `export const ${name}: LucideIcon;`),
-  ].join("\n");
-
-  return [
-    {
-      filePath: "node_modules/lucide-react/index.d.ts",
-      content: declarations,
-    },
-  ];
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
-function mergeDrafts(files: WorkspaceFile[], draftsByPath: Record<string, string>) {
-  return files.map((file) => ({
-    ...file,
-    content: draftsByPath[file.path] ?? file.content,
-  }));
-}
-
-export function ServerlessIdeWorkbench({
+export function ServerlessExpressIdeWorkbench({
   initialFiles,
-  mode = "react",
+  config = defaultConfig,
 }: {
   initialFiles: WorkspaceFile[];
-  mode?: ServerlessWorkbenchMode;
+  config?: ServerlessHttpWorkbenchConfig;
 }) {
-  const config = modeConfig[mode];
   const [files, setFiles] = useState<WorkspaceFile[]>(initialFiles);
   const [draftsByPath, setDraftsByPath] = useState<Record<string, string>>({});
   const [selectedFilePath, setSelectedFilePath] = useState(config.defaultFilePath);
+  const [requestMethod, setRequestMethod] = useState<HttpMethod>("GET");
+  const [requestPath, setRequestPath] = useState("/");
+  const [requestHeadersText, setRequestHeadersText] = useState("{}");
+  const [requestBodyText, setRequestBodyText] = useState("");
+  const [activeRequest, setActiveRequest] = useState<ActiveRequest>({
+    method: "GET",
+    path: "/",
+    headers: {},
+    body: "",
+  });
+  const [requestVersion, setRequestVersion] = useState(0);
   const [buildState, setBuildState] = useState<BuildState>("idle");
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+  const [responseView, setResponseView] = useState<ExpressResponseView | null>(null);
   const [buildDiagnostics, setBuildDiagnostics] = useState<BuildDiagnostic[]>([]);
+  const [runtimeLogs, setRuntimeLogs] = useState<RuntimeLogEntry[]>([]);
   const [clientLogs, setClientLogs] = useState<ClientLogEntry[]>([]);
   const [requestError, setRequestError] = useState<string | null>(null);
-  const [buildVersion, setBuildVersion] = useState(0);
+  const [responseTab, setResponseTab] = useState<ResponseTab>("preview");
   const outputAnchorRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -259,13 +236,17 @@ export function ServerlessIdeWorkbench({
       const saved = window.localStorage.getItem(config.storageKey);
 
       if (!saved) {
-        setBuildVersion(1);
+        setRequestVersion(1);
         return;
       }
 
       const parsed = JSON.parse(saved) as {
         files?: WorkspaceFile[];
         draftsByPath?: Record<string, string>;
+        requestMethod?: HttpMethod;
+        requestPath?: string;
+        requestHeadersText?: string;
+        requestBodyText?: string;
       };
 
       if (parsed.files?.length) {
@@ -283,34 +264,78 @@ export function ServerlessIdeWorkbench({
         setDraftsByPath(parsed.draftsByPath);
       }
 
-      setBuildVersion(1);
+      const nextMethod = parsed.requestMethod ?? "GET";
+      const nextPath =
+        typeof parsed.requestPath === "string" && parsed.requestPath.trim()
+          ? normalizeRequestPath(parsed.requestPath)
+          : "/";
+      const nextHeadersText =
+        typeof parsed.requestHeadersText === "string"
+          ? parsed.requestHeadersText
+          : createDefaultHeadersText(nextMethod);
+      const nextBodyText =
+        typeof parsed.requestBodyText === "string" ? parsed.requestBodyText : "";
+
+      setRequestMethod(nextMethod);
+      setRequestPath(nextPath);
+      setRequestHeadersText(nextHeadersText);
+      setRequestBodyText(nextBodyText);
+
+      try {
+        setActiveRequest({
+          method: nextMethod,
+          path: nextPath,
+          headers: parseHeadersText(nextHeadersText),
+          body: nextMethod === "GET" ? "" : nextBodyText,
+        });
+      } catch {
+        setActiveRequest({
+          method: nextMethod,
+          path: nextPath,
+          headers: {},
+          body: nextMethod === "GET" ? "" : nextBodyText,
+        });
+      }
+
+      setRequestVersion(1);
     } catch {
-      setBuildVersion(1);
+      setRequestVersion(1);
     }
   }, [config.defaultFilePath, config.storageKey]);
 
   useEffect(() => {
     window.localStorage.setItem(
       config.storageKey,
-      JSON.stringify({ files, draftsByPath }),
+      JSON.stringify({
+        files,
+        draftsByPath,
+        requestMethod,
+        requestPath,
+        requestHeadersText,
+        requestBodyText,
+      }),
     );
-  }, [config.storageKey, draftsByPath, files]);
+  }, [
+    config.storageKey,
+    draftsByPath,
+    files,
+    requestBodyText,
+    requestHeadersText,
+    requestMethod,
+    requestPath,
+  ]);
 
   const selectedFile = useMemo(() => {
     return files.find((file) => file.path === selectedFilePath) ?? null;
   }, [files, selectedFilePath]);
   const fileTree = useMemo(() => buildFileTree(files), [files]);
-  const workingFiles = useMemo(
-    () => mergeDrafts(files, draftsByPath),
-    [draftsByPath, files],
-  );
-  const extraTypeLibraries = useMemo(
-    () =>
-      mode === "nextjs"
-        ? [...buildLucideTypeLibrary(workingFiles), ...nextTypeLibraries]
-        : buildLucideTypeLibrary(workingFiles),
-    [mode, workingFiles],
-  );
+  const extraTypeLibraries = useMemo(() => {
+    if (!config.extraTypeLibraries?.length) {
+      return undefined;
+    }
+
+    return config.extraTypeLibraries;
+  }, [config.extraTypeLibraries]);
   const currentValue = selectedFile
     ? draftsByPath[selectedFile.path] ?? selectedFile.content
     : "";
@@ -365,11 +390,33 @@ export function ServerlessIdeWorkbench({
       delete next[selectedFile.path];
       return next;
     });
-    setBuildVersion((value) => value + 1);
+    setRequestVersion((value) => value + 1);
+  }
+
+  function handleSendRequest() {
+    try {
+      const nextMethod = requestMethod;
+      const nextPath = normalizeRequestPath(requestPath);
+      const nextHeaders = parseHeadersText(requestHeadersText);
+      const nextBody = nextMethod === "GET" ? "" : requestBodyText;
+
+      setRequestError(null);
+      setActiveRequest({
+        method: nextMethod,
+        path: nextPath,
+        headers: nextHeaders,
+        body: nextBody,
+      });
+      setRequestVersion((value) => value + 1);
+    } catch (error) {
+      setRequestError(
+        error instanceof Error ? error.message : "Unable to parse request headers.",
+      );
+    }
   }
 
   useEffect(() => {
-    if (buildVersion === 0) {
+    if (requestVersion === 0) {
       return;
     }
 
@@ -378,36 +425,55 @@ export function ServerlessIdeWorkbench({
       setRequestError(null);
 
       try {
-        const response = await fetch("/api/serverless/compile", {
+        const response = await fetch(config.requestRoute, {
           cache: "no-store",
           method: "POST",
           headers: {
             "content-type": "application/json",
           },
-          body: JSON.stringify({ files }),
+          body: JSON.stringify({
+            files,
+            request: activeRequest,
+          }),
         });
         const payload = (await response.json()) as {
           success?: boolean;
-          html?: string;
           diagnostics?: BuildDiagnostic[];
+          logs?: Array<Omit<RuntimeLogEntry, "source">>;
+          response?: ExpressResponseView | null;
           error?: string;
         };
 
-        if (!response.ok && !payload.html) {
-          throw new Error(payload.error ?? "Unable to build stateless preview.");
+        if (!response.ok && !payload.response) {
+          throw new Error(payload.error ?? "Unable to run the stateless Express preview.");
         }
 
+        const nextResponse = payload.response ?? null;
+        const isHtml =
+          nextResponse?.contentType.toLowerCase().includes("text/html") ?? false;
+
         startTransition(() => {
-          setPreviewHtml(payload.html ?? null);
+          setResponseView(nextResponse);
+          setPreviewHtml(isHtml ? nextResponse?.body ?? null : null);
           setBuildDiagnostics(payload.diagnostics ?? []);
+          setRuntimeLogs(
+            (payload.logs ?? []).map((entry) => ({
+              ...entry,
+              source: "runtime" as const,
+            })),
+          );
           setBuildState(payload.success ? "ready" : "error");
           setClientLogs([]);
+          setResponseTab(isHtml ? "preview" : "body");
         });
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : "Unable to build stateless preview.";
+          error instanceof Error ? error.message : "Unable to run the stateless Express preview.";
 
         setRequestError(message);
+        setResponseView(null);
+        setPreviewHtml(null);
+        setRuntimeLogs([]);
         setBuildDiagnostics([
           {
             id: crypto.randomUUID(),
@@ -418,12 +484,12 @@ export function ServerlessIdeWorkbench({
         ]);
         setBuildState("error");
       }
-    }, 150);
+    }, 450);
 
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [buildVersion, files]);
+  }, [activeRequest, config.requestRoute, files, requestVersion]);
 
   useEffect(() => {
     function handlePreviewMessage(event: MessageEvent) {
@@ -436,7 +502,7 @@ export function ServerlessIdeWorkbench({
           }
         | undefined;
 
-      if (payload?.source !== "tuto-serverless-preview-log" || !payload.message) {
+      if (payload?.source !== config.htmlPreviewSource || !payload.message) {
         return;
       }
 
@@ -468,7 +534,7 @@ export function ServerlessIdeWorkbench({
     return () => {
       window.removeEventListener("message", handlePreviewMessage);
     };
-  }, []);
+  }, [config.htmlPreviewSource]);
 
   const outputEntries = useMemo(() => {
     const buildEntries = buildDiagnostics.map((entry) => ({
@@ -476,37 +542,38 @@ export function ServerlessIdeWorkbench({
       source: "build" as const,
     }));
 
-    return [...buildEntries, ...clientLogs].sort((left, right) =>
+    return [...buildEntries, ...runtimeLogs, ...clientLogs].sort((left, right) =>
       left.timestamp.localeCompare(right.timestamp),
     );
-  }, [buildDiagnostics, clientLogs]);
+  }, [buildDiagnostics, clientLogs, runtimeLogs]);
 
   useEffect(() => {
     outputAnchorRef.current?.scrollIntoView({ block: "end" });
   }, [outputEntries]);
 
+  const responseBody = maybeFormatResponseBody(responseView);
+  const responseLabel = responseView
+    ? `${responseView.status} ${responseView.contentType.split(";")[0]}`
+    : "Waiting for response";
+  const canHaveBody = requestMethod !== "GET";
+  const prettyHeaders = responseView
+    ? JSON.stringify(responseView.headers, null, 2)
+    : null;
+
   return (
     <main className="flex h-screen flex-col overflow-hidden bg-[#1e1e1e] text-[#cccccc]">
       <header className="flex h-10 items-center justify-between border-b border-[#2a2d2e] bg-[#181818] px-3 text-xs">
         <div className="flex min-w-0 items-center gap-3">
-            <span className="font-semibold tracking-wide text-[#9cdcfe]">TUTO</span>
-            <span className="text-[#858585]">SERVERLESS</span>
-            <span className="truncate text-[#cccccc]">
-              {config.title}
-            </span>
-          </div>
+          <span className="font-semibold tracking-wide text-[#9cdcfe]">TUTO</span>
+          <span className="text-[#858585]">{config.badge}</span>
+          <span className="truncate text-[#cccccc]">
+            {config.title}
+          </span>
+        </div>
         <div className="flex items-center gap-2 text-[#858585]">
           <span className="rounded border border-[#3c3c3c] bg-[#252526] px-3 py-1 text-[#cccccc]">
-            Shared root dependencies
+            {config.dependencyLabel}
           </span>
-          <button
-            className="rounded border border-[#007acc] bg-[#094771] px-3 py-1 text-white hover:bg-[#0d5f94] disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!isCurrentFileDirty}
-            onClick={handleSave}
-            type="button"
-          >
-            Save + Build
-          </button>
         </div>
       </header>
 
@@ -519,10 +586,10 @@ export function ServerlessIdeWorkbench({
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-12 flex-col items-center gap-3 border-r border-[#2a2d2e] bg-[#181818] py-3 text-[10px] uppercase tracking-[0.18em] text-[#858585]">
           <ActivityButton active label="EX" />
-          <ActivityButton label="ST" />
+          <ActivityButton label="API" />
         </aside>
 
-        <aside className="flex w-72 min-w-0 flex-col border-r border-[#2a2d2e] bg-[#252526]">
+        <aside className="flex w-80 min-w-0 flex-col border-r border-[#2a2d2e] bg-[#252526]">
           <div className="border-b border-[#2a2d2e] px-4 py-3">
             <p className="text-[11px] uppercase tracking-[0.12em] text-[#858585]">
               Explorer
@@ -533,10 +600,86 @@ export function ServerlessIdeWorkbench({
           </div>
 
           <div className="grid grid-cols-2 gap-px border-b border-[#2a2d2e] bg-[#2a2d2e] text-[11px]">
-            <StatusCell label="Mode" value={config.statusMode} />
+            <StatusCell label="Mode" value={config.modeValue} />
             <StatusCell label="Build" value={buildState} />
+            <StatusCell label="Runtime" value={config.runtimeValue} />
             <StatusCell label="Dirty" value={String(dirtyFileCount)} />
-            <StatusCell label="Deps" value="repo root" />
+          </div>
+
+          <div className="border-b border-[#2a2d2e] px-3 py-3">
+            <div className="mb-3 flex gap-2">
+              <select
+                className="w-28 rounded border border-[#3c3c3c] bg-[#1e1e1e] px-3 py-2 text-sm text-[#f5f5f5] outline-none"
+                onChange={(event) => {
+                  const nextMethod = event.target.value as HttpMethod;
+                  setRequestMethod(nextMethod);
+                  if (requestHeadersText === "{}" && nextMethod !== "GET") {
+                    setRequestHeadersText(createDefaultHeadersText(nextMethod));
+                  }
+                  if (nextMethod === "GET") {
+                    setRequestBodyText("");
+                  }
+                }}
+                value={requestMethod}
+              >
+                {(["GET", "POST", "PUT", "PATCH", "DELETE"] as HttpMethod[]).map((method) => (
+                  <option key={method} value={method}>
+                    {method}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="min-w-0 flex-1 rounded border border-[#3c3c3c] bg-[#1e1e1e] px-3 py-2 text-sm text-[#f5f5f5] outline-none placeholder:text-[#6f6f6f]"
+                onChange={(event) => setRequestPath(event.target.value)}
+                placeholder={config.requestPathPlaceholder}
+                spellCheck={false}
+                type="text"
+                value={requestPath}
+              />
+            </div>
+
+            <button
+              className="w-full rounded border border-[#007acc] bg-[#094771] px-3 py-2 text-sm text-white hover:bg-[#0d5f94]"
+              onClick={handleSendRequest}
+              type="button"
+            >
+              Send Request
+            </button>
+            <button
+              className="mt-2 w-full rounded border border-[#3c3c3c] bg-[#252526] px-3 py-2 text-sm text-[#cccccc] hover:bg-[#2a2d2e] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!isCurrentFileDirty}
+              onClick={handleSave}
+              type="button"
+            >
+              Save + Rerun
+            </button>
+
+            <div className="mt-3">
+              <label className="block text-[11px] uppercase tracking-[0.12em] text-[#858585]">
+                Headers JSON
+              </label>
+              <textarea
+                className="mt-2 h-28 w-full resize-none rounded border border-[#3c3c3c] bg-[#1e1e1e] px-3 py-2 font-mono text-xs text-[#f5f5f5] outline-none placeholder:text-[#6f6f6f]"
+                onChange={(event) => setRequestHeadersText(event.target.value)}
+                placeholder='{"content-type":"application/json"}'
+                spellCheck={false}
+                value={requestHeadersText}
+              />
+            </div>
+
+            <div className="mt-3">
+              <label className="block text-[11px] uppercase tracking-[0.12em] text-[#858585]">
+                Request Body
+              </label>
+              <textarea
+                className="mt-2 h-28 w-full resize-none rounded border border-[#3c3c3c] bg-[#1e1e1e] px-3 py-2 font-mono text-xs text-[#f5f5f5] outline-none placeholder:text-[#6f6f6f] disabled:opacity-50"
+                disabled={!canHaveBody}
+                onChange={(event) => setRequestBodyText(event.target.value)}
+                placeholder='{"message":"hello"}'
+                spellCheck={false}
+                value={requestBodyText}
+              />
+            </div>
           </div>
 
           <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
@@ -545,7 +688,7 @@ export function ServerlessIdeWorkbench({
             </div>
             <div className="mb-3 rounded border border-[#2a2d2e] bg-[#1e1e1e] px-2 py-1.5 text-sm text-[#cccccc]">
               {selectedFile?.path ?? "No file selected"}
-              {isCurrentFileDirty ? " • unsaved" : ""}
+              {isCurrentFileDirty ? " * unsaved" : ""}
             </div>
 
             <div className="mb-2 px-2 text-[11px] uppercase tracking-[0.12em] text-[#858585]">
@@ -571,11 +714,11 @@ export function ServerlessIdeWorkbench({
               {selectedFile?.path ?? "editor"}
             </div>
             <div className="flex h-full items-center px-4 text-[#858585]">
-              Preview
+              {config.responseHeading}
             </div>
           </div>
 
-          <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1.3fr)_minmax(360px,0.8fr)]">
+          <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1.2fr)_minmax(420px,0.95fr)]">
             <div className="min-w-0 border-r border-[#2a2d2e] bg-[#1e1e1e]">
               {selectedFile ? (
                 <MonacoWorkspaceEditor
@@ -584,10 +727,10 @@ export function ServerlessIdeWorkbench({
                   language={selectedFile.language}
                   onChange={handleEditorChange}
                   onSave={handleSave}
-                  packageJsonSeed="serverless-root-types"
+                  packageJsonSeed={config.packageJsonSeed}
                   runtimeMode="mock"
-                  sessionId="serverless"
-                  typeLibrariesUrl="/api/serverless/types"
+                  sessionId={config.sessionId}
+                  typeLibrariesUrl={config.typeLibrariesUrl}
                   value={currentValue}
                 />
               ) : (
@@ -598,20 +741,54 @@ export function ServerlessIdeWorkbench({
             </div>
 
             <div className="flex min-h-0 flex-col bg-[#1e1e1e]">
-              <div className="flex h-9 items-center border-b border-[#2a2d2e] px-4 text-xs uppercase tracking-[0.12em] text-[#858585]">
-                {config.previewLabel}
+              <div className="flex h-9 items-center justify-between border-b border-[#2a2d2e] px-4 text-xs uppercase tracking-[0.12em] text-[#858585]">
+                <span>
+                  {activeRequest.method} {activeRequest.path}
+                </span>
+                <span>{responseLabel}</span>
+              </div>
+              <div className="flex h-9 items-center gap-1 border-b border-[#2a2d2e] px-3 text-xs">
+                {(["preview", "body", "headers"] as ResponseTab[]).map((tab) => {
+                  const disabled = tab === "preview" && !previewHtml;
+
+                  return (
+                    <button
+                      key={tab}
+                      className={
+                        responseTab === tab
+                          ? "rounded border border-[#007acc] bg-[#094771] px-3 py-1 text-white"
+                          : "rounded border border-[#3c3c3c] bg-[#252526] px-3 py-1 text-[#969696] hover:text-white disabled:opacity-40"
+                      }
+                      disabled={disabled}
+                      onClick={() => setResponseTab(tab)}
+                      type="button"
+                    >
+                      {tab === "preview" && config.showPreviewAsStatic ? "preview (static)" : tab}
+                    </button>
+                  );
+                })}
               </div>
               <div className="min-h-0 flex-1 bg-[#ffffff]">
-                {previewHtml ? (
+                {responseTab === "preview" && previewHtml ? (
                   <iframe
                     className="h-full w-full border-0"
                     sandbox="allow-scripts"
                     srcDoc={previewHtml}
-                    title={config.title}
+                    title={config.previewTitle}
                   />
+                ) : responseTab === "headers" ? (
+                  <pre className="h-full overflow-auto bg-[#111111] p-4 font-mono text-sm text-[#d4d4d4]">
+                    {prettyHeaders ?? "No response headers yet."}
+                  </pre>
+                ) : responseBody ? (
+                  <pre className="h-full overflow-auto bg-[#111111] p-4 font-mono text-sm text-[#d4d4d4]">
+                    {responseBody}
+                  </pre>
                 ) : (
                   <div className="flex h-full items-center justify-center text-sm text-[#858585]">
-                    Press Save + Build to generate the first preview.
+                    {responseTab === "preview"
+                      ? config.responseEmptyPreview
+                      : config.responseEmptyBody}
                   </div>
                 )}
               </div>
@@ -620,7 +797,7 @@ export function ServerlessIdeWorkbench({
 
           <section className="h-56 border-t border-[#2a2d2e] bg-[#181818]">
             <div className="flex h-9 items-center justify-between border-b border-[#2a2d2e] px-4 text-xs uppercase tracking-[0.12em] text-[#858585]">
-              <span>Build output and browser logs</span>
+              <span>{config.outputHeading}</span>
               <span>{outputEntries.length} entries</span>
             </div>
             <div className="h-[calc(100%-2.25rem)] overflow-auto px-4 py-3">
@@ -638,7 +815,9 @@ export function ServerlessIdeWorkbench({
                         className={
                           entry.source === "client"
                             ? "rounded bg-[#1f3a5f] px-2 py-1 text-[#9cdcfe]"
-                            : "rounded bg-[#2d2d30] px-2 py-1 text-[#c5c5c5]"
+                            : entry.source === "runtime"
+                              ? "rounded bg-[#23462e] px-2 py-1 text-[#9ad6a4]"
+                              : "rounded bg-[#2d2d30] px-2 py-1 text-[#c5c5c5]"
                         }
                       >
                         {entry.source}
@@ -646,9 +825,11 @@ export function ServerlessIdeWorkbench({
                       <span
                         className={
                           (entry.source === "build" && entry.level === "error") ||
+                          (entry.source === "runtime" && entry.level === "error") ||
                           (entry.source === "client" && entry.kind === "stderr")
                             ? "rounded bg-[#4b1f24] px-2 py-1 text-[#f48771]"
-                            : entry.source === "build" && entry.level === "warn"
+                            : (entry.source === "build" && entry.level === "warn") ||
+                                (entry.source === "runtime" && entry.level === "warn")
                               ? "rounded bg-[#4b2f1a] px-2 py-1 text-[#ce9178]"
                               : "rounded bg-[#163b4d] px-2 py-1 text-[#9cdcfe]"
                         }
@@ -672,7 +853,7 @@ export function ServerlessIdeWorkbench({
                 </div>
               ) : (
                 <p className="text-sm text-[#858585]">
-                  Waiting for the first build...
+                  Waiting for the first request...
                 </p>
               )}
             </div>
@@ -682,7 +863,7 @@ export function ServerlessIdeWorkbench({
 
       <footer className="flex h-6 items-center justify-between bg-[#007acc] px-3 text-[11px] text-white">
         <div className="flex items-center gap-4">
-          <span>{config.statusMode}</span>
+          <span>{config.footerMode}</span>
           <span>{buildState}</span>
           <span>{dirtyFileCount} dirty</span>
         </div>
@@ -756,7 +937,7 @@ function FileTreeBranch({
       >
         <span className="font-mono text-[#858585]">-</span>
         <span className="truncate">{node.name}</span>
-        {dirty ? <span className="text-[#d7ba7d]">•</span> : null}
+        {dirty ? <span className="text-[#d7ba7d]">*</span> : null}
       </button>
     );
   }

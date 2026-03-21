@@ -114,6 +114,7 @@ export function MonacoWorkspaceEditor({
   language,
   value,
   onChange,
+  onSave,
 }: {
   sessionId: string;
   runtimeMode: "mock" | "secure-exec" | "host-vite";
@@ -124,11 +125,22 @@ export function MonacoWorkspaceEditor({
   language: WorkspaceLanguage;
   value: string;
   onChange: (nextValue: string) => void;
+  onSave?: () => void;
 }) {
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
   const remoteTypeDisposablesRef = useRef<Array<{ dispose(): void }>>([]);
   const extraTypeDisposablesRef = useRef<Array<{ dispose(): void }>>([]);
+  const onChangeRef = useRef(onChange);
+  const onSaveRef = useRef(onSave);
   const [monacoReady, setMonacoReady] = useState(false);
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
+  useEffect(() => {
+    onSaveRef.current = onSave;
+  }, [onSave]);
 
   useEffect(() => {
     if (!monacoReady || !monacoRef.current) {
@@ -256,7 +268,7 @@ export function MonacoWorkspaceEditor({
   return (
     <div className="editor-pane">
       <MonacoEditor
-        beforeMount={(monaco) => {
+      beforeMount={(monaco) => {
           monacoRef.current = monaco;
           configureMonaco(monaco);
           setMonacoReady(true);
@@ -264,7 +276,12 @@ export function MonacoWorkspaceEditor({
         height="100%"
         language={toMonacoLanguage(language)}
         loading={<div className="editor-loading">Loading editor...</div>}
-        onChange={(nextValue) => onChange(nextValue ?? "")}
+        onChange={(nextValue) => onChangeRef.current(nextValue ?? "")}
+        onMount={(editor, monaco) => {
+          editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+            onSaveRef.current?.();
+          });
+        }}
         options={{
           automaticLayout: true,
           fontLigatures: true,
