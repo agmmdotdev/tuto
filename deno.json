@@ -1,10 +1,14 @@
 {
-  "deploy": {
-    "framework": "nextjs",
-    "install": "npm install",
-    "build": "npm run build",
-    "runtime": {
-      "memory_limit": 2048
-    }
+  "nodeModulesDir": "auto",
+  "unstable": ["unsafe-proto", "sloppy-imports"],
+  "compilerOptions": {
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "strict": true,
+    "jsx": "preserve"
+  },
+  "tasks": {
+    "dev": "deno run -A --unstable-detect-cjs npm:next@16.2.0 dev",
+    "build": "deno run -A --unstable-detect-cjs npm:next@16.2.0 build",
+    "start": "deno run -A --unstable-detect-cjs npm:next@16.2.0 start"
   }
 }
