@@ -23,7 +23,7 @@ type ClientLogEntry = {
   timestamp: string;
 };
 
-type ServerlessWorkbenchMode = "react" | "nextjs";
+type ServerlessWorkbenchMode = "react" | "nextjs" | "tanstackstart";
 
 const nextTypeLibraries = [
   {
@@ -94,6 +94,8 @@ const modeConfig: Record<
     previewLabel: string;
     statusMode: string;
     footerHint: string;
+    packageJsonSeed: string;
+    sessionId: string;
   }
 > = {
   react: {
@@ -105,6 +107,8 @@ const modeConfig: Record<
     previewLabel: "Stateless preview from the last saved snapshot",
     statusMode: "serverless",
     footerHint: "Ctrl+S saves and rebuilds preview",
+    packageJsonSeed: "serverless-root-types",
+    sessionId: "serverless",
   },
   nextjs: {
     storageKey: "tuto-serverless-nextjs-workspace-v1",
@@ -115,6 +119,20 @@ const modeConfig: Record<
     previewLabel: "Stateless Next-style preview from the last saved snapshot",
     statusMode: "serverless-nextjs",
     footerHint: "Ctrl+S saves and rebuilds the Next-style preview",
+    packageJsonSeed: "serverless-nextjs-root-types",
+    sessionId: "serverless-nextjs",
+  },
+  tanstackstart: {
+    storageKey: "tuto-serverless-tanstack-start-workspace-v6",
+    defaultFilePath: "src/routes/index.tsx",
+    title: "TanStack Start Runtime Playground",
+    explorerCopy:
+      "This route uses TanStack Start's compiler core without booting Vite. It rewrites createServerFn calls into RPC stubs, bundles the client preview with esbuild, and executes server functions through a stateless API route.",
+    previewLabel: "Real TanStack Start preview from the last saved snapshot",
+    statusMode: "serverless-tanstack-start",
+    footerHint: "Ctrl+S saves and rebuilds the Start runtime preview",
+    packageJsonSeed: "serverless-tanstack-start-root-types",
+    sessionId: "serverless-tanstack-start",
   },
 };
 
@@ -384,7 +402,7 @@ export function ServerlessIdeWorkbench({
           headers: {
             "content-type": "application/json",
           },
-          body: JSON.stringify({ files }),
+          body: JSON.stringify({ files, mode }),
         });
         const payload = (await response.json()) as {
           success?: boolean;
@@ -423,7 +441,7 @@ export function ServerlessIdeWorkbench({
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [buildVersion, files]);
+  }, [buildVersion, files, mode]);
 
   useEffect(() => {
     function handlePreviewMessage(event: MessageEvent) {
@@ -584,9 +602,9 @@ export function ServerlessIdeWorkbench({
                   language={selectedFile.language}
                   onChange={handleEditorChange}
                   onSave={handleSave}
-                  packageJsonSeed="serverless-root-types"
+                  packageJsonSeed={config.packageJsonSeed}
                   runtimeMode="mock"
-                  sessionId="serverless"
+                  sessionId={config.sessionId}
                   typeLibrariesUrl="/api/serverless/types"
                   value={currentValue}
                 />

@@ -9,6 +9,7 @@ type ClientLogLevel = "log" | "info" | "warn" | "error";
 type RuntimeLogLevel = "info" | "warn" | "error";
 type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 type ResponseTab = "preview" | "body" | "headers";
+type ServerlessExpressCompilerKind = "esbuild" | "sucrase" | "rolldown";
 
 type FileTreeNode = {
   name: string;
@@ -48,6 +49,11 @@ type ActiveRequest = {
   body: string;
 };
 
+type CompilerOption = {
+  value: ServerlessExpressCompilerKind;
+  label: string;
+};
+
 export type ServerlessHttpWorkbenchConfig = {
   storageKey: string;
   defaultFilePath: string;
@@ -72,6 +78,8 @@ export type ServerlessHttpWorkbenchConfig = {
   footerHint: string;
   previewTitle: string;
   showPreviewAsStatic?: boolean;
+  defaultCompiler?: ServerlessExpressCompilerKind;
+  compilerOptions?: CompilerOption[];
 };
 
 const storageKey = "tuto-serverless-express-workspace-v3";
@@ -86,7 +94,7 @@ const defaultConfig: ServerlessHttpWorkbenchConfig = {
   badge: "SERVERLESS",
   dependencyLabel: "Root express dependency",
   explorerCopy:
-    "This route sends the current file snapshot to a stateless Express request runner. The server bundles the app, serves one request, returns the response, and tears the process down again.",
+    "This route sends the current file snapshot to a stateless Express request runner. The server compiles the app with the selected compiler, serves one request, returns the response, and tears the process down again.",
   modeValue: "serverless",
   runtimeValue: "express",
   requestPathPlaceholder: "/api/health",
@@ -103,6 +111,12 @@ const defaultConfig: ServerlessHttpWorkbenchConfig = {
   footerHint: "Ctrl+S saves and reruns the active request",
   previewTitle: "Serverless Express preview",
   showPreviewAsStatic: false,
+  defaultCompiler: "rolldown",
+  compilerOptions: [
+    { value: "esbuild", label: "esbuild" },
+    { value: "rolldown", label: "rolldown" },
+    { value: "sucrase", label: "sucrase" },
+  ],
 };
 
 function buildFileTree(files: WorkspaceFile[]) {
@@ -200,6 +214,12 @@ function normalizeRequestPath(input: string) {
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
+function isServerlessExpressCompilerKind(
+  compiler: unknown,
+): compiler is ServerlessExpressCompilerKind {
+  return compiler === "esbuild" || compiler === "rolldown" || compiler === "sucrase";
+}
+
 export function ServerlessExpressIdeWorkbench({
   initialFiles,
   config = defaultConfig,
@@ -214,6 +234,9 @@ export function ServerlessExpressIdeWorkbench({
   const [requestPath, setRequestPath] = useState("/");
   const [requestHeadersText, setRequestHeadersText] = useState("{}");
   const [requestBodyText, setRequestBodyText] = useState("");
+  const [compiler, setCompiler] = useState<ServerlessExpressCompilerKind>(
+    config.defaultCompiler ?? "esbuild",
+  );
   const [workspaceRequestKey, setWorkspaceRequestKey] = useState(() => crypto.randomUUID());
   const [activeRequest, setActiveRequest] = useState<ActiveRequest>({
     method: "GET",
@@ -248,6 +271,7 @@ export function ServerlessExpressIdeWorkbench({
         requestPath?: string;
         requestHeadersText?: string;
         requestBodyText?: string;
+        compiler?: ServerlessExpressCompilerKind;
         workspaceRequestKey?: string;
       };
 
@@ -277,6 +301,9 @@ export function ServerlessExpressIdeWorkbench({
           : createDefaultHeadersText(nextMethod);
       const nextBodyText =
         typeof parsed.requestBodyText === "string" ? parsed.requestBodyText : "";
+      const nextCompiler = isServerlessExpressCompilerKind(parsed.compiler)
+        ? parsed.compiler
+        : (config.defaultCompiler ?? "esbuild");
       const nextWorkspaceRequestKey =
         typeof parsed.workspaceRequestKey === "string" && parsed.workspaceRequestKey.trim()
           ? parsed.workspaceRequestKey
@@ -286,6 +313,7 @@ export function ServerlessExpressIdeWorkbench({
       setRequestPath(nextPath);
       setRequestHeadersText(nextHeadersText);
       setRequestBodyText(nextBodyText);
+      setCompiler(nextCompiler);
       setWorkspaceRequestKey(nextWorkspaceRequestKey);
 
       try {
@@ -308,7 +336,7 @@ export function ServerlessExpressIdeWorkbench({
     } catch {
       setRequestVersion(1);
     }
-  }, [config.defaultFilePath, config.storageKey]);
+  }, [config.defaultCompiler, config.defaultFilePath, config.storageKey]);
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -320,10 +348,12 @@ export function ServerlessExpressIdeWorkbench({
         requestPath,
         requestHeadersText,
         requestBodyText,
+        compiler,
         workspaceRequestKey,
       }),
     );
   }, [
+    compiler,
     config.storageKey,
     draftsByPath,
     files,
@@ -337,6 +367,7 @@ export function ServerlessExpressIdeWorkbench({
   const selectedFile = useMemo(() => {
     return files.find((file) => file.path === selectedFilePath) ?? null;
   }, [files, selectedFilePath]);
+  const compilerOptions = config.compilerOptions ?? defaultConfig.compilerOptions ?? [];
   const fileTree = useMemo(() => buildFileTree(files), [files]);
   const extraTypeLibraries = useMemo(() => {
     if (!config.extraTypeLibraries?.length) {
@@ -443,6 +474,7 @@ export function ServerlessExpressIdeWorkbench({
           body: JSON.stringify({
             files,
             request: activeRequest,
+            compiler,
             workspaceKey: workspaceRequestKey,
           }),
         });
@@ -499,7 +531,7 @@ export function ServerlessExpressIdeWorkbench({
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [activeRequest, config.requestRoute, files, requestVersion, workspaceRequestKey]);
+  }, [activeRequest, compiler, config.requestRoute, files, requestVersion, workspaceRequestKey]);
 
   useEffect(() => {
     function handlePreviewMessage(event: MessageEvent) {
@@ -613,11 +645,25 @@ export function ServerlessExpressIdeWorkbench({
             <StatusCell label="Mode" value={config.modeValue} />
             <StatusCell label="Build" value={buildState} />
             <StatusCell label="Runtime" value={config.runtimeValue} />
+            <StatusCell label="Compiler" value={compiler} />
             <StatusCell label="Dirty" value={String(dirtyFileCount)} />
           </div>
 
           <div className="border-b border-[#2a2d2e] px-3 py-3">
             <div className="mb-3 flex gap-2">
+              <select
+                className="w-32 rounded border border-[#3c3c3c] bg-[#1e1e1e] px-3 py-2 text-sm text-[#f5f5f5] outline-none"
+                onChange={(event) =>
+                  setCompiler(event.target.value as ServerlessExpressCompilerKind)
+                }
+                value={compiler}
+              >
+                {compilerOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
               <select
                 className="w-28 rounded border border-[#3c3c3c] bg-[#1e1e1e] px-3 py-2 text-sm text-[#f5f5f5] outline-none"
                 onChange={(event) => {
@@ -874,6 +920,7 @@ export function ServerlessExpressIdeWorkbench({
       <footer className="flex h-6 items-center justify-between bg-[#007acc] px-3 text-[11px] text-white">
         <div className="flex items-center gap-4">
           <span>{config.footerMode}</span>
+          <span>{compiler}</span>
           <span>{buildState}</span>
           <span>{dirtyFileCount} dirty</span>
         </div>

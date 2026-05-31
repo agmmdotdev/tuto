@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { BuildDiagnostic, WorkspaceFile } from "@/lib/ide/types";
-import {
-  runServerlessExpressRequest,
+import type {
+  ServerlessExpressCompilerKind,
   ServerlessExpressRequestInput,
 } from "@/lib/serverless-express/compiler";
+import { runServerlessExpressRequest } from "@/lib/serverless-express/compiler";
 
 export const runtime = "nodejs";
 
@@ -58,11 +59,20 @@ function injectPreviewBridge(html: string) {
   return `${html}${previewBridgeScript}`;
 }
 
+function normalizeCompiler(compiler: ServerlessExpressCompilerKind | undefined) {
+  if (compiler === "sucrase" || compiler === "rolldown") {
+    return compiler;
+  }
+
+  return "esbuild";
+}
+
 export async function POST(request: Request) {
   try {
     const payload = (await request.json()) as {
       files?: WorkspaceFile[];
       request?: Partial<ServerlessExpressRequestInput>;
+      compiler?: ServerlessExpressCompilerKind;
     };
     const result = await runServerlessExpressRequest(
       payload.files ?? [],
@@ -72,6 +82,7 @@ export async function POST(request: Request) {
         headers: payload.request?.headers ?? {},
         body: payload.request?.body ?? "",
       },
+      normalizeCompiler(payload.compiler),
     );
 
     return NextResponse.json(

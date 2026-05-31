@@ -87,8 +87,11 @@ function collectRuntimePackageGlobs(seedPackages: string[]) {
 
 const serverlessCompileTraceGlobs = [
   "./lib/serverless-vite/**/*.cjs",
+  "./lib/serverless-tanstack-start/**/*.cjs",
   "./node_modules/@esbuild/**/*",
   ...collectRuntimePackageGlobs([
+    "@tanstack/react-router",
+    "@tanstack/start-plugin-core",
     "esbuild",
     "react",
     "react-dom",
@@ -103,6 +106,7 @@ const serverlessExpressRequestTraceGlobs = [
   ...collectRuntimePackageGlobs([
     "esbuild",
     "express",
+    "rolldown",
   ]),
 ];
 
@@ -138,6 +142,7 @@ const nextConfig: NextConfig = {
     "/api/serverless/compile": serverlessCompileTraceGlobs,
     "/api/serverless/expressjs/request": serverlessExpressRequestTraceGlobs,
     "/api/serverless/expressjs/types": serverlessExpressTypeTraceGlobs,
+    "/api/serverless/tanstack-start/core-rpc": serverlessCompileTraceGlobs,
     "/api/serverless/types": serverlessTypeTraceGlobs,
     ...(!isVercel
       ? {

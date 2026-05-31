@@ -25,6 +25,8 @@ export type ServerlessExpressRequestInput = {
   body: string;
 };
 
+export type ServerlessExpressCompilerKind = "esbuild" | "sucrase" | "rolldown";
+
 export type ServerlessExpressRequestResult = {
   success: boolean;
   diagnostics: BuildDiagnostic[];
@@ -43,6 +45,7 @@ const runnerPath = resolve(
 function spawnRequestRunner(
   files: WorkspaceFile[],
   request: ServerlessExpressRequestInput,
+  compiler: ServerlessExpressCompilerKind,
 ) {
   return new Promise<ServerlessExpressRequestResult>((resolveResult, rejectResult) => {
     const child = spawn(process.execPath, [runnerPath], {
@@ -81,7 +84,7 @@ function spawnRequestRunner(
       }
     });
 
-    child.stdin.write(JSON.stringify({ files, request }));
+    child.stdin.write(JSON.stringify({ files, request, compiler }));
     child.stdin.end();
   });
 }
@@ -89,6 +92,7 @@ function spawnRequestRunner(
 export async function runServerlessExpressRequest(
   files: WorkspaceFile[],
   request: ServerlessExpressRequestInput,
+  compiler: ServerlessExpressCompilerKind = "esbuild",
 ): Promise<ServerlessExpressRequestResult> {
-  return spawnRequestRunner(files, request);
+  return spawnRequestRunner(files, request, compiler);
 }

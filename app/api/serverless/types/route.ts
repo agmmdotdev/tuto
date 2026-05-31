@@ -10,6 +10,7 @@ const serverlessTypePackages = [
   "react/jsx-dev-runtime",
   "react-dom",
   "react-dom/client",
+  "@tanstack/react-router",
   "motion/react",
   "@types/react",
   "@types/react-dom",

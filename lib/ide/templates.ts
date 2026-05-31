@@ -826,6 +826,769 @@ p {
     ],
   },
   {
+    id: "serverless-tanstack-start-playground",
+    name: "Serverless TanStack Start Playground",
+    previewPath: "src/routes/index.tsx",
+    files: [
+      {
+        path: "README.md",
+        language: "md",
+        description: "A TanStack Start-style playground that stays stateless and Vercel-safe.",
+        content: `# Serverless TanStack Start Playground
+
+This route is the lightweight TanStack Start compiler-core experiment.
+
+What is real here:
+
+- real \`@tanstack/start-plugin-core\` transforms
+- real \`@tanstack/react-router\`
+- an esbuild browser preview bundle
+- real route modules under \`src/routes\`
+- real nested layouts, loaders, params, search state, links, and server function RPC stubs
+
+What is intentionally still experimental here:
+
+- no long-lived Vite dev server
+- no Vite build inside the serverless function
+- each browser-side server function call posts the saved snapshot to a stateless RPC route
+
+This is less complete than full Start SSR, but it avoids bundling Vite into the hosted compile route.`,
+      },
+      {
+        path: "index.html",
+        language: "html",
+        description: "HTML entry document for the TanStack playground.",
+        content: `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Serverless TanStack Start Playground</title>
+  </head>
+  <body class="m-0">
+    <div id="app"></div>
+    <script type="module" src="./src/main.tsx"></script>
+  </body>
+</html>
+`,
+      },
+      {
+        path: "src/main.tsx",
+        language: "tsx",
+        description: "Client entry for the TanStack router app.",
+        content: `import React from "react";
+import ReactDOM from "react-dom/client";
+import "./styles.css";
+
+function patchSrcDocHistory() {
+  if (
+    typeof window === "undefined" ||
+    typeof location === "undefined" ||
+    location.href !== "about:srcdoc"
+  ) {
+    return;
+  }
+
+  const safeWrap = <T extends typeof window.history.pushState | typeof window.history.replaceState>(
+    method: T,
+  ) => {
+    return ((...args: Parameters<T>) => {
+      try {
+        return method.apply(window.history, args);
+      } catch (error) {
+        if (
+          error instanceof DOMException &&
+          error.name === "SecurityError"
+        ) {
+          return undefined;
+        }
+
+        throw error;
+      }
+    }) as T;
+  };
+
+  window.history.pushState = safeWrap(window.history.pushState);
+  window.history.replaceState = safeWrap(window.history.replaceState);
+}
+
+patchSrcDocHistory();
+
+const rootElement = document.getElementById("app");
+
+if (!rootElement) {
+  throw new Error('Missing root element "#app".');
+}
+
+async function bootstrap() {
+  const [{ RouterProvider }, { router }] = await Promise.all([
+    import("@tanstack/react-router"),
+    import("./router"),
+  ]);
+
+  ReactDOM.createRoot(rootElement).render(
+    <React.StrictMode>
+      <RouterProvider router={router} />
+    </React.StrictMode>,
+  );
+}
+
+void bootstrap();
+`,
+      },
+      {
+        path: "src/router.tsx",
+        language: "tsx",
+        description: "Router setup for the stateless TanStack playground.",
+        content: `import { createMemoryHistory } from "@tanstack/react-router";
+import { createRouter } from "@tanstack/react-router";
+import { routeTree } from "./routeTree.gen";
+
+const history = createMemoryHistory({
+  initialEntries: ["/"],
+});
+
+export const router = createRouter({
+  history,
+  routeTree,
+  defaultPreload: "intent",
+  defaultPendingMinMs: 180,
+  defaultPendingMs: 120,
+  scrollRestoration: false,
+});
+
+declare module "@tanstack/react-router" {
+  interface Register {
+    router: typeof router;
+  }
+}
+`,
+      },
+      {
+        path: "src/routeTree.gen.ts",
+        language: "ts",
+        description: "A fixed generated route tree for the stateless file-route playground.",
+        content: `/* eslint-disable */
+
+// @ts-nocheck
+
+// This file mirrors the generated TanStack route tree shape used by file-based routing.
+
+import { Route as rootRouteImport } from "./routes/__root";
+import { Route as IndexRouteImport } from "./routes/index";
+import { Route as PostsRouteImport } from "./routes/posts";
+import { Route as PostsIndexRouteImport } from "./routes/posts.index";
+import { Route as PostsPostIdRouteImport } from "./routes/posts.$postId";
+
+const IndexRoute = IndexRouteImport.update({
+  id: "/",
+  path: "/",
+  getParentRoute: () => rootRouteImport,
+} as any);
+
+const PostsRoute = PostsRouteImport.update({
+  id: "/posts",
+  path: "/posts",
+  getParentRoute: () => rootRouteImport,
+} as any);
+
+const PostsIndexRoute = PostsIndexRouteImport.update({
+  id: "/",
+  path: "/",
+  getParentRoute: () => PostsRoute,
+} as any);
+
+const PostsPostIdRoute = PostsPostIdRouteImport.update({
+  id: "/$postId",
+  path: "/$postId",
+  getParentRoute: () => PostsRoute,
+} as any);
+
+export interface FileRoutesByFullPath {
+  "/": typeof IndexRoute;
+  "/posts": typeof PostsRouteWithChildren;
+  "/posts/$postId": typeof PostsPostIdRoute;
+  "/posts/": typeof PostsIndexRoute;
+}
+
+export interface FileRoutesByTo {
+  "/": typeof IndexRoute;
+  "/posts": typeof PostsIndexRoute;
+  "/posts/$postId": typeof PostsPostIdRoute;
+}
+
+export interface FileRoutesById {
+  __root__: typeof rootRouteImport;
+  "/": typeof IndexRoute;
+  "/posts": typeof PostsRouteWithChildren;
+  "/posts/$postId": typeof PostsPostIdRoute;
+  "/posts/": typeof PostsIndexRoute;
+}
+
+export interface FileRouteTypes {
+  fileRoutesByFullPath: FileRoutesByFullPath;
+  fullPaths: "/" | "/posts" | "/posts/$postId" | "/posts/";
+  fileRoutesByTo: FileRoutesByTo;
+  to: "/" | "/posts" | "/posts/$postId";
+  id: "__root__" | "/" | "/posts" | "/posts/$postId" | "/posts/";
+  fileRoutesById: FileRoutesById;
+}
+
+interface RootRouteChildren {
+  IndexRoute: typeof IndexRoute;
+  PostsRoute: typeof PostsRouteWithChildren;
+}
+
+declare module "@tanstack/react-router" {
+  interface FileRoutesByPath {
+    "/": {
+      id: "/";
+      path: "/";
+      fullPath: "/";
+      preLoaderRoute: typeof IndexRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/posts": {
+      id: "/posts";
+      path: "/posts";
+      fullPath: "/posts";
+      preLoaderRoute: typeof PostsRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/posts/": {
+      id: "/posts/";
+      path: "/";
+      fullPath: "/posts/";
+      preLoaderRoute: typeof PostsIndexRouteImport;
+      parentRoute: typeof PostsRoute;
+    };
+    "/posts/$postId": {
+      id: "/posts/$postId";
+      path: "/$postId";
+      fullPath: "/posts/$postId";
+      preLoaderRoute: typeof PostsPostIdRouteImport;
+      parentRoute: typeof PostsRoute;
+    };
+  }
+}
+
+interface PostsRouteChildren {
+  PostsIndexRoute: typeof PostsIndexRoute;
+  PostsPostIdRoute: typeof PostsPostIdRoute;
+}
+
+const PostsRouteChildren: PostsRouteChildren = {
+  PostsIndexRoute,
+  PostsPostIdRoute,
+};
+
+const PostsRouteWithChildren = PostsRoute._addFileChildren(PostsRouteChildren);
+
+const rootRouteChildren: RootRouteChildren = {
+  IndexRoute,
+  PostsRoute: PostsRouteWithChildren,
+};
+
+export const routeTree = rootRouteImport
+  ._addFileChildren(rootRouteChildren)
+  ._addFileTypes<FileRouteTypes>();
+`,
+      },
+      {
+        path: "src/lib/posts.ts",
+        language: "ts",
+        description: "Shared mock data and loader helpers for the route files.",
+        content: `export type DemoPost = {
+  id: string;
+  eyebrow: string;
+  title: string;
+  summary: string;
+  notes: string[];
+  metrics: Array<{ label: string; value: string }>;
+};
+
+export const posts: DemoPost[] = [
+  {
+    id: "launch-checklist",
+    eyebrow: "Shipping",
+    title: "Launch checklist",
+    summary:
+      "A route loader can still shape local data, preload on intent, and hydrate a nested detail panel without inventing framework shims.",
+    notes: [
+      "Keep the route tree explicit so links and params stay strongly typed.",
+      "Treat loaders as browser-safe data hooks in this stateless mode.",
+      "Save SSR and server functions for a trusted runtime, not public Vercel Functions.",
+    ],
+    metrics: [
+      { label: "Runtime", value: "Browser loader" },
+      { label: "Isolation", value: "No temp workspace" },
+      { label: "Preview", value: "Stateless bundle" },
+    ],
+  },
+  {
+    id: "edge-cache-playbook",
+    eyebrow: "Performance",
+    title: "Edge cache playbook",
+    summary:
+      "Search state, dynamic params, and nested layouts all work with the real router package, which gets you much closer to Start than a fake component shim.",
+    notes: [
+      "Use search state for small UI modes like notes versus summary.",
+      "Use nested layouts to preserve shell state between detail transitions.",
+      "Preload detail routes on hover with intent-based defaults.",
+    ],
+    metrics: [
+      { label: "Router", value: "@tanstack/react-router" },
+      { label: "Preload", value: "intent" },
+      { label: "State", value: "search + params" },
+    ],
+  },
+  {
+    id: "preview-boundaries",
+    eyebrow: "Platform",
+    title: "Preview boundaries",
+    summary:
+      "The compromise is deliberate: this route favors real client routing over pretending server code is safe to execute inside shared production Functions.",
+    notes: [
+      "This page is safe to host on Vercel because it never boots user server code.",
+      "The route files are still real modules you can edit like a Start project.",
+      "A future trusted verifier can reuse the same source shape for SSR checks.",
+    ],
+    metrics: [
+      { label: "Host", value: "Vercel-native" },
+      { label: "Server code", value: "Disabled" },
+      { label: "Authoring", value: "Start-like" },
+    ],
+  },
+];
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function loadPosts() {
+  await wait(140);
+  return posts;
+}
+
+export async function loadPostById(postId: string) {
+  await wait(160);
+  return posts.find((post) => post.id === postId) ?? null;
+}
+`,
+      },
+      {
+        path: "src/routes/__root.tsx",
+        language: "tsx",
+        description: "The TanStack root route shell and not-found state.",
+        content: `import "../styles.css";
+import {
+  Link,
+  Outlet,
+  createRootRoute,
+  useRouterState,
+} from "@tanstack/react-router";
+
+export const Route = createRootRoute({
+  component: RootLayout,
+  notFoundComponent: NotFoundView,
+});
+
+const pillLinkClass =
+  "inline-flex min-h-11 items-center justify-center rounded-full border border-stone-900/10 bg-white/55 px-4 text-sm font-medium text-stone-900 transition hover:-translate-y-0.5 hover:border-stone-900/20 data-[active=true]:border-stone-950 data-[active=true]:bg-stone-950 data-[active=true]:text-white";
+const panelClass =
+  "rounded-[28px] border border-stone-900/10 bg-white/70 shadow-[0_24px_60px_rgba(71,42,20,0.12)] backdrop-blur";
+
+function RootLayout() {
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  });
+
+  return (
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(201,108,54,0.22),transparent_24rem),radial-gradient(circle_at_85%_20%,rgba(118,90,68,0.16),transparent_20rem),linear-gradient(180deg,#fffaf3_0%,#efe2d1_100%)] font-sans text-stone-950">
+      <div className="relative mx-auto w-[min(1120px,calc(100%-32px))] pt-6 pb-14">
+        <div className="pointer-events-none fixed top-16 right-[min(12vw,140px)] h-56 w-56 rounded-full bg-orange-400/25 blur-2xl" />
+        <div className="pointer-events-none fixed bottom-14 left-[min(8vw,90px)] h-44 w-44 rounded-full bg-stone-700/15 blur-2xl" />
+
+        <header
+          className={[panelClass, "relative z-10 grid gap-4 p-8 md:grid-cols-[minmax(0,1fr)_auto] md:items-end"].join(
+            " ",
+          )}
+        >
+          <div className="space-y-4">
+            <span className="inline-flex items-center gap-2 rounded-full bg-orange-500/12 px-3.5 py-2 text-[11px] font-bold uppercase tracking-[0.22em] text-orange-900/80">
+              TanStack Start / client-safe
+            </span>
+            <h1 className="max-w-4xl text-4xl font-semibold leading-[0.92] tracking-[-0.04em] text-stone-950 sm:text-6xl">
+              Real route files running in a stateless Vercel preview.
+            </h1>
+            <p className="max-w-3xl text-[17px] leading-7 text-stone-600 sm:text-lg">
+              This playground keeps the framework surface real where it is safe:
+              links, nested routes, loaders, search state, params, a generated
+              route tree, and now compiled Tailwind utilities.
+            </p>
+          </div>
+          <div className="rounded-full border border-stone-900/10 bg-white/65 px-4 py-2 font-mono text-[12px] font-semibold leading-none text-stone-600 md:justify-self-end">
+            {pathname}
+          </div>
+        </header>
+
+        <nav className="relative z-10 mt-4 flex flex-wrap gap-2.5">
+          <Link
+            activeOptions={{ exact: true }}
+            activeProps={{ "data-active": "true" }}
+            className={pillLinkClass}
+            to="/"
+          >
+            Home
+          </Link>
+          <Link
+            activeProps={{ "data-active": "true" }}
+            className={pillLinkClass}
+            to="/posts"
+          >
+            Posts
+          </Link>
+          <Link
+            activeProps={{ "data-active": "true" }}
+            className={pillLinkClass}
+            params={{ postId: "launch-checklist" }}
+            search={{ tab: "notes" }}
+            to="/posts/$postId"
+          >
+            Dynamic Detail
+          </Link>
+        </nav>
+
+        <main className="relative z-10 mt-5">
+          <Outlet />
+        </main>
+      </div>
+    </div>
+  );
+}
+
+function NotFoundView() {
+  return (
+    <section className={[panelClass, "space-y-4 p-8"].join(" ")}>
+      <span className="inline-flex items-center gap-2 rounded-full bg-orange-500/12 px-3.5 py-2 text-[11px] font-bold uppercase tracking-[0.22em] text-orange-900/80">
+        Not found
+      </span>
+      <h2 className="max-w-3xl text-4xl font-semibold leading-[0.96] tracking-[-0.04em] text-stone-950">
+        This route is outside the fixed stateless tree.
+      </h2>
+      <p className="max-w-3xl text-[17px] leading-7 text-stone-600">
+        The route graph here is deliberately explicit, so the preview can stay
+        file-based without a temp workspace or background generator process.
+      </p>
+      <div className="flex flex-wrap gap-3 pt-2">
+        <Link
+          className="inline-flex min-h-11 items-center justify-center rounded-full bg-stone-950 px-4 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-stone-800"
+          to="/"
+        >
+          Back home
+        </Link>
+      </div>
+    </section>
+  );
+}
+`,
+      },
+      {
+        path: "src/routes/index.tsx",
+        language: "tsx",
+        description: "The home route for the stateless TanStack playground.",
+        content: `import { Link, createFileRoute } from "@tanstack/react-router";
+
+const highlights = [
+  {
+    title: "Real Router",
+    body: "This route uses the actual @tanstack/react-router package from the repo root, not a fake compatibility layer.",
+  },
+  {
+    title: "Generated shape",
+    body: "The route modules mirror a file-based Start setup, and src/routeTree.gen.ts keeps the familiar generated contract.",
+  },
+  {
+    title: "Vercel-safe",
+    body: "Nothing writes to disk or executes user server code, so the preview stays stateless and safe for shared Functions.",
+  },
+];
+
+export const Route = createFileRoute("/")({
+  component: HomeRoute,
+});
+
+const panelClass =
+  "rounded-[28px] border border-stone-900/10 bg-white/70 shadow-[0_24px_60px_rgba(71,42,20,0.12)] backdrop-blur";
+const inlineCodeClass =
+  "rounded-lg bg-stone-950/8 px-1.5 py-0.5 font-mono text-[0.92em]";
+
+function HomeRoute() {
+  return (
+    <div className="grid gap-4">
+      <section className={[panelClass, "space-y-6 p-8"].join(" ")}>
+        <div className="space-y-4">
+          <span className="inline-flex items-center gap-2 rounded-full bg-orange-500/12 px-3.5 py-2 text-[11px] font-bold uppercase tracking-[0.22em] text-orange-900/80">
+            Closer to Start
+          </span>
+          <h2 className="max-w-4xl text-4xl font-semibold leading-[0.96] tracking-[-0.04em] text-stone-950 sm:text-5xl">
+            Real file routes, loaders, params, search state, and compiled
+            Tailwind classes.
+          </h2>
+          <p className="max-w-3xl text-[17px] leading-7 text-stone-600">
+            Edit the route modules in{" "}
+            <code className={inlineCodeClass}>src/routes</code>, the shared data
+            in <code className={inlineCodeClass}>src/lib/posts.ts</code>, the
+            generated tree in{" "}
+            <code className={inlineCodeClass}>src/routeTree.gen.ts</code>, or
+            the Tailwind entry point in{" "}
+            <code className={inlineCodeClass}>src/styles.css</code>. Save, and
+            the stateless preview rebuilds from the latest snapshot.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-3">
+          <Link
+            className="inline-flex min-h-11 items-center justify-center rounded-full bg-stone-950 px-4 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-stone-800"
+            to="/posts"
+          >
+            Browse the nested route
+          </Link>
+          <Link
+            className="inline-flex min-h-11 items-center justify-center rounded-full border border-stone-900/10 bg-white/55 px-4 text-sm font-medium text-stone-900 transition hover:-translate-y-0.5 hover:border-stone-900/20"
+            params={{ postId: "edge-cache-playbook" }}
+            search={{ tab: "notes" }}
+            to="/posts/$postId"
+          >
+            Jump to a detail route
+          </Link>
+        </div>
+      </section>
+
+      <section className="grid gap-4 md:grid-cols-3">
+        {highlights.map((item) => (
+          <article className={[panelClass, "space-y-3 p-6"].join(" ")} key={item.title}>
+            <span className="text-[11px] font-bold uppercase tracking-[0.22em] text-orange-900/75">
+              {item.title}
+            </span>
+            <p className="text-[16px] leading-7 text-stone-600">{item.body}</p>
+          </article>
+        ))}
+      </section>
+    </div>
+  );
+}
+`,
+      },
+      {
+        path: "src/routes/posts.tsx",
+        language: "tsx",
+        description: "A nested layout route that loads post data and renders child routes.",
+        content: `import { Link, Outlet, createFileRoute } from "@tanstack/react-router";
+import { loadPosts } from "../lib/posts";
+
+export const Route = createFileRoute("/posts")({
+  loader: () => loadPosts(),
+  component: PostsLayout,
+});
+
+const panelClass =
+  "rounded-[28px] border border-stone-900/10 bg-white/70 shadow-[0_24px_60px_rgba(71,42,20,0.12)] backdrop-blur";
+const postLinkClass =
+  "block rounded-[24px] border border-stone-900/10 bg-white/65 p-4 text-stone-900 transition hover:-translate-y-0.5 hover:border-stone-900/20 data-[active=true]:border-stone-950 data-[active=true]:bg-stone-950 data-[active=true]:text-white";
+
+function PostsLayout() {
+  const posts = Route.useLoaderData();
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
+      <aside className={[panelClass, "space-y-5 p-6"].join(" ")}>
+        <span className="text-[11px] font-bold uppercase tracking-[0.22em] text-orange-900/75">
+          Loader data
+        </span>
+        <h2 className="text-4xl font-semibold leading-[0.96] tracking-[-0.04em] text-stone-950">
+          Posts
+        </h2>
+        <p className="text-[16px] leading-7 text-stone-600">
+          This parent route loads a small dataset, then keeps the shell mounted
+          while child routes swap in the detail panel.
+        </p>
+
+        <div className="flex flex-col gap-3">
+          {posts.map((post) => (
+            <Link
+              activeProps={{ "data-active": "true" }}
+              className={postLinkClass}
+              key={post.id}
+              params={{ postId: post.id }}
+              preload="intent"
+              search={{ tab: "summary" }}
+              to="/posts/$postId"
+            >
+              <strong className="block text-base font-semibold">{post.title}</strong>
+              <span className="mt-2 block text-[11px] font-bold uppercase tracking-[0.22em] opacity-70">
+                {post.eyebrow}
+              </span>
+            </Link>
+          ))}
+        </div>
+      </aside>
+
+      <section className={[panelClass, "p-6 md:p-7"].join(" ")}>
+        <Outlet />
+      </section>
+    </div>
+  );
+}
+`,
+      },
+      {
+        path: "src/routes/posts.index.tsx",
+        language: "tsx",
+        description: "Default child route shown before a post is selected.",
+        content: `import { createFileRoute } from "@tanstack/react-router";
+
+export const Route = createFileRoute("/posts/")({
+  component: PostsIndexRoute,
+});
+
+const inlineCodeClass =
+  "rounded-lg bg-stone-950/8 px-1.5 py-0.5 font-mono text-[0.92em]";
+
+function PostsIndexRoute() {
+  return (
+    <div className="space-y-4">
+      <span className="inline-flex items-center gap-2 rounded-full bg-orange-500/12 px-3.5 py-2 text-[11px] font-bold uppercase tracking-[0.22em] text-orange-900/80">
+        Nested index route
+      </span>
+      <h3 className="max-w-2xl text-4xl font-semibold leading-[0.96] tracking-[-0.04em] text-stone-950">
+        Select a post from the left column.
+      </h3>
+      <p className="max-w-3xl text-[16px] leading-7 text-stone-600">
+        This detail panel is the child outlet of{" "}
+        <code className={inlineCodeClass}>/posts</code>. Choose a post to see
+        params, search state, and route-level loader data working together.
+      </p>
+    </div>
+  );
+}
+`,
+      },
+      {
+        path: "src/routes/posts.$postId.tsx",
+        language: "tsx",
+        description: "Dynamic route showing params and search-state tabs.",
+        content: `import { Link, createFileRoute, notFound } from "@tanstack/react-router";
+import { loadPostById } from "../lib/posts";
+
+type PostTab = "summary" | "notes";
+
+export const Route = createFileRoute("/posts/$postId")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    tab: search.tab === "notes" ? ("notes" as PostTab) : ("summary" as PostTab),
+  }),
+  loader: async ({ params }) => {
+    const post = await loadPostById(params.postId);
+
+    if (!post) {
+      throw notFound();
+    }
+
+    return post;
+  },
+  component: PostDetailRoute,
+});
+
+const tabClass =
+  "inline-flex min-h-11 items-center justify-center rounded-full border border-stone-900/10 bg-white/55 px-4 text-sm font-medium text-stone-900 transition hover:-translate-y-0.5 hover:border-stone-900/20 data-[active=true]:border-stone-950 data-[active=true]:bg-stone-950 data-[active=true]:text-white";
+const metricCardClass =
+  "rounded-[24px] border border-stone-900/10 bg-stone-950/[0.03] p-5";
+
+function PostDetailRoute() {
+  const post = Route.useLoaderData();
+  const { tab } = Route.useSearch();
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="inline-flex items-center gap-2 rounded-full bg-orange-500/12 px-3.5 py-2 text-[11px] font-bold uppercase tracking-[0.22em] text-orange-900/80">
+          {post.eyebrow}
+        </span>
+        <span className="rounded-full border border-stone-900/10 bg-white/65 px-4 py-2 font-mono text-[12px] font-semibold leading-none text-stone-600">
+          {post.id}
+        </span>
+      </div>
+
+      <div className="space-y-4">
+        <h3 className="max-w-3xl text-4xl font-semibold leading-[0.94] tracking-[-0.04em] text-stone-950 sm:text-[2.75rem]">
+          {post.title}
+        </h3>
+        <p className="max-w-3xl text-[17px] leading-7 text-stone-600">
+          {post.summary}
+        </p>
+      </div>
+
+      <div className="flex flex-wrap gap-3">
+        <Link
+          activeProps={{ "data-active": "true" }}
+          className={tabClass}
+          params={{ postId: post.id }}
+          search={{ tab: "summary" }}
+          to="/posts/$postId"
+        >
+          Summary
+        </Link>
+        <Link
+          activeProps={{ "data-active": "true" }}
+          className={tabClass}
+          params={{ postId: post.id }}
+          search={{ tab: "notes" }}
+          to="/posts/$postId"
+        >
+          Notes
+        </Link>
+      </div>
+
+      {tab === "notes" ? (
+        <ul className="grid gap-3 pl-5 text-[16px] leading-7 text-stone-700 marker:text-orange-700">
+          {post.notes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-3">
+          {post.metrics.map((metric) => (
+            <article className={metricCardClass} key={metric.label}>
+              <span className="text-[11px] font-bold uppercase tracking-[0.22em] text-orange-900/75">
+                {metric.label}
+              </span>
+              <strong className="mt-3 block text-lg font-semibold text-stone-950">
+                {metric.value}
+              </strong>
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+`,
+      },
+      {
+        path: "src/styles.css",
+        language: "css",
+        description: "Styles for the stateless TanStack playground.",
+        content: `@import "tailwindcss";
+
+@theme {
+  --font-sans: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+  --font-mono: Consolas, monospace;
+}
+`,
+      },
+    ],
+  },
+  {
     id: "serverless-nextjs-runtime-playground",
     name: "Serverless Next Runtime Playground",
     previewPath: "app/page.tsx",
@@ -1104,7 +1867,7 @@ This workspace is stateless by design.
 - No terminal
 - No installed session node_modules
 
-Each preview request sends the current browser snapshot to the server, bundles the Express app with esbuild, starts it on an ephemeral port, proxies one request, then shuts it down again.`,
+Each preview request sends the current browser snapshot to the server, compiles the Express app with the selected compiler, starts it on an ephemeral port, proxies one request, then shuts it down again.`,
       },
       {
         path: "package.json",
@@ -1221,7 +1984,7 @@ app.get("/", (_request, response) => {
       <section class="grid">
         <article class="card">
           <strong>Compile</strong>
-          esbuild bundles src/server.ts on the server for each preview request.
+          Pick esbuild, rolldown, or sucrase in the workbench to compile src/server.ts for each preview request.
         </article>
         <article class="card">
           <strong>Runtime</strong>
@@ -1583,6 +2346,10 @@ export function getServerlessTemplate() {
 
 export function getServerlessNextjsTemplate() {
   return getTemplate("serverless-nextjs-playground");
+}
+
+export function getServerlessTanstackStartTemplate() {
+  return getTemplate("serverless-tanstack-start-playground");
 }
 
 export function getServerlessNextjsRuntimeTemplate() {
