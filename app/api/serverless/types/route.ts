@@ -11,6 +11,7 @@ const serverlessTypePackages = [
   "react-dom",
   "react-dom/client",
   "@tanstack/react-router",
+  "@tanstack/router-core",
   "motion/react",
   "@types/react",
   "@types/react-dom",

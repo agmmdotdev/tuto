@@ -5,8 +5,12 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:serverless-tanstack-start-transform": "esbuild lib/serverless-tanstack-start/server-functions-transform.ts --bundle --platform=node --format=cjs --target=node22 --outfile=lib/serverless-tanstack-start/server-functions-transform.generated.cjs --external:@tanstack/start-plugin-core",
+    "build:serverless-tanstack-start-runners": "esbuild lib/serverless-tanstack-start/core-preview-runner.ts lib/serverless-tanstack-start/core-rpc-runner.ts lib/serverless-tanstack-start/core-compiler-runner.ts --platform=node --format=cjs --target=node22 --outdir=lib/serverless-tanstack-start --out-extension:.js=.generated.cjs",
+    "build:serverless-tanstack-start-runtime": "yarn build:serverless-tanstack-start-transform && yarn build:serverless-tanstack-start-runners",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:serverless-tanstack-start": "yarn build:serverless-tanstack-start-runtime && node --test test/serverless-tanstack-start/*.test.cjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.11",

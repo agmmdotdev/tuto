@@ -9,7 +9,7 @@ const runnerPath = resolve(
   process.cwd(),
   "lib",
   "serverless-tanstack-start",
-  "core-rpc-runner.cjs",
+  "core-rpc-runner.generated.cjs",
 );
 const resultStartMarker = "__TUTO_TANSTACK_START_CORE_RPC_RESULT_START__";
 const resultEndMarker = "__TUTO_TANSTACK_START_CORE_RPC_RESULT_END__";

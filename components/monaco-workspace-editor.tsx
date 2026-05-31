@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
-import { WorkspaceLanguage } from "@/lib/ide/types";
+import { WorkspaceFile, WorkspaceLanguage } from "@/lib/ide/types";
 
 const MonacoEditor = dynamic(
   async () => (await import("@monaco-editor/react")).default,
@@ -68,11 +68,15 @@ function configureMonaco(monaco: typeof import("monaco-editor")) {
     allowJs: true,
     allowNonTsExtensions: true,
     allowSyntheticDefaultImports: true,
+    baseUrl: "file:///workspace",
     esModuleInterop: true,
     jsx: 4,
     module: 99,
     moduleResolution: 2,
     noEmit: true,
+    paths: {
+      "@tanstack/react-router": ["src/tanstack-router-editor-shim"],
+    },
     resolveJsonModule: true,
     target: 99,
   };
@@ -110,6 +114,7 @@ export function MonacoWorkspaceEditor({
   packageJsonSeed,
   typeLibrariesUrl,
   extraTypeLibraries,
+  workspaceFiles,
   filePath,
   language,
   value,
@@ -121,6 +126,7 @@ export function MonacoWorkspaceEditor({
   packageJsonSeed: string;
   typeLibrariesUrl?: string;
   extraTypeLibraries?: Array<{ filePath: string; content: string }>;
+  workspaceFiles?: WorkspaceFile[];
   filePath: string;
   language: WorkspaceLanguage;
   value: string;
@@ -130,6 +136,7 @@ export function MonacoWorkspaceEditor({
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
   const remoteTypeDisposablesRef = useRef<Array<{ dispose(): void }>>([]);
   const extraTypeDisposablesRef = useRef<Array<{ dispose(): void }>>([]);
+  const workspaceModelDisposablesRef = useRef<Array<{ dispose(): void }>>([]);
   const onChangeRef = useRef(onChange);
   const onSaveRef = useRef(onSave);
   const [monacoReady, setMonacoReady] = useState(false);
@@ -253,6 +260,50 @@ export function MonacoWorkspaceEditor({
   }, [extraTypeLibraries, monacoReady]);
 
   useEffect(() => {
+    if (!monacoReady || !monacoRef.current) {
+      return;
+    }
+
+    const monaco = monacoRef.current;
+
+    for (const disposable of workspaceModelDisposablesRef.current) {
+      disposable.dispose();
+    }
+
+    workspaceModelDisposablesRef.current = [];
+
+    for (const file of workspaceFiles ?? []) {
+      if (file.path === filePath) {
+        continue;
+      }
+
+      if (!["ts", "tsx", "js", "jsx", "json", "css"].includes(file.language)) {
+        continue;
+      }
+
+      const uri = monaco.Uri.parse(`file:///workspace/${file.path}`);
+      const existingModel = monaco.editor.getModel(uri);
+
+      if (existingModel) {
+        if (existingModel.getValue() !== file.content) {
+          existingModel.setValue(file.content);
+        }
+        continue;
+      }
+
+      const model = monaco.editor.createModel(
+        file.content,
+        toMonacoLanguage(file.language),
+        uri,
+      );
+
+      workspaceModelDisposablesRef.current.push({
+        dispose: () => model.dispose(),
+      });
+    }
+  }, [filePath, monacoReady, workspaceFiles]);
+
+  useEffect(() => {
     return () => {
       for (const disposable of remoteTypeDisposablesRef.current) {
         disposable.dispose();
@@ -260,8 +311,12 @@ export function MonacoWorkspaceEditor({
       for (const disposable of extraTypeDisposablesRef.current) {
         disposable.dispose();
       }
+      for (const disposable of workspaceModelDisposablesRef.current) {
+        disposable.dispose();
+      }
       remoteTypeDisposablesRef.current = [];
       extraTypeDisposablesRef.current = [];
+      workspaceModelDisposablesRef.current = [];
     };
   }, []);
 

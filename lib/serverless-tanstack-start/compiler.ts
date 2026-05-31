@@ -15,7 +15,7 @@ const runnerPath = resolve(
   process.cwd(),
   "lib",
   "serverless-tanstack-start",
-  "core-preview-runner.cjs",
+  "core-preview-runner.generated.cjs",
 );
 const resultStartMarker = "__TUTO_TANSTACK_START_CORE_PREVIEW_RESULT_START__";
 const resultEndMarker = "__TUTO_TANSTACK_START_CORE_PREVIEW_RESULT_END__";

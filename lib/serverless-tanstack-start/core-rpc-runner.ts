@@ -1,8 +1,11 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { randomUUID } = require("node:crypto");
 const path = require("node:path");
-const { pathToFileURL } = require("node:url");
 const { build } = require("esbuild");
+const {
+  toWorkspaceModuleId,
+  transformStartServerFunctions,
+} = require("./server-functions-transform.generated.cjs");
 
 const resultStartMarker = "__TUTO_TANSTACK_START_CORE_RPC_RESULT_START__";
 const resultEndMarker = "__TUTO_TANSTACK_START_CORE_RPC_RESULT_END__";
@@ -69,128 +72,6 @@ function sanitizeWorkspaceFiles(files) {
   return map;
 }
 
-async function importStartCompilerInternals() {
-  const packageRoot = path.dirname(
-    require.resolve("@tanstack/start-plugin-core/package.json"),
-  );
-  const esmRoot = path.join(packageRoot, "dist", "esm", "start-compiler");
-  const host = await import(pathToFileURL(path.join(esmRoot, "host.js")).toString());
-  const compiler = await import(pathToFileURL(path.join(esmRoot, "compiler.js")).toString());
-  const config = await import(pathToFileURL(path.join(esmRoot, "config.js")).toString());
-
-  return {
-    createStartCompiler: host.createStartCompiler,
-    detectKindsInCode: compiler.detectKindsInCode,
-    getLookupKindsForEnv: compiler.getLookupKindsForEnv,
-    getLookupConfigurationsForEnv: config.getLookupConfigurationsForEnv,
-  };
-}
-
-function toAbsoluteModuleId(root, workspacePath) {
-  return path.join(root, ...workspacePath.split("/"));
-}
-
-function toWorkspacePath(root, absoluteId) {
-  const cleanId = absoluteId.split("?")[0];
-  const relativePath = path.relative(root, cleanId).replaceAll("\\", "/");
-  return relativePath.startsWith("..") ? null : relativePath;
-}
-
-function toWorkspaceModuleId(root, absoluteId) {
-  const queryIndex = absoluteId.indexOf("?");
-  const query = queryIndex === -1 ? "" : absoluteId.slice(queryIndex);
-  const workspacePath = toWorkspacePath(root, absoluteId);
-  return workspacePath ? `${workspacePath}${query}` : absoluteId;
-}
-
-function createCoreResolver(root, fileMap) {
-  const extensions = ["", ".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs"];
-
-  return async function resolveId(source, importer) {
-    if (source.startsWith("@tanstack/") || source === "react" || source.startsWith("react/")) {
-      return source;
-    }
-
-    if (!source.startsWith(".")) return source;
-
-    const importerPath = importer ? importer.split("?")[0] : root;
-    const basePath = path.resolve(path.dirname(importerPath), source);
-
-    for (const extension of extensions) {
-      const candidate = `${basePath}${extension}`;
-      const workspacePath = toWorkspacePath(root, candidate);
-      if (workspacePath && fileMap.has(workspacePath)) return candidate;
-    }
-
-    return basePath;
-  };
-}
-
-async function compileServerSplits(fileMap) {
-  const {
-    createStartCompiler,
-    detectKindsInCode,
-    getLookupKindsForEnv,
-    getLookupConfigurationsForEnv,
-  } = await importStartCompilerInternals();
-  const root = path.join(absoluteWorkingDirectory, ".tmp", "tanstack-start-core");
-  const serverFnsById = {};
-  const serverSplits = new Map();
-  const resolveId = createCoreResolver(root, fileMap);
-  let compiler;
-
-  compiler = createStartCompiler({
-    env: "server",
-    envName: "ssr",
-    root,
-    framework: "react",
-    providerEnvName: "ssr",
-    mode: "build",
-    lookupKinds: getLookupKindsForEnv("server"),
-    lookupConfigurations: getLookupConfigurationsForEnv("server", "react"),
-    getKnownServerFns: () => serverFnsById,
-    onServerFnsById: (next) => Object.assign(serverFnsById, next),
-    loadModule: async (moduleId) => {
-      const workspacePath = toWorkspacePath(root, moduleId);
-      const code = workspacePath ? fileMap.get(workspacePath) : undefined;
-      if (workspacePath && code) {
-        compiler.ingestModule({ code, id: toAbsoluteModuleId(root, workspacePath) });
-      }
-    },
-    resolveId,
-  });
-
-  for (const [workspacePath, code] of fileMap.entries()) {
-    if (!/\.[cm]?[tj]sx?$/.test(workspacePath)) continue;
-    const id = toAbsoluteModuleId(root, workspacePath);
-    await compiler.compile({
-      code,
-      id,
-      detectedKinds: detectKindsInCode(code, "server"),
-    });
-  }
-
-  for (const serverFn of Object.values(serverFnsById)) {
-    const workspacePath = toWorkspacePath(root, serverFn.filename);
-    const code = workspacePath ? fileMap.get(workspacePath) : undefined;
-    if (!workspacePath || !code) continue;
-
-    const splitId = `${toAbsoluteModuleId(root, workspacePath)}?tss-serverfn-split`;
-    const splitResult = await compiler.compile({
-      code,
-      id: splitId,
-      parserFilename: toAbsoluteModuleId(root, workspacePath),
-      detectedKinds: detectKindsInCode(code, "server"),
-    });
-
-    if (splitResult?.code) {
-      serverSplits.set(toWorkspaceModuleId(root, serverFn.extractedFilename), splitResult.code);
-    }
-  }
-
-  return { serverFnsById, serverSplits };
-}
-
 function loaderForPath(filePath) {
   const extension = path.extname(filePath).toLowerCase();
   switch (extension) {
@@ -230,17 +111,17 @@ function resolveWorkspaceImport(files, source, importerPath) {
 
 async function executeServerFn({ id, payload, files }) {
   const fileMap = sanitizeWorkspaceFiles(files);
-  const { serverFnsById, serverSplits } = await compileServerSplits(fileMap);
+  const root = path.join(absoluteWorkingDirectory, ".tmp", "tanstack-start-core");
+  const { serverFnsById, serverSplits } = await transformStartServerFunctions(fileMap, {
+    root,
+  });
   const serverFn = serverFnsById[id];
 
   if (!serverFn) {
     throw new Error(`Unknown server function id: ${id}`);
   }
 
-  const splitModuleId = toWorkspaceModuleId(
-    path.join(absoluteWorkingDirectory, ".tmp", "tanstack-start-core"),
-    serverFn.extractedFilename,
-  );
+  const splitModuleId = toWorkspaceModuleId(root, serverFn.extractedFilename);
   const splitCode = serverSplits.get(splitModuleId);
 
   if (!splitCode) {

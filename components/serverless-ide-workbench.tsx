@@ -2,6 +2,7 @@
 
 import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { MonacoWorkspaceEditor } from "@/components/monaco-workspace-editor";
+import { materializeTanstackRouteTree } from "@/lib/ide/tanstack-route-tree";
 import { BuildDiagnostic, WorkspaceFile } from "@/lib/ide/types";
 
 type BuildState = "idle" | "building" | "ready" | "error";
@@ -123,7 +124,7 @@ const modeConfig: Record<
     sessionId: "serverless-nextjs",
   },
   tanstackstart: {
-    storageKey: "tuto-serverless-tanstack-start-workspace-v6",
+    storageKey: "tuto-serverless-tanstack-start-workspace-v8",
     defaultFilePath: "src/routes/index.tsx",
     title: "TanStack Start Runtime Playground",
     explorerCopy:
@@ -246,11 +247,65 @@ function buildLucideTypeLibrary(files: WorkspaceFile[]) {
   ];
 }
 
+function buildTanstackTypeLibraries() {
+  return [
+    {
+      filePath: "types/tanstack-router-register.d.ts",
+      content: `import type { router } from "../src/router";
+
+declare module "@tanstack/react-router" {
+  interface Register {
+    router: typeof router;
+  }
+}
+
+declare module "@tanstack/router-core" {
+  interface Register {
+    router: typeof router;
+  }
+}
+`,
+    },
+  ];
+}
+
 function mergeDrafts(files: WorkspaceFile[], draftsByPath: Record<string, string>) {
   return files.map((file) => ({
     ...file,
     content: draftsByPath[file.path] ?? file.content,
   }));
+}
+
+function materializeModeFiles(mode: ServerlessWorkbenchMode, files: WorkspaceFile[]) {
+  return mode === "tanstackstart" ? materializeTanstackRouteTree(files) : files;
+}
+
+function restoreMissingTemplateFiles(
+  mode: ServerlessWorkbenchMode,
+  files: WorkspaceFile[],
+  initialFiles: WorkspaceFile[],
+) {
+  if (mode !== "tanstackstart") {
+    return files;
+  }
+
+  const filesByPath = new Map(files.map((file) => [file.path, file]));
+
+  for (const initialFile of initialFiles) {
+    if (!filesByPath.has(initialFile.path)) {
+      filesByPath.set(initialFile.path, initialFile);
+    }
+  }
+
+  return [...filesByPath.values()];
+}
+
+function prepareModeFiles(
+  mode: ServerlessWorkbenchMode,
+  files: WorkspaceFile[],
+  initialFiles: WorkspaceFile[],
+) {
+  return materializeModeFiles(mode, restoreMissingTemplateFiles(mode, files, initialFiles));
 }
 
 export function ServerlessIdeWorkbench({
@@ -261,7 +316,9 @@ export function ServerlessIdeWorkbench({
   mode?: ServerlessWorkbenchMode;
 }) {
   const config = modeConfig[mode];
-  const [files, setFiles] = useState<WorkspaceFile[]>(initialFiles);
+  const [files, setFiles] = useState<WorkspaceFile[]>(() =>
+    prepareModeFiles(mode, initialFiles, initialFiles),
+  );
   const [draftsByPath, setDraftsByPath] = useState<Record<string, string>>({});
   const [selectedFilePath, setSelectedFilePath] = useState(config.defaultFilePath);
   const [buildState, setBuildState] = useState<BuildState>("idle");
@@ -287,10 +344,12 @@ export function ServerlessIdeWorkbench({
       };
 
       if (parsed.files?.length) {
-        setFiles(parsed.files);
+        const nextFiles = prepareModeFiles(mode, parsed.files, initialFiles);
+
+        setFiles(nextFiles);
         const preferredFile =
-          parsed.files.find((file) => file.path === config.defaultFilePath) ??
-          parsed.files[0];
+          nextFiles.find((file) => file.path === config.defaultFilePath) ??
+          nextFiles[0];
 
         if (preferredFile) {
           setSelectedFilePath(preferredFile.path);
@@ -305,7 +364,7 @@ export function ServerlessIdeWorkbench({
     } catch {
       setBuildVersion(1);
     }
-  }, [config.defaultFilePath, config.storageKey]);
+  }, [config.defaultFilePath, config.storageKey, initialFiles, mode]);
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -314,19 +373,29 @@ export function ServerlessIdeWorkbench({
     );
   }, [config.storageKey, draftsByPath, files]);
 
-  const selectedFile = useMemo(() => {
-    return files.find((file) => file.path === selectedFilePath) ?? null;
-  }, [files, selectedFilePath]);
-  const fileTree = useMemo(() => buildFileTree(files), [files]);
+  const savedFiles = useMemo(() => materializeModeFiles(mode, files), [files, mode]);
   const workingFiles = useMemo(
-    () => mergeDrafts(files, draftsByPath),
-    [draftsByPath, files],
+    () => materializeModeFiles(mode, mergeDrafts(savedFiles, draftsByPath)),
+    [draftsByPath, mode, savedFiles],
   );
+  const selectedFile = useMemo(() => {
+    return workingFiles.find((file) => file.path === selectedFilePath) ?? null;
+  }, [selectedFilePath, workingFiles]);
+  const fileTree = useMemo(() => buildFileTree(workingFiles), [workingFiles]);
   const extraTypeLibraries = useMemo(
-    () =>
-      mode === "nextjs"
-        ? [...buildLucideTypeLibrary(workingFiles), ...nextTypeLibraries]
-        : buildLucideTypeLibrary(workingFiles),
+    () => {
+      const libraries = buildLucideTypeLibrary(workingFiles);
+
+      if (mode === "nextjs") {
+        return [...libraries, ...nextTypeLibraries];
+      }
+
+      if (mode === "tanstackstart") {
+        return [...libraries, ...buildTanstackTypeLibraries()];
+      }
+
+      return libraries;
+    },
     [mode, workingFiles],
   );
   const currentValue = selectedFile
@@ -334,9 +403,9 @@ export function ServerlessIdeWorkbench({
     : "";
   const dirtyFileCount = useMemo(
     () =>
-      files.filter((file) => draftsByPath[file.path] !== undefined && draftsByPath[file.path] !== file.content)
+      savedFiles.filter((file) => draftsByPath[file.path] !== undefined && draftsByPath[file.path] !== file.content)
         .length,
-    [draftsByPath, files],
+    [draftsByPath, savedFiles],
   );
   const isCurrentFileDirty = selectedFile
     ? draftsByPath[selectedFile.path] !== undefined &&
@@ -386,6 +455,17 @@ export function ServerlessIdeWorkbench({
     setBuildVersion((value) => value + 1);
   }
 
+  function handleResetWorkspace() {
+    const nextFiles = prepareModeFiles(mode, initialFiles, initialFiles);
+
+    setFiles(nextFiles);
+    setDraftsByPath({});
+    setSelectedFilePath(config.defaultFilePath);
+    setRequestError(null);
+    setBuildVersion((value) => value + 1);
+    window.localStorage.removeItem(config.storageKey);
+  }
+
   useEffect(() => {
     if (buildVersion === 0) {
       return;
@@ -402,7 +482,7 @@ export function ServerlessIdeWorkbench({
           headers: {
             "content-type": "application/json",
           },
-          body: JSON.stringify({ files, mode }),
+          body: JSON.stringify({ files: savedFiles, mode }),
         });
         const payload = (await response.json()) as {
           success?: boolean;
@@ -441,7 +521,7 @@ export function ServerlessIdeWorkbench({
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [buildVersion, files, mode]);
+  }, [buildVersion, mode, savedFiles]);
 
   useEffect(() => {
     function handlePreviewMessage(event: MessageEvent) {
@@ -512,11 +592,18 @@ export function ServerlessIdeWorkbench({
             <span className="truncate text-[#cccccc]">
               {config.title}
             </span>
-          </div>
+        </div>
         <div className="flex items-center gap-2 text-[#858585]">
           <span className="rounded border border-[#3c3c3c] bg-[#252526] px-3 py-1 text-[#cccccc]">
             Shared root dependencies
           </span>
+          <button
+            className="rounded border border-[#3c3c3c] bg-[#252526] px-3 py-1 text-[#cccccc] hover:bg-[#2a2d2e]"
+            onClick={handleResetWorkspace}
+            type="button"
+          >
+            Reset
+          </button>
           <button
             className="rounded border border-[#007acc] bg-[#094771] px-3 py-1 text-white hover:bg-[#0d5f94] disabled:cursor-not-allowed disabled:opacity-50"
             disabled={!isCurrentFileDirty}
@@ -607,6 +694,7 @@ export function ServerlessIdeWorkbench({
                   sessionId={config.sessionId}
                   typeLibrariesUrl="/api/serverless/types"
                   value={currentValue}
+                  workspaceFiles={mode === "tanstackstart" ? workingFiles : undefined}
                 />
               ) : (
                 <div className="flex h-full items-center justify-center text-sm text-[#858585]">
