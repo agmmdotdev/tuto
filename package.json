@@ -11,7 +11,8 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck:tsgo": "tsgo -p tsconfig.tsgo.json --pretty false",
-    "test:serverless-tanstack-start": "yarn build:serverless-tanstack-start-runtime && node --test test/serverless-tanstack-start/*.test.cjs"
+    "measure:offline-compilers": "node scripts/measure-offline-compilers.mjs",
+    "test:serverless-tanstack-start": "yarn build:serverless-tanstack-start-runtime && vitest run --config vitest.serverless-tanstack-start.config.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.11",
@@ -29,10 +30,10 @@
     "lucide-react": "^0.577.0",
     "monaco-editor": "^0.55.1",
     "motion": "^12.38.0",
-    "next": "16.2.0",
+    "next": "16.2.6",
     "node-pty": "^1.1.0",
-    "react": "19.2.4",
-    "react-dom": "19.2.4",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
     "rolldown": "^1.0.3",
     "secure-exec": "0.1.0",
     "vite": "^8.0.1"
@@ -44,10 +45,14 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@typescript/native-preview": "^7.0.0-dev.20260527.2",
+    "@vitejs/plugin-rsc": "0.5.26",
     "eslint": "^9",
     "eslint-config-next": "16.2.0",
+    "react-server-dom-webpack": "19.2.6",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vinext": "0.0.54",
+    "vitest": "^4.1.8"
   },
   "packageManager": "yarn@4.13.0"
 }

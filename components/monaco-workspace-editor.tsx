@@ -76,6 +76,8 @@ function configureMonaco(monaco: typeof import("monaco-editor")) {
     noEmit: true,
     paths: {
       "@tanstack/react-router": ["src/tanstack-router-editor-shim"],
+      "@tanstack/react-start": ["src/tanstack-router-editor-shim"],
+      "@tanstack/router-core": ["src/tanstack-router-editor-shim"],
     },
     resolveJsonModule: true,
     target: 99,
@@ -134,6 +136,9 @@ export function MonacoWorkspaceEditor({
   onSave?: () => void;
 }) {
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
+  const editorRef = useRef<import("monaco-editor").editor.IStandaloneCodeEditor | null>(
+    null,
+  );
   const remoteTypeDisposablesRef = useRef<Array<{ dispose(): void }>>([]);
   const extraTypeDisposablesRef = useRef<Array<{ dispose(): void }>>([]);
   const workspaceModelDisposablesRef = useRef<Array<{ dispose(): void }>>([]);
@@ -304,6 +309,31 @@ export function MonacoWorkspaceEditor({
   }, [filePath, monacoReady, workspaceFiles]);
 
   useEffect(() => {
+    if (!monacoReady || !monacoRef.current || !editorRef.current) {
+      return;
+    }
+
+    const monaco = monacoRef.current;
+    const uri = monaco.Uri.parse(`file:///workspace/${filePath}`);
+    const monacoLanguage = toMonacoLanguage(language);
+    let model = monaco.editor.getModel(uri);
+
+    if (!model) {
+      model = monaco.editor.createModel(value, monacoLanguage, uri);
+    } else {
+      monaco.editor.setModelLanguage(model, monacoLanguage);
+
+      if (model.getValue() !== value) {
+        model.setValue(value);
+      }
+    }
+
+    if (editorRef.current.getModel()?.uri.toString() !== uri.toString()) {
+      editorRef.current.setModel(model);
+    }
+  }, [filePath, language, monacoReady, value]);
+
+  useEffect(() => {
     return () => {
       for (const disposable of remoteTypeDisposablesRef.current) {
         disposable.dispose();
@@ -331,8 +361,11 @@ export function MonacoWorkspaceEditor({
         height="100%"
         language={toMonacoLanguage(language)}
         loading={<div className="editor-loading">Loading editor...</div>}
-        onChange={(nextValue) => onChangeRef.current(nextValue ?? "")}
         onMount={(editor, monaco) => {
+          editorRef.current = editor;
+          editor.onDidChangeModelContent(() => {
+            onChangeRef.current(editor.getValue());
+          });
           editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
             onSaveRef.current?.();
           });

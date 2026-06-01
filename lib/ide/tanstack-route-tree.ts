@@ -156,8 +156,8 @@ type LinkProps<TTo extends RoutePath = RoutePath> = Omit<React.AnchorHTMLAttribu
   viewTransition?: boolean | Record<string, unknown>;
 };
 type RouteApi<TPath extends RoutePath> = {
-  update(options: Record<string, unknown>): RouteApi<TPath>;
-  _addFileChildren(children: Record<string, unknown>): RouteApi<TPath>;
+  update(options: unknown): RouteApi<TPath>;
+  _addFileChildren(children: unknown): RouteApi<TPath>;
   _addFileTypes<TFileRouteTypes>(): RouteApi<TPath>;
   useLoaderData(): any;
   useSearch(): SearchFor<TPath>;
@@ -171,6 +171,27 @@ type FileRouteOptions<TPath extends RoutePath> = {
   notFoundComponent?: React.ComponentType<any> | (() => React.ReactNode);
   pendingComponent?: React.ComponentType<any> | (() => React.ReactNode);
   errorComponent?: React.ComponentType<any> | (() => React.ReactNode);
+};
+type NotFoundOptions = {
+  data?: unknown;
+  headers?: HeadersInit;
+  routeId?: string;
+  throw?: boolean;
+};
+type RedirectOptions = {
+  href?: string;
+  statusCode?: number;
+  code?: number;
+  headers?: HeadersInit;
+  reloadDocument?: boolean;
+  throw?: boolean;
+  to?: string;
+  params?: Record<string, unknown>;
+  search?: Record<string, unknown>;
+  replace?: boolean;
+};
+type RedirectResult = Response & {
+  options: RedirectOptions;
 };
 
 export const Link = React.forwardRef<HTMLAnchorElement, LinkProps<any>>(function Link(props, ref) {
@@ -193,6 +214,9 @@ export function createRootRoute(_options: Record<string, unknown>) {
     update: () => ({} as RouteApi<"/">),
     _addFileChildren: () => ({} as RouteApi<"/">),
     _addFileTypes: () => ({} as RouteApi<"/">),
+    useLoaderData: () => undefined as any,
+    useSearch: () => ({}) as SearchFor<"/">,
+    useParams: () => ({}) as ParamsFor<"/">,
   } as RouteApi<"/">;
 }
 export function createRouter(options: Record<string, unknown>) {
@@ -201,12 +225,89 @@ export function createRouter(options: Record<string, unknown>) {
 export function createMemoryHistory(options: Record<string, unknown>) {
   return options;
 }
+export function useRouterState<TSelected>(opts: { select: (state: { location: { pathname: string } }) => TSelected }): TSelected;
+export function useRouterState(): { location: { pathname: string } };
 export function useRouterState<TSelected>(opts?: { select?: (state: { location: { pathname: string } }) => TSelected }) {
   const state = { location: { pathname: "/" } };
   return opts?.select ? opts.select(state) : state;
 }
-export function notFound(): Error {
+export function notFound(_options: NotFoundOptions = {}): Error {
   return new Error("Not found");
+}
+export function redirect(options: RedirectOptions): RedirectResult {
+  const response = new Response(null, {
+    status: options.statusCode ?? options.code ?? 307,
+    headers: options.headers,
+  }) as RedirectResult;
+  response.options = options;
+  return response;
+}
+type ServerFnContext<TData = any, TContext = Record<string, any>> = {
+  context: TContext;
+  data: TData;
+  headers?: HeadersInit;
+  method?: string;
+  signal?: AbortSignal;
+};
+type MiddlewareNext = (options?: {
+  context?: Record<string, any>;
+  data?: any;
+  headers?: HeadersInit;
+  result?: any;
+}) => Promise<any>;
+type MiddlewareContext = {
+  context: Record<string, any>;
+  data: any;
+  headers?: HeadersInit;
+  method?: string;
+  next: MiddlewareNext;
+  signal?: AbortSignal;
+};
+type ServerFunction<TData = any, TResult = any> = {
+  (options?: {
+    context?: Record<string, any>;
+    data?: TData;
+    fetch?: typeof fetch;
+    headers?: HeadersInit;
+    signal?: AbortSignal;
+  }): Promise<TResult | Response>;
+  method?: string;
+};
+type Middleware = {
+  options?: Record<string, unknown>;
+  middleware(middleware: Middleware[]): Middleware;
+  inputValidator<TData>(validator: (data: unknown) => TData | Promise<TData>): Middleware;
+  validator<TData>(validator: (data: unknown) => TData | Promise<TData>): Middleware;
+  client(fn: (ctx: MiddlewareContext) => unknown): Middleware;
+  server(fn: (ctx: MiddlewareContext) => unknown): Middleware;
+};
+type ServerFunctionBuilder<TData = any> = {
+  (options?: Record<string, unknown>): ServerFunctionBuilder<TData>;
+  middleware(middleware: Middleware[]): ServerFunctionBuilder<TData>;
+  inputValidator<TNextData>(validator: (data: unknown) => TNextData | Promise<TNextData>): ServerFunctionBuilder<TNextData>;
+  validator<TNextData>(validator: (data: unknown) => TNextData | Promise<TNextData>): ServerFunctionBuilder<TNextData>;
+  handler<TResult>(handler: (ctx: ServerFnContext<TData>) => TResult | Promise<TResult>): ServerFunction<TData, TResult>;
+};
+export function createServerFn(_options?: { method?: "GET" | "POST" | string }): ServerFunctionBuilder {
+  return undefined as any;
+}
+export function createMiddleware(_options?: Record<string, unknown>): Middleware {
+  return undefined as any;
+}
+export const createServerOnlyFn = (<T extends (...args: any[]) => any>(fn: T) => fn);
+export const createClientOnlyFn = (<T extends (...args: any[]) => any>(fn: T) => fn);
+export function createIsomorphicFn(): {
+  client<T extends (...args: any[]) => any>(fn: T): T;
+  server<T extends (...args: any[]) => any>(fn: T): T;
+} {
+  return undefined as any;
+}
+export function createStart<TOptions extends Record<string, unknown>>(options: TOptions): {
+  getOptions(): TOptions;
+} {
+  return {
+    getOptions: () => options,
+  };
 }
 `;
 }

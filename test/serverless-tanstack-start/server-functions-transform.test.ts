@@ -1,17 +1,49 @@
-/* eslint-disable @typescript-eslint/no-require-imports */
-const assert = require("node:assert/strict");
-const { spawnSync } = require("node:child_process");
-const path = require("node:path");
-const test = require("node:test");
-const {
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { test } from "vitest";
+import {
   transformStartServerFunctions,
-} = require("../../lib/serverless-tanstack-start/server-functions-transform.generated.cjs");
+  type StartServerFunctionsTransform,
+} from "../../lib/serverless-tanstack-start/server-functions-transform";
 
-function createRoot(name) {
+type WorkspaceFileMap = Map<string, string>;
+
+type WorkspaceFileInput = {
+  content: string;
+  language: "ts" | "tsx";
+  path: string;
+};
+
+type SerializedFormData = {
+  __tutoType: "FormData";
+  entries: Array<
+    [
+      string,
+      { kind: "string"; value: string } | { kind: "file"; name?: string; text?: string; type?: string },
+    ]
+  >;
+};
+
+type RpcPayload =
+  | Record<string, unknown>
+  | {
+      data: SerializedFormData;
+    };
+
+type CoreRpcResult = {
+  context?: unknown;
+  control?: unknown;
+  error?: string;
+  result?: unknown;
+  success: boolean;
+};
+
+function createRoot(name: string) {
   return path.join(process.cwd(), ".tmp", "server-functions-transform-tests", name);
 }
 
-function toWorkspaceFiles(files) {
+function toWorkspaceFiles(files: WorkspaceFileMap): WorkspaceFileInput[] {
   return [...files.entries()].map(([filePath, content]) => ({
     path: filePath,
     language: filePath.endsWith(".tsx") ? "tsx" : "ts",
@@ -19,7 +51,15 @@ function toWorkspaceFiles(files) {
   }));
 }
 
-function runCoreRpc({ files, id, payload }) {
+function runCoreRpc({
+  files,
+  id,
+  payload,
+}: {
+  files: WorkspaceFileMap;
+  id: string;
+  payload: RpcPayload;
+}): CoreRpcResult {
   const child = spawnSync(
     process.execPath,
     ["lib/serverless-tanstack-start/core-rpc-runner.generated.cjs"],
@@ -42,23 +82,39 @@ function runCoreRpc({ files, id, payload }) {
     throw new Error(child.stderr || child.stdout || "Missing RPC result payload.");
   }
 
-  return JSON.parse(match[1]);
+  return JSON.parse(match[1]) as CoreRpcResult;
 }
 
-async function transformFiles(files, name) {
+async function transformFiles(files: WorkspaceFileMap, name: string) {
   return transformStartServerFunctions(files, {
     root: createRoot(name),
   });
 }
 
-function firstServerFnId(transform) {
+function firstServerFnId(transform: StartServerFunctionsTransform) {
   const [serverFnId] = Object.keys(transform.serverFnsById);
   assert.ok(serverFnId, "expected one server function id");
   return serverFnId;
 }
 
+function getFile(map: WorkspaceFileMap, filePath: string) {
+  const code = map.get(filePath);
+
+  assert.ok(code, `expected generated code for ${filePath}`);
+
+  return code;
+}
+
+function getSplitEntry(transform: StartServerFunctionsTransform) {
+  const [entry] = [...transform.serverSplits.entries()];
+
+  assert.ok(entry, "expected one server split entry");
+
+  return entry;
+}
+
 test("leaves plain modules without creating server function manifest entries", async () => {
-  const files = new Map([
+  const files: WorkspaceFileMap = new Map([
     [
       "src/routes/index.tsx",
       "export function RouteComponent() { return <main>No server function</main>; }",
@@ -69,15 +125,12 @@ test("leaves plain modules without creating server function manifest entries", a
 
   assert.deepEqual(Object.keys(result.serverFnsById), []);
   assert.equal(result.serverSplits.size, 0);
-  assert.match(
-    result.clientFiles.get("src/routes/index.tsx"),
-    /No server function/,
-  );
+  assert.match(getFile(result.clientFiles, "src/routes/index.tsx"), /No server function/);
   assert.match(result.resolverModule, /const manifest = \{\n\};/);
 });
 
 test("rewrites createServerFn handlers into client RPC stubs and server split exports", async () => {
-  const files = new Map([
+  const files: WorkspaceFileMap = new Map([
     [
       "src/routes/index.tsx",
       `import { createServerFn } from '@tanstack/react-start';
@@ -95,23 +148,23 @@ export async function runGreeting() {
 
   const result = await transformFiles(files, "basic-server-fn");
   const serverFnIds = Object.keys(result.serverFnsById);
-  const clientCode = result.clientFiles.get("src/routes/index.tsx");
-  const splitEntries = [...result.serverSplits.entries()];
+  const clientCode = getFile(result.clientFiles, "src/routes/index.tsx");
+  const splitEntry = getSplitEntry(result);
 
   assert.equal(serverFnIds.length, 1);
   assert.match(clientCode, /@tanstack\/react-start\/client-rpc/);
   assert.match(clientCode, /createClientRpc\("[a-f0-9]{64}"\)/);
   assert.doesNotMatch(clientCode, /message: 'hi '/);
-  assert.equal(splitEntries.length, 1);
-  assert.equal(splitEntries[0][0], "src/routes/index.tsx?tss-serverfn-split");
-  assert.match(splitEntries[0][1], /@tanstack\/react-start\/server-rpc/);
-  assert.match(splitEntries[0][1], /export \{ greet_createServerFn_handler \};/);
+  assert.equal(result.serverSplits.size, 1);
+  assert.equal(splitEntry[0], "src/routes/index.tsx?tss-serverfn-split");
+  assert.match(splitEntry[1], /@tanstack\/react-start\/server-rpc/);
+  assert.match(splitEntry[1], /export \{ greet_createServerFn_handler \};/);
   assert.match(result.resolverModule, new RegExp(serverFnIds[0]));
   assert.match(result.resolverModule, /module: "src\/routes\/index\.tsx\?tss-serverfn-split"/);
 });
 
 test("executes inputValidator before the server function handler", async () => {
-  const files = new Map([
+  const files: WorkspaceFileMap = new Map([
     [
       "src/routes/index.tsx",
       `import { createServerFn } from '@tanstack/react-start';
@@ -147,11 +200,11 @@ export const greet = createServerFn({ method: 'POST' })
   assert.equal(success.success, true);
   assert.equal(success.result, "hi ADA");
   assert.equal(failure.success, false);
-  assert.match(failure.error, /name is required/);
+  assert.match(failure.error ?? "", /name is required/);
 });
 
 test("passes method metadata into the server function handler", async () => {
-  const files = new Map([
+  const files: WorkspaceFileMap = new Map([
     [
       "src/routes/index.tsx",
       `import { createServerFn } from '@tanstack/react-start';
@@ -197,7 +250,7 @@ export const greet = createServerFn({ method: 'POST' }).handler(async () => 'hi'
 });
 
 test("executes server functions declared in imported workspace modules", async () => {
-  const files = new Map([
+  const files: WorkspaceFileMap = new Map([
     [
       "src/lib/actions.ts",
       `import { createServerFn } from '@tanstack/react-start';
@@ -229,7 +282,7 @@ export async function callGreeting() {
 });
 
 test("returns thrown server function errors through the RPC error channel", async () => {
-  const files = new Map([
+  const files: WorkspaceFileMap = new Map([
     [
       "src/routes/index.tsx",
       `import { createServerFn } from '@tanstack/react-start';
@@ -248,11 +301,11 @@ export const fail = createServerFn({ method: 'POST' }).handler(async () => {
   });
 
   assert.equal(result.success, false);
-  assert.match(result.error, /boom/);
+  assert.match(result.error ?? "", /boom/);
 });
 
 test("serializes thrown redirects through the RPC control channel", async () => {
-  const files = new Map([
+  const files: WorkspaceFileMap = new Map([
     [
       "src/routes/index.tsx",
       `import { createServerFn } from '@tanstack/react-start';
@@ -293,7 +346,7 @@ export const goLogin = createServerFn({ method: 'POST' }).handler(async () => {
 });
 
 test("serializes thrown notFound values through the RPC control channel", async () => {
-  const files = new Map([
+  const files: WorkspaceFileMap = new Map([
     [
       "src/routes/index.tsx",
       `import { createServerFn } from '@tanstack/react-start';
@@ -320,7 +373,7 @@ export const missing = createServerFn({ method: 'POST' }).handler(async () => {
 });
 
 test("runs server middleware before the handler and merges context", async () => {
-  const files = new Map([
+  const files: WorkspaceFileMap = new Map([
     [
       "src/routes/index.tsx",
       `import { createMiddleware, createServerFn } from '@tanstack/react-start';
@@ -349,7 +402,7 @@ export const getUserId = createServerFn({ method: 'POST' })
 });
 
 test("allows server middleware to return Response without running handler", async () => {
-  const files = new Map([
+  const files: WorkspaceFileMap = new Map([
     [
       "src/routes/index.tsx",
       `import { createMiddleware, createServerFn } from '@tanstack/react-start';
@@ -387,7 +440,7 @@ export const guarded = createServerFn({ method: 'POST' })
 });
 
 test("serializes Response results across the RPC boundary", async () => {
-  const files = new Map([
+  const files: WorkspaceFileMap = new Map([
     [
       "src/routes/index.tsx",
       `import { createServerFn } from '@tanstack/react-start';
@@ -419,7 +472,7 @@ export const responseFn = createServerFn({ method: 'POST' }).handler(async () =>
 });
 
 test("revives FormData payloads before calling the server function handler", async () => {
-  const files = new Map([
+  const files: WorkspaceFileMap = new Map([
     [
       "src/routes/index.tsx",
       `import { createServerFn } from '@tanstack/react-start';

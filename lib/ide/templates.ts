@@ -1251,6 +1251,13 @@ function RootLayout() {
           <Link
             activeProps={{ "data-active": "true" }}
             className={pillLinkClass}
+            to="/server-functions"
+          >
+            Server Functions
+          </Link>
+          <Link
+            activeProps={{ "data-active": "true" }}
+            className={pillLinkClass}
             params={{ postId: "launch-checklist" }}
             search={{ tab: "notes" }}
             to="/posts/$postId"
@@ -1361,6 +1368,12 @@ function HomeRoute() {
             to="/posts/$postId"
           >
             Jump to a detail route
+          </Link>
+          <Link
+            className="inline-flex min-h-11 items-center justify-center rounded-full border border-stone-900/10 bg-white/55 px-4 text-sm font-medium text-stone-900 transition hover:-translate-y-0.5 hover:border-stone-900/20"
+            to="/server-functions"
+          >
+            Open server functions lab
           </Link>
         </div>
       </section>
@@ -1569,6 +1582,272 @@ function PostDetailRoute() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+`,
+      },
+      {
+        path: "src/routes/server-functions.tsx",
+        language: "tsx",
+        description: "Manual lab for the Start compiler-core server function path.",
+        content: `import { useState, type FormEvent } from "react";
+import { createMiddleware, createServerFn } from "@tanstack/react-start";
+import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
+
+type LabResult = {
+  body: string;
+  tone: "idle" | "success" | "error";
+  title: string;
+};
+
+const authMiddleware = createMiddleware({ type: "function" }).server(async ({ next }) => {
+  return next({
+    context: {
+      userId: "user-1",
+      role: "editor",
+    },
+  });
+});
+
+const denyMiddleware = createMiddleware({ type: "function" }).server(async () => {
+  return new Response("Blocked by middleware", {
+    status: 401,
+    headers: { "x-auth": "required" },
+  });
+});
+
+const greet = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .inputValidator((data: unknown) => {
+    const name =
+      typeof data === "object" && data !== null && "name" in data
+        ? String((data as { name?: unknown }).name ?? "").trim()
+        : "";
+
+    if (!name) {
+      throw new Error("Enter a name first.");
+    }
+
+    return { name };
+  })
+  .handler(async ({ context, data }) => {
+    return {
+      message: "Hello " + data.name + ".",
+      userId: context.userId,
+      role: context.role,
+    };
+  });
+
+const readForm = createServerFn({ method: "POST" }).handler(async ({ data }) => {
+  return {
+    title: data.get("title"),
+    tags: data.getAll("tag"),
+  };
+});
+
+const responseFunction = createServerFn({ method: "POST" }).handler(async () => {
+  return new Response("Created from a server function", {
+    status: 201,
+    headers: { "x-source": "server-function" },
+  });
+});
+
+const guardedFunction = createServerFn({ method: "POST" })
+  .middleware([denyMiddleware])
+  .handler(async () => {
+    return "This should not run.";
+  });
+
+const redirectFunction = createServerFn({ method: "POST" }).handler(async () => {
+  throw redirect({
+    href: "/login",
+    statusCode: 302,
+    headers: { "x-reason": "manual-lab" },
+  });
+});
+
+const missingFunction = createServerFn({ method: "POST" }).handler(async () => {
+  throw notFound({ data: { source: "server-functions-lab" } });
+});
+
+export const Route = createFileRoute("/server-functions")({
+  component: ServerFunctionsRoute,
+});
+
+const panelClass =
+  "rounded-[28px] border border-stone-900/10 bg-white/70 shadow-[0_24px_60px_rgba(71,42,20,0.12)] backdrop-blur";
+const buttonClass =
+  "inline-flex min-h-11 items-center justify-center rounded-full bg-stone-950 px-4 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-50";
+const quietButtonClass =
+  "inline-flex min-h-11 items-center justify-center rounded-full border border-stone-900/10 bg-white/55 px-4 text-sm font-medium text-stone-900 transition hover:-translate-y-0.5 hover:border-stone-900/20 disabled:cursor-not-allowed disabled:opacity-50";
+
+function formatValue(value: unknown) {
+  return JSON.stringify(value, null, 2);
+}
+
+function ServerFunctionsRoute() {
+  const [name, setName] = useState("Ada");
+  const [pending, setPending] = useState<string | null>(null);
+  const [result, setResult] = useState<LabResult>({
+    body: "Run an action to inspect the RPC result.",
+    tone: "idle",
+    title: "Idle",
+  });
+
+  async function run(label: string, action: () => Promise<unknown>) {
+    setPending(label);
+
+    try {
+      const value = await action();
+      setResult({
+        body: typeof value === "string" ? value : formatValue(value),
+        tone: "success",
+        title: label,
+      });
+    } catch (error) {
+      setResult({
+        body: error instanceof Error ? error.message : String(error),
+        tone: "error",
+        title: label,
+      });
+    } finally {
+      setPending(null);
+    }
+  }
+
+  function handleGreet(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void run("Validated POST + middleware context", () =>
+      greet({ data: { name } }),
+    );
+  }
+
+  function handleFormData() {
+    const formData = new FormData();
+    formData.append("title", "Compiler core");
+    formData.append("tag", "form-data");
+    formData.append("tag", "rpc");
+
+    void run("FormData payload", () => readForm({ data: formData }));
+  }
+
+  function handleResponse() {
+    void run("Response result", async () => {
+      const response = await responseFunction();
+
+      return {
+        isResponse: response instanceof Response,
+        source: response.headers.get("x-source"),
+        status: response.status,
+        text: await response.text(),
+      };
+    });
+  }
+
+  function handleGuarded() {
+    void run("Middleware Response", async () => {
+      const response = await guardedFunction();
+
+      if (!(response instanceof Response)) {
+        return {
+          unexpected: response,
+        };
+      }
+
+      return {
+        isResponse: true,
+        status: response.status,
+        text: await response.text(),
+        auth: response.headers.get("x-auth"),
+      };
+    });
+  }
+
+  const statusClass =
+    result.tone === "error"
+      ? "border-red-900/20 bg-red-50 text-red-950"
+      : result.tone === "success"
+        ? "border-emerald-900/20 bg-emerald-50 text-emerald-950"
+        : "border-stone-900/10 bg-stone-950/[0.03] text-stone-700";
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <section className={[panelClass, "space-y-6 p-8"].join(" ")}>
+        <div className="space-y-4">
+          <span className="inline-flex items-center gap-2 rounded-full bg-orange-500/12 px-3.5 py-2 text-[11px] font-bold uppercase tracking-[0.22em] text-orange-900/80">
+            Server functions
+          </span>
+          <h2 className="max-w-4xl text-4xl font-semibold leading-[0.96] tracking-[-0.04em] text-stone-950 sm:text-5xl">
+            Start compiler output calling the stateless RPC route.
+          </h2>
+          <p className="max-w-3xl text-[17px] leading-7 text-stone-600">
+            These calls are transformed by the Start compiler core, sent through
+            the playground RPC endpoint, and executed from the current saved
+            workspace snapshot.
+          </p>
+        </div>
+
+        <form className="flex flex-wrap gap-3" onSubmit={handleGreet}>
+          <input
+            className="min-h-11 min-w-[220px] rounded-full border border-stone-900/10 bg-white/70 px-4 text-sm font-medium text-stone-950 outline-none transition focus:border-stone-950"
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Name"
+            value={name}
+          />
+          <button className={buttonClass} disabled={pending !== null} type="submit">
+            Run validated POST
+          </button>
+        </form>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <button className={quietButtonClass} disabled={pending !== null} onClick={handleFormData} type="button">
+            Send FormData
+          </button>
+          <button className={quietButtonClass} disabled={pending !== null} onClick={handleResponse} type="button">
+            Return Response
+          </button>
+          <button className={quietButtonClass} disabled={pending !== null} onClick={handleGuarded} type="button">
+            Middleware Response
+          </button>
+          <button
+            className={quietButtonClass}
+            disabled={pending !== null}
+            onClick={() => void run("Redirect control", () => redirectFunction())}
+            type="button"
+          >
+            Throw redirect
+          </button>
+          <button
+            className={quietButtonClass}
+            disabled={pending !== null}
+            onClick={() => void run("Not found control", () => missingFunction())}
+            type="button"
+          >
+            Throw notFound
+          </button>
+        </div>
+      </section>
+
+      <aside className={[panelClass, "flex min-h-[320px] flex-col p-6"].join(" ")}>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-[0.22em] text-orange-900/75">
+              Result
+            </span>
+            <h3 className="mt-2 text-2xl font-semibold leading-tight text-stone-950">
+              {pending ?? result.title}
+            </h3>
+          </div>
+          <span className={["rounded-full border px-3 py-1 text-xs font-semibold", statusClass].join(" ")}>
+            {pending ? "running" : result.tone}
+          </span>
+        </div>
+
+        <pre className={["mt-5 min-h-0 flex-1 overflow-auto rounded-[18px] border p-4 font-mono text-xs leading-5", statusClass].join(" ")}>
+          {pending ? "Waiting for RPC response..." : result.body}
+        </pre>
+      </aside>
     </div>
   );
 }

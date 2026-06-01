@@ -13,6 +13,12 @@ const runnerPath = resolve(
 );
 const resultStartMarker = "__TUTO_TANSTACK_START_CORE_RPC_RESULT_START__";
 const resultEndMarker = "__TUTO_TANSTACK_START_CORE_RPC_RESULT_END__";
+const corsHeaders = {
+  "access-control-allow-headers": "content-type",
+  "access-control-allow-methods": "POST, OPTIONS",
+  "access-control-allow-origin": "*",
+  "cache-control": "no-store",
+};
 
 function runCoreRpc(payload: {
   id?: string;
@@ -83,9 +89,7 @@ export async function POST(request: Request) {
     const result = await runCoreRpc(payload);
 
     return NextResponse.json(result, {
-      headers: {
-        "cache-control": "no-store",
-      },
+      headers: corsHeaders,
       status: result.success ? 200 : 422,
     });
   } catch (error) {
@@ -98,11 +102,16 @@ export async function POST(request: Request) {
         error: message,
       },
       {
-        headers: {
-          "cache-control": "no-store",
-        },
+        headers: corsHeaders,
         status: 400,
       },
     );
   }
+}
+
+export function OPTIONS() {
+  return new Response(null, {
+    headers: corsHeaders,
+    status: 204,
+  });
 }

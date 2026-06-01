@@ -1,9 +1,34 @@
-/* eslint-disable @typescript-eslint/no-require-imports */
-const assert = require("node:assert/strict");
-const { spawnSync } = require("node:child_process");
-const test = require("node:test");
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { test } from "vitest";
 
-function compilePreview(files) {
+type WorkspaceFileInput = {
+  content: string;
+  language: "html" | "ts";
+  path: string;
+};
+
+type PreviewCompileResult = {
+  diagnostics: Array<{ message: string }>;
+  html: string;
+  success: boolean;
+};
+
+type PreviewRequestBody = {
+  payload: {
+    data?: {
+      __tutoType?: string;
+      entries?: unknown;
+    };
+  };
+};
+
+declare global {
+  var __tutoPreviewPromise: Promise<unknown> | undefined;
+  var __tutoPreviewResult: unknown;
+}
+
+function compilePreview(files: WorkspaceFileInput[]): PreviewCompileResult {
   const child = spawnSync(
     process.execPath,
     ["lib/serverless-tanstack-start/core-preview-runner.generated.cjs"],
@@ -22,10 +47,10 @@ function compilePreview(files) {
     throw new Error(child.stderr || child.stdout || "Missing preview result payload.");
   }
 
-  return JSON.parse(match[1]);
+  return JSON.parse(match[1]) as PreviewCompileResult;
 }
 
-function extractInlineModule(html) {
+function extractInlineModule(html: string) {
   const match = html.match(/<script type="module">([\s\S]*?)<\/script>/);
 
   if (!match) {
@@ -35,11 +60,11 @@ function extractInlineModule(html) {
   return match[1];
 }
 
-async function runPreviewModule(source) {
+async function runPreviewModule(source: string) {
   await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 }
 
-function createPreviewFiles(source) {
+function createPreviewFiles(source: string): WorkspaceFileInput[] {
   return [
     {
       path: "index.html",
@@ -55,7 +80,8 @@ function createPreviewFiles(source) {
 }
 
 test("preview client RPC encodes FormData payloads before fetch", async () => {
-  let requestBody;
+  let requestBody: PreviewRequestBody | undefined;
+  const originalFetch = globalThis.fetch;
   const preview = compilePreview(
     createPreviewFiles(`import { createServerFn } from '@tanstack/react-start';
 
@@ -71,7 +97,8 @@ globalThis.__tutoPreviewPromise = submitForm({ data: formData });
 
   assert.equal(preview.success, true);
   globalThis.fetch = async (_url, init) => {
-    requestBody = JSON.parse(init.body);
+    assert.ok(init?.body);
+    requestBody = JSON.parse(String(init.body)) as PreviewRequestBody;
     return Response.json({ success: true, result: "ok", context: {} });
   };
 
@@ -79,12 +106,12 @@ globalThis.__tutoPreviewPromise = submitForm({ data: formData });
     await runPreviewModule(extractInlineModule(preview.html));
     await globalThis.__tutoPreviewPromise;
   } finally {
-    delete globalThis.fetch;
-    delete globalThis.__tutoPreviewPromise;
+    globalThis.fetch = originalFetch;
+    globalThis.__tutoPreviewPromise = undefined;
   }
 
-  assert.equal(requestBody.payload.data.__tutoType, "FormData");
-  assert.deepEqual(requestBody.payload.data.entries, [
+  assert.equal(requestBody?.payload.data?.__tutoType, "FormData");
+  assert.deepEqual(requestBody?.payload.data?.entries, [
     ["title", { kind: "string", value: "Hello" }],
     ["tag", { kind: "string", value: "a" }],
     ["tag", { kind: "string", value: "b" }],
@@ -92,6 +119,7 @@ globalThis.__tutoPreviewPromise = submitForm({ data: formData });
 });
 
 test("preview client RPC decodes serialized Response results", async () => {
+  const originalFetch = globalThis.fetch;
   const preview = compilePreview(
     createPreviewFiles(`import { createServerFn } from '@tanstack/react-start';
 
@@ -132,13 +160,14 @@ globalThis.__tutoPreviewPromise = getResponse().then(async (response) => {
       source: "server-fn",
     });
   } finally {
-    delete globalThis.fetch;
-    delete globalThis.__tutoPreviewPromise;
-    delete globalThis.__tutoPreviewResult;
+    globalThis.fetch = originalFetch;
+    globalThis.__tutoPreviewPromise = undefined;
+    globalThis.__tutoPreviewResult = undefined;
   }
 });
 
 test("preview client RPC throws when the RPC endpoint reports failure", async () => {
+  const originalFetch = globalThis.fetch;
   const preview = compilePreview(
     createPreviewFiles(`import { createServerFn } from '@tanstack/react-start';
 
@@ -169,8 +198,8 @@ globalThis.__tutoPreviewPromise = fail()
     await globalThis.__tutoPreviewPromise;
     assert.equal(globalThis.__tutoPreviewResult, "server exploded");
   } finally {
-    delete globalThis.fetch;
-    delete globalThis.__tutoPreviewPromise;
-    delete globalThis.__tutoPreviewResult;
+    globalThis.fetch = originalFetch;
+    globalThis.__tutoPreviewPromise = undefined;
+    globalThis.__tutoPreviewResult = undefined;
   }
 });
