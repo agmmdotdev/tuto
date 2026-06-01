@@ -1,11 +1,47 @@
-/* eslint-disable @typescript-eslint/ban-ts-comment */
-// @ts-nocheck
-/* eslint-disable @typescript-eslint/no-require-imports */
-const { randomUUID } = require("node:crypto");
-const path = require("node:path");
-const {
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+import {
   transformStartServerFunctions,
-} = require("./server-functions-transform.generated.cjs");
+} from "./server-functions-transform";
+
+type BuildDiagnosticLevel = "info" | "warning" | "error";
+
+type BuildDiagnostic = {
+  id: string;
+  level: BuildDiagnosticLevel;
+  message: string;
+  timestamp: string;
+};
+
+type WorkspaceFileInput = {
+  path: string;
+  content: string;
+};
+
+type WorkspaceFileMap = Map<string, string>;
+
+type CompilerPayload = {
+  files?: WorkspaceFileInput[];
+};
+
+type CompilerSuccess = {
+  success: true;
+  serverFnsById: unknown;
+  transformed: {
+    client: Record<string, string>;
+    server: Record<string, string>;
+    serverSplits: Record<string, string>;
+  };
+  resolverModule: string;
+  diagnostics: BuildDiagnostic[];
+  durationMs: number;
+};
+
+type CompilerFailure = {
+  success: false;
+  diagnostics: BuildDiagnostic[];
+  durationMs: number;
+};
 
 const resultStartMarker = "__TUTO_TANSTACK_START_CORE_RESULT_START__";
 const resultEndMarker = "__TUTO_TANSTACK_START_CORE_RESULT_END__";
@@ -13,21 +49,23 @@ const maxFileCount = 64;
 const maxFileSize = 220_000;
 const maxTotalSize = 1_250_000;
 
-function createDiagnostic(level, message, details = {}) {
+function createDiagnostic(
+  level: BuildDiagnosticLevel,
+  message: string,
+): BuildDiagnostic {
   return {
     id: randomUUID(),
     level,
     message,
     timestamp: new Date().toISOString(),
-    ...details,
   };
 }
 
-function normalizeWorkspacePath(filePath) {
+function normalizeWorkspacePath(filePath: string) {
   return filePath.replaceAll("\\", "/").replace(/^\/+/, "");
 }
 
-function sanitizeWorkspaceFiles(files) {
+function sanitizeWorkspaceFiles(files: unknown): WorkspaceFileMap {
   if (!Array.isArray(files) || files.length === 0) {
     throw new Error("At least one file is required.");
   }
@@ -36,10 +74,10 @@ function sanitizeWorkspaceFiles(files) {
     throw new Error("Too many files for the TanStack Start core compiler.");
   }
 
-  const map = new Map();
+  const map: WorkspaceFileMap = new Map();
   let totalSize = 0;
 
-  for (const file of files) {
+  for (const file of files as WorkspaceFileInput[]) {
     const normalizedPath = normalizeWorkspacePath(file.path);
 
     if (
@@ -71,12 +109,16 @@ function sanitizeWorkspaceFiles(files) {
   return map;
 }
 
-function normalizeBuildError(error) {
-  const message = [error?.message, error?.stack].filter(Boolean).join("\n");
+function normalizeBuildError(error: unknown) {
+  const message =
+    error instanceof Error
+      ? [error.message, error.stack].filter(Boolean).join("\n")
+      : String(error);
+
   return [createDiagnostic("error", message || "TanStack Start core compiler failed.")];
 }
 
-async function compileWithStartCore(files) {
+async function compileWithStartCore(files: unknown) {
   const fileMap = sanitizeWorkspaceFiles(files);
   const root = path.join(process.cwd(), ".tmp", "tanstack-start-core-virtual");
   const transform = await transformStartServerFunctions(fileMap, { root });
@@ -92,23 +134,24 @@ async function compileWithStartCore(files) {
   };
 }
 
-async function readInput() {
+async function readInput(): Promise<CompilerPayload> {
   let input = "";
 
   for await (const chunk of process.stdin) {
     input += chunk.toString("utf8");
   }
 
-  return JSON.parse(input);
+  return JSON.parse(input) as CompilerPayload;
 }
 
 async function main() {
   const startedAt = performance.now();
-  let result;
+  let result: CompilerSuccess | CompilerFailure;
 
   try {
     const payload = await readInput();
     const compiled = await compileWithStartCore(payload.files ?? []);
+    const durationMs = Math.round(performance.now() - startedAt);
 
     result = {
       success: true,
@@ -116,12 +159,10 @@ async function main() {
       diagnostics: [
         createDiagnostic(
           "info",
-          `Compiled with @tanstack/start-plugin-core internals in ${Math.round(
-            performance.now() - startedAt,
-          )}ms.`,
+          `Compiled with @tanstack/start-plugin-core internals in ${durationMs}ms.`,
         ),
       ],
-      durationMs: Math.round(performance.now() - startedAt),
+      durationMs,
     };
   } catch (error) {
     result = {
@@ -136,9 +177,7 @@ async function main() {
   );
 }
 
-main().catch((error) => {
+main().catch((error: unknown) => {
   process.stderr.write(error instanceof Error ? error.stack || error.message : String(error));
   process.exitCode = 1;
 });
-
-export {};
