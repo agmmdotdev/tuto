@@ -251,6 +251,74 @@ export const fail = createServerFn({ method: 'POST' }).handler(async () => {
   assert.match(result.error, /boom/);
 });
 
+test("serializes thrown redirects through the RPC control channel", async () => {
+  const files = new Map([
+    [
+      "src/routes/index.tsx",
+      `import { createServerFn } from '@tanstack/react-start';
+import { redirect } from '@tanstack/react-router';
+
+export const goLogin = createServerFn({ method: 'POST' }).handler(async () => {
+  throw redirect({
+    href: '/login',
+    statusCode: 302,
+    headers: { 'x-reason': 'auth' },
+  });
+});
+`,
+    ],
+  ]);
+  const transform = await transformFiles(files, "redirect-control");
+  const result = runCoreRpc({
+    files,
+    id: firstServerFnId(transform),
+    payload: {},
+  });
+
+  assert.equal(result.success, false);
+  assert.deepEqual(result.control, {
+    type: "redirect",
+    href: "/login",
+    options: {
+      href: "/login",
+      reloadDocument: false,
+      statusCode: 302,
+    },
+    headers: {
+      location: "/login",
+      "x-reason": "auth",
+    },
+    status: 302,
+  });
+});
+
+test("serializes thrown notFound values through the RPC control channel", async () => {
+  const files = new Map([
+    [
+      "src/routes/index.tsx",
+      `import { createServerFn } from '@tanstack/react-start';
+import { notFound } from '@tanstack/react-router';
+
+export const missing = createServerFn({ method: 'POST' }).handler(async () => {
+  throw notFound({ data: { postId: 'missing-post' } });
+});
+`,
+    ],
+  ]);
+  const transform = await transformFiles(files, "not-found-control");
+  const result = runCoreRpc({
+    files,
+    id: firstServerFnId(transform),
+    payload: {},
+  });
+
+  assert.equal(result.success, false);
+  assert.deepEqual(result.control, {
+    type: "notFound",
+    data: { postId: "missing-post" },
+  });
+});
+
 test("runs server middleware before the handler and merges context", async () => {
   const files = new Map([
     [
@@ -278,6 +346,44 @@ export const getUserId = createServerFn({ method: 'POST' })
 
   assert.equal(result.success, true);
   assert.equal(result.result, "user-1");
+});
+
+test("allows server middleware to return Response without running handler", async () => {
+  const files = new Map([
+    [
+      "src/routes/index.tsx",
+      `import { createMiddleware, createServerFn } from '@tanstack/react-start';
+
+const denyMiddleware = createMiddleware({ type: 'function' }).server(async () => {
+  return new Response('denied', {
+    status: 401,
+    headers: { 'x-auth': 'required' },
+  });
+});
+
+export const guarded = createServerFn({ method: 'POST' })
+  .middleware([denyMiddleware])
+  .handler(async () => {
+    return 'unexpected';
+  });
+`,
+    ],
+  ]);
+  const transform = await transformFiles(files, "middleware-response");
+  const result = runCoreRpc({
+    files,
+    id: firstServerFnId(transform),
+    payload: {},
+  });
+
+  assert.equal(result.success, true);
+  assert.deepEqual(result.result, {
+    __tutoType: "Response",
+    body: "denied",
+    headers: { "content-type": "text/plain;charset=UTF-8", "x-auth": "required" },
+    status: 401,
+    statusText: "",
+  });
 });
 
 test("serializes Response results across the RPC boundary", async () => {

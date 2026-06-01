@@ -50,6 +50,23 @@ type SerializedResponse = {
   statusText: string;
 };
 
+type SerializedRedirectControl = {
+  type: "redirect";
+  headers: Record<string, string>;
+  href?: string;
+  options: Record<string, unknown>;
+  status: number;
+};
+
+type SerializedNotFoundControl = {
+  type: "notFound";
+  data?: unknown;
+  headers?: Record<string, string>;
+  routeId?: string;
+};
+
+type SerializedRpcControl = SerializedRedirectControl | SerializedNotFoundControl;
+
 type RpcJsonValue =
   | null
   | string
@@ -81,6 +98,7 @@ type CoreRpcSuccess = {
 
 type CoreRpcFailure = {
   success: false;
+  control?: SerializedRpcControl;
   error: string;
   diagnostics: BuildDiagnostic[];
 };
@@ -253,6 +271,85 @@ async function serializeRpcValue(value: unknown): Promise<unknown> {
   return value;
 }
 
+function isRedirectControlValue(value: unknown): value is Response & {
+  options: Record<string, unknown>;
+} {
+  return (
+    typeof Response !== "undefined" &&
+    value instanceof Response &&
+    typeof (value as { options?: unknown }).options === "object" &&
+    (value as { options?: unknown }).options !== null
+  );
+}
+
+function isNotFoundControlValue(value: unknown): value is {
+  data?: unknown;
+  headers?: HeadersInit;
+  isNotFound: true;
+  routeId?: string;
+} {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { isNotFound?: unknown }).isNotFound === true
+  );
+}
+
+function serializeHeaders(headers: HeadersInit | undefined) {
+  return Object.fromEntries(new Headers(headers).entries());
+}
+
+function serializeRedirectOptions(options: Record<string, unknown>) {
+  const serialized: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(options)) {
+    if (
+      typeof value === "undefined" ||
+      key === "headers" ||
+      key === "throw" ||
+      key.startsWith("_")
+    ) {
+      continue;
+    }
+
+    serialized[key] = value;
+  }
+
+  if (typeof serialized.reloadDocument === "undefined") {
+    serialized.reloadDocument = false;
+  }
+
+  return serialized;
+}
+
+function serializeRpcControl(value: unknown): SerializedRpcControl | null {
+  if (isRedirectControlValue(value)) {
+    return {
+      type: "redirect",
+      href:
+        typeof value.options.href === "string"
+          ? value.options.href
+          : value.headers.get("location") ?? undefined,
+      options: serializeRedirectOptions(value.options),
+      headers: serializeHeaders(value.headers),
+      status: value.status,
+    };
+  }
+
+  if (isNotFoundControlValue(value)) {
+    const headers = serializeHeaders(value.headers);
+
+    return {
+      type: "notFound",
+      ...(typeof value.data === "undefined" ? {} : { data: value.data }),
+      ...(Object.keys(headers).length ? { headers } : {}),
+      ...(typeof value.routeId === "string" ? { routeId: value.routeId } : {}),
+    };
+  }
+
+  return null;
+}
+
 function createReactStartRpcShim() {
   return `function flattenMiddleware(middlewares = [], seen = new Set()) {
   const flattened = [];
@@ -265,6 +362,9 @@ function createReactStartRpcShim() {
     flattened.push(middleware);
   }
   return flattened;
+}
+function isRedirectValue(value) {
+  return typeof Response !== "undefined" && value instanceof Response && !!value.options;
 }
 async function runServerMiddleware(middlewares, initialState) {
   const stack = flattenMiddleware(middlewares);
@@ -288,8 +388,26 @@ async function runServerMiddleware(middlewares, initialState) {
       return dispatch(index + 1, nextState);
     };
     const result = await options.server({ ...state, data, context: state.context, next });
+    if (isRedirectValue(result)) {
+      return { error: result, context: state.context };
+    }
+    if (typeof Response !== "undefined" && result instanceof Response) {
+      return { result, context: state.context };
+    }
     if (typeof result === "undefined") {
       throw new Error("User middleware returned undefined. You must call next() or return a result in your middlewares.");
+    }
+    if (Object.prototype.hasOwnProperty.call(result, "error")) {
+      return {
+        error: result.error,
+        context: { ...state.context, ...(result.context || {}) },
+      };
+    }
+    if (Object.prototype.hasOwnProperty.call(result, "result")) {
+      return {
+        result: result.result,
+        context: { ...state.context, ...(result.context || {}) },
+      };
     }
     return {
       data: Object.prototype.hasOwnProperty.call(result, "data") ? result.data : data,
@@ -329,6 +447,12 @@ export function createServerFn(options = {}, __opts) {
           context: opts.context || {},
           method: resolvedOptions.method,
         });
+        if (middlewareResult.error) {
+          return { error: middlewareResult.error, context: middlewareResult.context || {} };
+        }
+        if (Object.prototype.hasOwnProperty.call(middlewareResult, "result")) {
+          return { result: middlewareResult.result, context: middlewareResult.context || {} };
+        }
         const result = await serverFn({
           ...opts,
           data: middlewareResult.data,
@@ -487,6 +611,21 @@ globalThis[${JSON.stringify(resultKey)}] = await action(payload);
 }
 
 function normalizeError(error: unknown): CoreRpcFailure {
+  const control = serializeRpcControl(error);
+  if (control) {
+    const message =
+      control.type === "redirect"
+        ? `Redirect to ${control.href ?? control.headers.location ?? "unknown location"}`
+        : "Not found";
+
+    return {
+      success: false,
+      control,
+      error: message,
+      diagnostics: [createDiagnostic("info", message)],
+    };
+  }
+
   const message = error instanceof Error ? error.message : String(error);
 
   return {
