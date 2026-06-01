@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
 const path = require("node:path");
 const test = require("node:test");
 const {
@@ -10,6 +11,52 @@ function createRoot(name) {
   return path.join(process.cwd(), ".tmp", "server-functions-transform-tests", name);
 }
 
+function toWorkspaceFiles(files) {
+  return [...files.entries()].map(([filePath, content]) => ({
+    path: filePath,
+    language: filePath.endsWith(".tsx") ? "tsx" : "ts",
+    content,
+  }));
+}
+
+function runCoreRpc({ files, id, payload }) {
+  const child = spawnSync(
+    process.execPath,
+    ["lib/serverless-tanstack-start/core-rpc-runner.generated.cjs"],
+    {
+      cwd: process.cwd(),
+      input: JSON.stringify({
+        id,
+        payload,
+        files: toWorkspaceFiles(files),
+      }),
+      encoding: "utf8",
+      timeout: 120_000,
+    },
+  );
+  const match = child.stdout.match(
+    /__TUTO_TANSTACK_START_CORE_RPC_RESULT_START__\n([\s\S]*?)\n__TUTO_TANSTACK_START_CORE_RPC_RESULT_END__/,
+  );
+
+  if (!match) {
+    throw new Error(child.stderr || child.stdout || "Missing RPC result payload.");
+  }
+
+  return JSON.parse(match[1]);
+}
+
+async function transformFiles(files, name) {
+  return transformStartServerFunctions(files, {
+    root: createRoot(name),
+  });
+}
+
+function firstServerFnId(transform) {
+  const [serverFnId] = Object.keys(transform.serverFnsById);
+  assert.ok(serverFnId, "expected one server function id");
+  return serverFnId;
+}
+
 test("leaves plain modules without creating server function manifest entries", async () => {
   const files = new Map([
     [
@@ -18,9 +65,7 @@ test("leaves plain modules without creating server function manifest entries", a
     ],
   ]);
 
-  const result = await transformStartServerFunctions(files, {
-    root: createRoot("plain"),
-  });
+  const result = await transformFiles(files, "plain");
 
   assert.deepEqual(Object.keys(result.serverFnsById), []);
   assert.equal(result.serverSplits.size, 0);
@@ -48,9 +93,7 @@ export async function runGreeting() {
     ],
   ]);
 
-  const result = await transformStartServerFunctions(files, {
-    root: createRoot("basic-server-fn"),
-  });
+  const result = await transformFiles(files, "basic-server-fn");
   const serverFnIds = Object.keys(result.serverFnsById);
   const clientCode = result.clientFiles.get("src/routes/index.tsx");
   const splitEntries = [...result.serverSplits.entries()];
@@ -65,4 +108,241 @@ export async function runGreeting() {
   assert.match(splitEntries[0][1], /export \{ greet_createServerFn_handler \};/);
   assert.match(result.resolverModule, new RegExp(serverFnIds[0]));
   assert.match(result.resolverModule, /module: "src\/routes\/index\.tsx\?tss-serverfn-split"/);
+});
+
+test("executes inputValidator before the server function handler", async () => {
+  const files = new Map([
+    [
+      "src/routes/index.tsx",
+      `import { createServerFn } from '@tanstack/react-start';
+
+export const greet = createServerFn({ method: 'POST' })
+  .inputValidator((data) => {
+    if (!data || typeof data.name !== 'string') {
+      throw new Error('name is required');
+    }
+
+    return { name: data.name.trim().toUpperCase() };
+  })
+  .handler(async ({ data }) => {
+    return 'hi ' + data.name;
+  });
+`,
+    ],
+  ]);
+  const transform = await transformFiles(files, "input-validator");
+  const serverFnId = firstServerFnId(transform);
+
+  const success = runCoreRpc({
+    files,
+    id: serverFnId,
+    payload: { data: { name: " ada " } },
+  });
+  const failure = runCoreRpc({
+    files,
+    id: serverFnId,
+    payload: { data: {} },
+  });
+
+  assert.equal(success.success, true);
+  assert.equal(success.result, "hi ADA");
+  assert.equal(failure.success, false);
+  assert.match(failure.error, /name is required/);
+});
+
+test("passes method metadata into the server function handler", async () => {
+  const files = new Map([
+    [
+      "src/routes/index.tsx",
+      `import { createServerFn } from '@tanstack/react-start';
+
+export const methodName = createServerFn({ method: 'GET' }).handler(async ({ method }) => {
+  return method;
+});
+`,
+    ],
+  ]);
+  const transform = await transformFiles(files, "method-metadata");
+  const result = runCoreRpc({
+    files,
+    id: firstServerFnId(transform),
+    payload: {},
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.result, "GET");
+});
+
+test("keeps server function ids stable for unchanged path and export name", async () => {
+  const source = `import { createServerFn } from '@tanstack/react-start';
+
+export const greet = createServerFn({ method: 'POST' }).handler(async () => 'hi');
+`;
+  const first = await transformFiles(new Map([["src/routes/index.tsx", source]]), "stable-id-a");
+  const second = await transformFiles(new Map([["src/routes/index.tsx", source]]), "stable-id-b");
+  const renamed = await transformFiles(
+    new Map([
+      [
+        "src/routes/index.tsx",
+        source.replace("export const greet", "export const renamedGreet"),
+      ],
+    ]),
+    "stable-id-renamed",
+  );
+  const moved = await transformFiles(new Map([["src/routes/other.tsx", source]]), "stable-id-moved");
+
+  assert.equal(firstServerFnId(first), firstServerFnId(second));
+  assert.notEqual(firstServerFnId(first), firstServerFnId(renamed));
+  assert.notEqual(firstServerFnId(first), firstServerFnId(moved));
+});
+
+test("executes server functions declared in imported workspace modules", async () => {
+  const files = new Map([
+    [
+      "src/lib/actions.ts",
+      `import { createServerFn } from '@tanstack/react-start';
+
+export const greet = createServerFn({ method: 'POST' }).handler(async ({ data }) => {
+  return 'hi ' + data.name;
+});
+`,
+    ],
+    [
+      "src/routes/index.tsx",
+      `import { greet } from '../lib/actions';
+
+export async function callGreeting() {
+  return greet({ data: { name: 'Ada' } });
+}
+`,
+    ],
+  ]);
+  const transform = await transformFiles(files, "imported-server-fn");
+  const result = runCoreRpc({
+    files,
+    id: firstServerFnId(transform),
+    payload: { data: { name: "Ada" } },
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.result, "hi Ada");
+});
+
+test("returns thrown server function errors through the RPC error channel", async () => {
+  const files = new Map([
+    [
+      "src/routes/index.tsx",
+      `import { createServerFn } from '@tanstack/react-start';
+
+export const fail = createServerFn({ method: 'POST' }).handler(async () => {
+  throw new Error('boom');
+});
+`,
+    ],
+  ]);
+  const transform = await transformFiles(files, "error-channel");
+  const result = runCoreRpc({
+    files,
+    id: firstServerFnId(transform),
+    payload: {},
+  });
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /boom/);
+});
+
+test("runs server middleware before the handler and merges context", async () => {
+  const files = new Map([
+    [
+      "src/routes/index.tsx",
+      `import { createMiddleware, createServerFn } from '@tanstack/react-start';
+
+const authMiddleware = createMiddleware({ type: 'function' }).server(async ({ next }) => {
+  return next({ context: { userId: 'user-1' } });
+});
+
+export const getUserId = createServerFn({ method: 'POST' })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    return context.userId;
+  });
+`,
+    ],
+  ]);
+  const transform = await transformFiles(files, "middleware-context");
+  const result = runCoreRpc({
+    files,
+    id: firstServerFnId(transform),
+    payload: {},
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.result, "user-1");
+});
+
+test("serializes Response results across the RPC boundary", async () => {
+  const files = new Map([
+    [
+      "src/routes/index.tsx",
+      `import { createServerFn } from '@tanstack/react-start';
+
+export const responseFn = createServerFn({ method: 'POST' }).handler(async () => {
+  return new Response('created', {
+    status: 201,
+    headers: { 'x-source': 'server-fn' },
+  });
+});
+`,
+    ],
+  ]);
+  const transform = await transformFiles(files, "response-result");
+  const result = runCoreRpc({
+    files,
+    id: firstServerFnId(transform),
+    payload: {},
+  });
+
+  assert.equal(result.success, true);
+  assert.deepEqual(result.result, {
+    __tutoType: "Response",
+    body: "created",
+    headers: { "content-type": "text/plain;charset=UTF-8", "x-source": "server-fn" },
+    status: 201,
+    statusText: "",
+  });
+});
+
+test("revives FormData payloads before calling the server function handler", async () => {
+  const files = new Map([
+    [
+      "src/routes/index.tsx",
+      `import { createServerFn } from '@tanstack/react-start';
+
+export const readForm = createServerFn({ method: 'POST' }).handler(async ({ data }) => {
+  return {
+    title: data.get('title'),
+    count: data.getAll('tag').length,
+  };
+});
+`,
+    ],
+  ]);
+  const transform = await transformFiles(files, "form-data");
+  const result = runCoreRpc({
+    files,
+    id: firstServerFnId(transform),
+    payload: {
+      data: {
+        __tutoType: "FormData",
+        entries: [
+          ["title", { kind: "string", value: "Hello" }],
+          ["tag", { kind: "string", value: "a" }],
+          ["tag", { kind: "string", value: "b" }],
+        ],
+      },
+    },
+  });
+
+  assert.equal(result.success, true);
+  assert.deepEqual(result.result, { title: "Hello", count: 2 });
 });

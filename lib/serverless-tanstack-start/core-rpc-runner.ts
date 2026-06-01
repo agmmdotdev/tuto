@@ -1,11 +1,89 @@
-/* eslint-disable @typescript-eslint/no-require-imports */
-const { randomUUID } = require("node:crypto");
-const path = require("node:path");
-const { build } = require("esbuild");
-const {
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { build } from "esbuild";
+import type { Loader, OnLoadArgs, OnResolveArgs, PluginBuild } from "esbuild";
+import {
   toWorkspaceModuleId,
   transformStartServerFunctions,
-} = require("./server-functions-transform.generated.cjs");
+} from "./server-functions-transform";
+
+type BuildDiagnosticLevel = "info" | "warning" | "error";
+
+type BuildDiagnostic = {
+  id: string;
+  level: BuildDiagnosticLevel;
+  message: string;
+  timestamp: string;
+};
+
+type WorkspaceFileInput = {
+  path: string;
+  content: string;
+};
+
+type WorkspaceFileMap = Map<string, string>;
+
+type SerializedFormDataStringEntry = {
+  kind: "string";
+  value: string;
+};
+
+type SerializedFormDataFileEntry = {
+  kind: "file";
+  name?: string;
+  text?: string;
+  type?: string;
+};
+
+type SerializedFormData = {
+  __tutoType: "FormData";
+  entries: Array<
+    [string, SerializedFormDataStringEntry | SerializedFormDataFileEntry]
+  >;
+};
+
+type SerializedResponse = {
+  __tutoType: "Response";
+  body: string;
+  headers: Record<string, string>;
+  status: number;
+  statusText: string;
+};
+
+type RpcJsonValue =
+  | null
+  | string
+  | number
+  | boolean
+  | SerializedFormData
+  | SerializedResponse
+  | RpcJsonValue[]
+  | { [key: string]: RpcJsonValue };
+
+type CoreRpcInput = {
+  id?: string;
+  payload?: RpcJsonValue;
+  files?: WorkspaceFileInput[];
+};
+
+type ServerActionResult = {
+  result?: unknown;
+  context?: unknown;
+  error?: unknown;
+};
+
+type CoreRpcSuccess = {
+  success: true;
+  result: unknown;
+  context: unknown;
+  diagnostics: BuildDiagnostic[];
+};
+
+type CoreRpcFailure = {
+  success: false;
+  error: string;
+  diagnostics: BuildDiagnostic[];
+};
 
 const resultStartMarker = "__TUTO_TANSTACK_START_CORE_RPC_RESULT_START__";
 const resultEndMarker = "__TUTO_TANSTACK_START_CORE_RPC_RESULT_END__";
@@ -13,22 +91,25 @@ const maxFileCount = 64;
 const maxFileSize = 220_000;
 const maxTotalSize = 1_250_000;
 const absoluteWorkingDirectory = process.cwd();
+const globalResultStore = globalThis as typeof globalThis & Record<string, unknown>;
 
-function createDiagnostic(level, message, details = {}) {
+function createDiagnostic(
+  level: BuildDiagnosticLevel,
+  message: string,
+): BuildDiagnostic {
   return {
     id: randomUUID(),
     level,
     message,
     timestamp: new Date().toISOString(),
-    ...details,
   };
 }
 
-function normalizeWorkspacePath(filePath) {
+function normalizeWorkspacePath(filePath: string) {
   return filePath.replaceAll("\\", "/").replace(/^\/+/, "");
 }
 
-function sanitizeWorkspaceFiles(files) {
+function sanitizeWorkspaceFiles(files: unknown): WorkspaceFileMap {
   if (!Array.isArray(files) || files.length === 0) {
     throw new Error("At least one file is required.");
   }
@@ -37,10 +118,10 @@ function sanitizeWorkspaceFiles(files) {
     throw new Error("Too many files for the TanStack Start core RPC runner.");
   }
 
-  const map = new Map();
+  const map: WorkspaceFileMap = new Map();
   let totalSize = 0;
 
-  for (const file of files) {
+  for (const file of files as WorkspaceFileInput[]) {
     const normalizedPath = normalizeWorkspacePath(file.path);
 
     if (
@@ -72,7 +153,7 @@ function sanitizeWorkspaceFiles(files) {
   return map;
 }
 
-function loaderForPath(filePath) {
+function loaderForPath(filePath: string): Loader {
   const extension = path.extname(filePath).toLowerCase();
   switch (extension) {
     case ".ts":
@@ -91,25 +172,205 @@ function loaderForPath(filePath) {
   }
 }
 
-function findWorkspaceFile(files, candidatePath) {
+function findWorkspaceFile(files: WorkspaceFileMap, candidatePath: string) {
   const normalized = normalizeWorkspacePath(candidatePath);
   const extensions = ["", ".ts", ".tsx", ".js", ".jsx", ".json"];
+
   if (files.has(normalized)) return normalized;
+
   for (const extension of extensions) {
     const directPath =
       extension && normalized.endsWith(extension) ? normalized : `${normalized}${extension}`;
+
     if (files.has(directPath)) return directPath;
   }
+
   return null;
 }
 
-function resolveWorkspaceImport(files, source, importerPath) {
+function resolveWorkspaceImport(
+  files: WorkspaceFileMap,
+  source: string,
+  importerPath: string,
+) {
   if (!source.startsWith(".")) return null;
-  const baseDir = importerPath ? path.posix.dirname(importerPath.replaceAll("\\", "/")) : "";
+
+  const baseDir = importerPath
+    ? path.posix.dirname(importerPath.replaceAll("\\", "/"))
+    : "";
+
   return findWorkspaceFile(files, path.posix.normalize(path.posix.join(baseDir, source)));
 }
 
-async function executeServerFn({ id, payload, files }) {
+function isSerializedFormData(value: unknown): value is SerializedFormData {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { __tutoType?: unknown }).__tutoType === "FormData" &&
+    Array.isArray((value as { entries?: unknown }).entries)
+  );
+}
+
+function reviveRpcValue(value: unknown): unknown {
+  if (!value || typeof value !== "object") return value;
+
+  if (isSerializedFormData(value)) {
+    const formData = new FormData();
+
+    for (const [name, entry] of value.entries) {
+      if (entry.kind === "file") {
+        const blob = new Blob([entry.text ?? ""], {
+          type: entry.type || "application/octet-stream",
+        });
+        formData.append(name, blob, entry.name || "file");
+        continue;
+      }
+
+      formData.append(name, entry.value);
+    }
+
+    return formData;
+  }
+
+  if (Array.isArray(value)) return value.map(reviveRpcValue);
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, nestedValue]) => [key, reviveRpcValue(nestedValue)]),
+  );
+}
+
+async function serializeRpcValue(value: unknown): Promise<unknown> {
+  if (typeof Response !== "undefined" && value instanceof Response) {
+    return {
+      __tutoType: "Response",
+      body: await value.text(),
+      headers: Object.fromEntries(value.headers.entries()),
+      status: value.status,
+      statusText: value.statusText,
+    } satisfies SerializedResponse;
+  }
+
+  return value;
+}
+
+function createReactStartRpcShim() {
+  return `function flattenMiddleware(middlewares = [], seen = new Set()) {
+  const flattened = [];
+  for (const middleware of middlewares) {
+    if (!middleware || seen.has(middleware)) continue;
+    seen.add(middleware);
+    if (middleware.options?.middleware) {
+      flattened.push(...flattenMiddleware(middleware.options.middleware, seen));
+    }
+    flattened.push(middleware);
+  }
+  return flattened;
+}
+async function runServerMiddleware(middlewares, initialState) {
+  const stack = flattenMiddleware(middlewares);
+  async function dispatch(index, state) {
+    if (index >= stack.length) {
+      return { data: state.data, context: state.context };
+    }
+    const middleware = stack[index];
+    const options = middleware.options || {};
+    let data = state.data;
+    if (options.inputValidator) data = await options.inputValidator(data);
+    if (!options.server) {
+      return dispatch(index + 1, { ...state, data });
+    }
+    const next = async (nextOptions = {}) => {
+      const nextState = {
+        ...state,
+        data: Object.prototype.hasOwnProperty.call(nextOptions, "data") ? nextOptions.data : data,
+        context: { ...state.context, ...(nextOptions.context || {}) },
+      };
+      return dispatch(index + 1, nextState);
+    };
+    const result = await options.server({ ...state, data, context: state.context, next });
+    if (typeof result === "undefined") {
+      throw new Error("User middleware returned undefined. You must call next() or return a result in your middlewares.");
+    }
+    return {
+      data: Object.prototype.hasOwnProperty.call(result, "data") ? result.data : data,
+      context: { ...state.context, ...(result.context || {}) },
+    };
+  }
+  return dispatch(0, initialState);
+}
+export function createMiddleware(options = {}, __opts) {
+  const resolvedOptions = __opts || options || {};
+  return {
+    options: resolvedOptions,
+    middleware: (middleware) => createMiddleware(undefined, {
+      ...resolvedOptions,
+      middleware: [...(resolvedOptions.middleware || []), ...middleware],
+    }),
+    inputValidator: (inputValidator) => createMiddleware(undefined, { ...resolvedOptions, inputValidator }),
+    validator: (inputValidator) => createMiddleware(undefined, { ...resolvedOptions, inputValidator }),
+    client: (client) => createMiddleware(undefined, { ...resolvedOptions, client }),
+    server: (server) => createMiddleware(undefined, { ...resolvedOptions, server }),
+  };
+}
+export function createServerFn(options = {}, __opts) {
+  const resolvedOptions = __opts || options || {};
+  if (typeof resolvedOptions.method === "undefined") resolvedOptions.method = "GET";
+  const builder = (nextOptions = {}) => createServerFn(undefined, { ...resolvedOptions, ...nextOptions });
+  builder.middleware = (middleware) => createServerFn(undefined, { ...resolvedOptions, middleware: [...(resolvedOptions.middleware || []), ...middleware] });
+  builder.inputValidator = (inputValidator) => createServerFn(undefined, { ...resolvedOptions, inputValidator });
+  builder.handler = (extractedFn, serverFn) => {
+    const run = async (opts = {}) => {
+      try {
+        let data = opts.data;
+        if (resolvedOptions.inputValidator) data = await resolvedOptions.inputValidator(data);
+        const middlewareResult = await runServerMiddleware(resolvedOptions.middleware, {
+          ...opts,
+          data,
+          context: opts.context || {},
+          method: resolvedOptions.method,
+        });
+        const result = await serverFn({
+          ...opts,
+          data: middlewareResult.data,
+          context: middlewareResult.context,
+          method: resolvedOptions.method,
+        });
+        return { result, context: middlewareResult.context };
+      } catch (error) {
+        return { error, context: {} };
+      }
+    };
+    return Object.assign(async (opts) => (await run(opts)).result, extractedFn, {
+      method: resolvedOptions.method,
+      __executeServer: run,
+    });
+  };
+  return builder;
+}`;
+}
+
+function onResolveWorkspaceModule(
+  fileMap: WorkspaceFileMap,
+  serverSplits: WorkspaceFileMap,
+  args: OnResolveArgs,
+) {
+  if (serverSplits.has(args.path)) {
+    return { path: args.path, namespace: "server-split" };
+  }
+
+  const workspaceMatch =
+    args.namespace === "server-split" || args.namespace === "workspace"
+      ? resolveWorkspaceImport(fileMap, args.path, args.importer)
+      : null;
+
+  if (workspaceMatch) return { path: workspaceMatch, namespace: "workspace" };
+
+  return null;
+}
+
+async function executeServerFn({ id, payload, files }: CoreRpcInput) {
+  if (!id) throw new Error("Server function id is required.");
+
   const fileMap = sanitizeWorkspaceFiles(files);
   const root = path.join(absoluteWorkingDirectory, ".tmp", "tanstack-start-core");
   const { serverFnsById, serverSplits } = await transformStartServerFunctions(fileMap, {
@@ -130,7 +391,7 @@ async function executeServerFn({ id, payload, files }) {
 
   const resultKey = `__TUTO_RPC_RESULT_${randomUUID().replaceAll("-", "_")}`;
   const payloadKey = `__TUTO_RPC_PAYLOAD_${randomUUID().replaceAll("-", "_")}`;
-  globalThis[payloadKey] = payload ?? {};
+  globalResultStore[payloadKey] = reviveRpcValue(payload ?? {});
 
   const entrySource = `
 import { ${serverFn.functionName} as action } from ${JSON.stringify(splitModuleId)};
@@ -158,7 +419,7 @@ globalThis[${JSON.stringify(resultKey)}] = await action(payload);
     plugins: [
       {
         name: "tuto-tanstack-start-core-rpc-workspace",
-        setup(buildApi) {
+        setup(buildApi: PluginBuild) {
           buildApi.onResolve({ filter: /^__tuto_rpc_entry__$/ }, () => ({
             path: "__tuto_rpc_entry__",
             namespace: "rpc-entry",
@@ -176,53 +437,23 @@ globalThis[${JSON.stringify(resultKey)}] = await action(payload);
             loader: "js",
             resolveDir: absoluteWorkingDirectory,
           }));
-          buildApi.onLoad({ filter: /.*/, namespace: "rpc-shim" }, (args) => ({
+          buildApi.onLoad({ filter: /.*/, namespace: "rpc-shim" }, (args: OnLoadArgs) => ({
             contents:
               args.path === "@tanstack/react-start/server-rpc"
                 ? `export function createServerRpc(meta, fn) { return Object.assign(fn, { serverFnMeta: meta, url: "/api/serverless/tanstack-start/core-rpc?id=" + meta.id }); }`
-                : `export function createServerFn(options = {}, __opts) {
-                    const resolvedOptions = __opts || options || {};
-                    if (typeof resolvedOptions.method === "undefined") resolvedOptions.method = "GET";
-                    const builder = (nextOptions = {}) => createServerFn(undefined, { ...resolvedOptions, ...nextOptions });
-                    builder.middleware = (middleware) => createServerFn(undefined, { ...resolvedOptions, middleware: [...(resolvedOptions.middleware || []), ...middleware] });
-                    builder.inputValidator = (inputValidator) => createServerFn(undefined, { ...resolvedOptions, inputValidator });
-                    builder.handler = (extractedFn, serverFn) => {
-                      const run = async (opts = {}) => {
-                        try {
-                          let data = opts.data;
-                          if (resolvedOptions.inputValidator) data = await resolvedOptions.inputValidator(data);
-                          return { result: await serverFn({ ...opts, data, method: resolvedOptions.method }), context: {} };
-                        } catch (error) {
-                          return { error, context: {} };
-                        }
-                      };
-                      return Object.assign(async (opts) => (await run(opts)).result, extractedFn, {
-                        method: resolvedOptions.method,
-                        __executeServer: run,
-                      });
-                    };
-                    return builder;
-                  }`,
+                : createReactStartRpcShim(),
             loader: "js",
             resolveDir: absoluteWorkingDirectory,
           }));
-          buildApi.onResolve({ filter: /.*/ }, (args) => {
-            if (serverSplits.has(args.path)) {
-              return { path: args.path, namespace: "server-split" };
-            }
-            const workspaceMatch =
-              args.namespace === "server-split" || args.namespace === "workspace"
-                ? resolveWorkspaceImport(fileMap, args.path, args.importer)
-                : null;
-            if (workspaceMatch) return { path: workspaceMatch, namespace: "workspace" };
-            return null;
-          });
-          buildApi.onLoad({ filter: /.*/, namespace: "server-split" }, (args) => ({
+          buildApi.onResolve({ filter: /.*/ }, (args: OnResolveArgs) =>
+            onResolveWorkspaceModule(fileMap, serverSplits, args),
+          );
+          buildApi.onLoad({ filter: /.*/, namespace: "server-split" }, (args: OnLoadArgs) => ({
             contents: serverSplits.get(args.path),
             loader: "tsx",
             resolveDir: absoluteWorkingDirectory,
           }));
-          buildApi.onLoad({ filter: /.*/, namespace: "workspace" }, (args) => ({
+          buildApi.onLoad({ filter: /.*/, namespace: "workspace" }, (args: OnLoadArgs) => ({
             contents: fileMap.get(args.path),
             loader: loaderForPath(args.path),
             resolveDir: absoluteWorkingDirectory,
@@ -235,25 +466,29 @@ globalThis[${JSON.stringify(resultKey)}] = await action(payload);
     write: false,
   });
   const jsOutput = bundle.outputFiles.find((file) => file.path.endsWith(".js"));
+
   if (!jsOutput) throw new Error("RPC bundle did not produce JavaScript.");
 
   try {
     const dataUrl = `data:text/javascript;base64,${Buffer.from(jsOutput.text).toString("base64")}`;
     await import(dataUrl);
-    const result = globalThis[resultKey];
+    const result = globalResultStore[resultKey] as ServerActionResult | undefined;
+
     if (result?.error) throw result.error;
+
     return {
-      result: result?.result,
-      context: result?.context ?? {},
+      result: await serializeRpcValue(result?.result),
+      context: await serializeRpcValue(result?.context ?? {}),
     };
   } finally {
-    delete globalThis[resultKey];
-    delete globalThis[payloadKey];
+    delete globalResultStore[resultKey];
+    delete globalResultStore[payloadKey];
   }
 }
 
-function normalizeError(error) {
+function normalizeError(error: unknown): CoreRpcFailure {
   const message = error instanceof Error ? error.message : String(error);
+
   return {
     success: false,
     error: message,
@@ -261,17 +496,21 @@ function normalizeError(error) {
   };
 }
 
-async function readInput() {
+async function readInput(): Promise<CoreRpcInput> {
   let input = "";
+
   for await (const chunk of process.stdin) input += chunk.toString("utf8");
-  return JSON.parse(input);
+
+  return JSON.parse(input) as CoreRpcInput;
 }
 
 async function main() {
-  let result;
+  let result: CoreRpcSuccess | CoreRpcFailure;
+
   try {
     const payload = await readInput();
     const value = await executeServerFn(payload);
+
     result = {
       success: true,
       ...value,
@@ -280,12 +519,13 @@ async function main() {
   } catch (error) {
     result = normalizeError(error);
   }
+
   process.stdout.write(
     `\n${resultStartMarker}\n${JSON.stringify(result)}\n${resultEndMarker}\n`,
   );
 }
 
-main().catch((error) => {
+main().catch((error: unknown) => {
   process.stderr.write(error instanceof Error ? error.stack || error.message : String(error));
   process.exitCode = 1;
 });

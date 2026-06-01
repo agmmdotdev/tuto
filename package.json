@@ -6,10 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "build:serverless-tanstack-start-transform": "esbuild lib/serverless-tanstack-start/server-functions-transform.ts --bundle --platform=node --format=cjs --target=node22 --outfile=lib/serverless-tanstack-start/server-functions-transform.generated.cjs --external:@tanstack/start-plugin-core",
-    "build:serverless-tanstack-start-runners": "esbuild lib/serverless-tanstack-start/core-preview-runner.ts lib/serverless-tanstack-start/core-rpc-runner.ts lib/serverless-tanstack-start/core-compiler-runner.ts --platform=node --format=cjs --target=node22 --outdir=lib/serverless-tanstack-start --out-extension:.js=.generated.cjs",
+    "build:serverless-tanstack-start-runners": "node scripts/build-serverless-tanstack-start-runners.mjs",
     "build:serverless-tanstack-start-runtime": "yarn build:serverless-tanstack-start-transform && yarn build:serverless-tanstack-start-runners",
     "start": "next start",
     "lint": "eslint",
+    "typecheck:tsgo": "tsgo -p tsconfig.tsgo.json --pretty false",
     "test:serverless-tanstack-start": "yarn build:serverless-tanstack-start-runtime && node --test test/serverless-tanstack-start/*.test.cjs"
   },
   "dependencies": {
@@ -42,6 +43,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@typescript/native-preview": "^7.0.0-dev.20260527.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.0",
     "tailwindcss": "^4",

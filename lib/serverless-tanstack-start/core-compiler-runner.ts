@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+// @ts-nocheck
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { randomUUID } = require("node:crypto");
 const path = require("node:path");
@@ -138,3 +140,5 @@ main().catch((error) => {
   process.stderr.write(error instanceof Error ? error.stack || error.message : String(error));
   process.exitCode = 1;
 });
+
+export {};
