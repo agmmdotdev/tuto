@@ -204,6 +204,54 @@ function maybeFormatResponseBody(response: ExpressResponseView | null) {
   return response.body;
 }
 
+function addStaticPreviewNavigationBridge(html: string, source: string) {
+  const script = `<script>
+(() => {
+  const previewSource = ${JSON.stringify(source)};
+  document.addEventListener("click", (event) => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      return;
+    }
+
+    const anchor = event.target?.closest?.("a[href]");
+
+    if (!anchor || anchor.target || anchor.hasAttribute("download")) {
+      return;
+    }
+
+    const rawHref = anchor.getAttribute("href");
+
+    if (!rawHref || rawHref.startsWith("#") || rawHref.startsWith("mailto:") || rawHref.startsWith("tel:")) {
+      return;
+    }
+
+    const url = new URL(rawHref, "http://tuto-preview.local");
+
+    if (url.origin !== "http://tuto-preview.local") {
+      return;
+    }
+
+    event.preventDefault();
+    window.parent?.postMessage(
+      {
+        source: previewSource,
+        kind: "navigate",
+        path: url.pathname + url.search,
+        timestamp: new Date().toISOString(),
+      },
+      "*",
+    );
+  });
+})();
+</script>`;
+
+  if (html.includes("</body>")) {
+    return html.replace("</body>", () => `${script}</body>`);
+  }
+
+  return `${html}${script}`;
+}
+
 function normalizeRequestPath(input: string) {
   const trimmed = input.trim();
 
@@ -538,13 +586,43 @@ export function ServerlessExpressIdeWorkbench({
       const payload = event.data as
         | {
             source?: string;
+            kind?: string;
             level?: ClientLogLevel;
             message?: string;
+            path?: string;
             timestamp?: string;
           }
         | undefined;
 
-      if (payload?.source !== config.htmlPreviewSource || !payload.message) {
+      if (payload?.source !== config.htmlPreviewSource) {
+        return;
+      }
+
+      if (payload.kind === "navigate" && typeof payload.path === "string") {
+        const nextPath = normalizeRequestPath(payload.path);
+        let nextHeaders: Record<string, string> = {};
+
+        try {
+          nextHeaders = parseHeadersText(requestHeadersText);
+        } catch {
+          nextHeaders = {};
+        }
+
+        setRequestMethod("GET");
+        setRequestPath(nextPath);
+        setRequestBodyText("");
+        setActiveRequest({
+          method: "GET",
+          path: nextPath,
+          headers: nextHeaders,
+          body: "",
+        });
+        setResponseTab("preview");
+        setRequestVersion((value) => value + 1);
+        return;
+      }
+
+      if (!payload.message) {
         return;
       }
 
@@ -576,7 +654,7 @@ export function ServerlessExpressIdeWorkbench({
     return () => {
       window.removeEventListener("message", handlePreviewMessage);
     };
-  }, [config.htmlPreviewSource]);
+  }, [config.htmlPreviewSource, requestHeadersText]);
 
   const outputEntries = useMemo(() => {
     const buildEntries = buildDiagnostics.map((entry) => ({
@@ -594,6 +672,10 @@ export function ServerlessExpressIdeWorkbench({
   }, [outputEntries]);
 
   const responseBody = maybeFormatResponseBody(responseView);
+  const previewDocument =
+    previewHtml && config.showPreviewAsStatic
+      ? addStaticPreviewNavigationBridge(previewHtml, config.htmlPreviewSource)
+      : previewHtml;
   const responseLabel = responseView
     ? `${responseView.status} ${responseView.contentType.split(";")[0]}`
     : "Waiting for response";
@@ -829,7 +911,7 @@ export function ServerlessExpressIdeWorkbench({
                   <iframe
                     className="h-full w-full border-0"
                     sandbox="allow-scripts"
-                    srcDoc={previewHtml}
+                    srcDoc={previewDocument ?? ""}
                     title={config.previewTitle}
                   />
                 ) : responseTab === "headers" ? (

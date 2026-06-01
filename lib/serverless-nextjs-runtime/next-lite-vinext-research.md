@@ -124,6 +124,201 @@ Use Vinext and Next as references:
 
 Build our own constrained Next-like compiler/runtime around direct esbuild/Rolldown where we need low latency and low memory.
 
+## Vinext Reusability Audit
+
+Rechecked with a maintenance/reuse lens.
+
+The installed `vinext@0.0.54` package exposes only a limited public API:
+
+- `vinext`
+- `vinext/cache`
+- `vinext/shims/*`
+- `vinext/server/prod-server`
+- `vinext/server/pages-i18n`
+- `vinext/cloudflare`
+- `vinext/server/image-optimization`
+- `vinext/server/request-pipeline`
+- `vinext/server/app-router-entry`
+- `vinext/config/config-matchers`
+- `vinext/server/worker-utils`
+- `vinext/utils/query`
+
+Confirmed importability:
+
+- `vinext/shims/server` works.
+- `vinext/server/request-pipeline` works.
+- `vinext/config/config-matchers` works.
+- `vinext/server/app-route-handler-runtime` fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`.
+- `vinext/dist/server/app-route-handler-runtime.js` also fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`.
+
+This means depending on Vinext internals through `node_modules` is not safe unless Cloudflare exposes them as supported package exports.
+
+### Modular Pieces
+
+Some Vinext source files are modular enough to reuse by vendoring/forking:
+
+- `src/routing/route-pattern.ts`
+  - small, low dependency
+  - handles `[id]`, `[...rest]`, `[[...rest]]`, matching, filling, static path normalization
+- `src/routing/route-trie.ts`, `src/routing/route-matching.ts`, `src/routing/utils.ts`
+  - relatively small routing matcher layer
+- `src/routing/file-matcher.ts`
+  - small convention helper for page extensions
+- `src/server/next-error-digest.ts`
+  - small parser for `NEXT_REDIRECT`, `NEXT_NOT_FOUND`, and `NEXT_HTTP_ERROR_FALLBACK`
+- `src/server/app-route-handler-policy.ts`
+  - useful pure-ish policy helpers for methods, auto-HEAD, auto-OPTIONS, revalidate decisions, and special errors
+- `src/server/app-route-handler-runtime.ts`
+  - partially reusable, but imports `vinext/shims/server` and middleware helpers
+
+These are better candidates for vendoring than reimplementing from memory.
+
+### Not Modular Enough
+
+These are not good direct reuse targets for a lightweight compiler:
+
+- `src/index.ts`
+  - huge Vite plugin, owns config, aliases, virtual entries, env builds
+- `src/entries/app-rsc-entry.ts`
+  - generated virtual RSC entry, tightly tied to Vite and `@vitejs/plugin-rsc`
+- `src/server/app-rsc-handler.ts`
+  - request pipeline orchestrator, depends on middleware, cache, i18n, metadata, prerender, RSC normalization, app rendering, route handlers
+- `src/server/app-page-dispatch.ts`
+  - app page render dispatch, cache, request context, RSC stream/SSR integration
+- `src/server/app-page-render.ts`
+  - coupled to AppElements, RSC stream metadata, cache, fallback/error control flow
+- `src/server/app-page-route-wiring.tsx`
+  - handles layouts, templates, slots, boundaries, parallel routes; useful as reference but large
+- `src/server/app-route-handler-dispatch.ts`
+  - useful behavior but imports cache, instrumentation, request context, headers shims, ISR, middleware, and dispatch execution
+
+For these, copying one file tends to pull a graph of many Vinext runtime modules. That becomes a fork in practice.
+
+### Better Reuse Policy
+
+Avoid two extremes:
+
+- Do not reimplement behavior from scratch when Vinext has a small, isolated module.
+- Do not import/copy large orchestration files that recreate Vinext without its build system.
+
+Preferred policy:
+
+1. Use public Vinext exports for shims and request/config helpers.
+2. Vendor small isolated source modules with tests and a source header.
+3. For large orchestration modules, either:
+   - keep our simpler implementation, or
+   - explicitly fork/extract a maintained internal package from Vinext.
+4. Add tests that preserve Next/Vinext behavior for every vendored helper.
+
+## Next-Lite Reuse Rules
+
+These rules should guide future `next-lite` work.
+
+### Rule 1: Prefer Supported Package Exports
+
+If Vinext exposes a public package export, use that before copying code.
+
+Allowed examples:
+
+- `vinext/shims/server`
+- `vinext/shims/*`
+- `vinext/server/request-pipeline`
+- `vinext/config/config-matchers`
+- `vinext/server/worker-utils`
+
+Do not deep-import blocked internals from `node_modules/vinext/dist/...`. If `import.meta.resolve()` fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`, treat that module as unsupported.
+
+### Rule 2: Vendor Only Small Isolated Modules
+
+Vendoring is acceptable only when the source module is small, mostly pure, and does not pull in the Vinext/Vite/RSC orchestration graph.
+
+Current approved vendored modules:
+
+- `src/routing/route-pattern.ts`
+- `src/routing/route-trie.ts`
+- `src/routing/route-matching.ts`
+- `src/routing/utils.ts`
+
+Current vendored location:
+
+```txt
+lib/serverless-nextjs-runtime/next-lite/vendor/vinext-routing/
+```
+
+Every vendored file must include:
+
+- source project name
+- license note
+- original source path
+
+### Rule 3: No Large Orchestration Vendoring By Accident
+
+Do not vendor these classes of files without an explicit fork/extract decision:
+
+- Vite plugin files
+- virtual entry generators
+- RSC handler orchestration
+- App Page dispatch/render lifecycle
+- full route handler dispatch with cache/instrumentation/middleware
+
+Examples that should not be copied casually:
+
+- `src/index.ts`
+- `src/entries/app-rsc-entry.ts`
+- `src/server/app-rsc-handler.ts`
+- `src/server/app-page-dispatch.ts`
+- `src/server/app-page-render.ts`
+- `src/server/app-page-route-wiring.tsx`
+- `src/server/app-route-handler-dispatch.ts`
+
+If we need one of these, choose one of:
+
+- keep a smaller local implementation for our supported subset
+- ask whether to fork Vinext
+- open an upstream/export strategy
+- extract a maintained internal package boundary
+
+### Rule 4: Tests Must Lock The Reused Behavior
+
+Every vendored helper or public Vinext shim usage needs tests at our boundary.
+
+Examples:
+
+- route patterns: nested routes, `[id]`, `[...rest]`, `[[...rest]]`, encoded params
+- route priority: static before dynamic, dynamic before catch-all
+- route handlers: GET/HEAD/OPTIONS method policy
+- control flow: redirect/notFound digest behavior
+
+Do not vendor a helper without adding or updating tests that prove why it exists.
+
+### Rule 5: Keep The Compiler Lightweight
+
+Vinext/Vite may be used for research and measurement, but not as the default compiler path for `next-lite`.
+
+The default compiler path should remain direct esbuild/Rolldown unless we explicitly accept the cost of a background Vinext build.
+
+Do not put Vite, Vinext CLI, or Next build machinery into the preview request path.
+
+### Rule 6: Keep Supported Scope Explicit
+
+When a Next feature is added, document whether it is:
+
+- supported
+- partially supported
+- intentionally unsupported
+- delegated to Vinext shim behavior
+- vendored from Vinext source
+
+Avoid silent "almost Next" behavior. The maintenance cost comes from ambiguity.
+
+Practical near-term reuse targets:
+
+1. Replace our hand-written dynamic route pattern work with vendored `route-pattern.ts` plus tests.
+2. Add route trie/matching from Vinext when nested/dynamic routes begin.
+3. Use `vinext/shims/server` for `NextRequest` / `NextResponse` in route handlers.
+4. Vendor `app-route-handler-policy.ts` for HTTP method policy.
+5. Only consider `app-route-handler-runtime.ts` after route handlers need dynamic/static tracking.
+
 ## Proposed Path
 
 1. Create a small `next-lite` compiler/runtime area in this repo.

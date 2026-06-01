@@ -12,6 +12,7 @@
     "lint": "eslint",
     "typecheck:tsgo": "tsgo -p tsconfig.tsgo.json --pretty false",
     "measure:offline-compilers": "node scripts/measure-offline-compilers.mjs",
+    "test:serverless-nextjs-runtime": "vitest run --config vitest.serverless-nextjs-runtime.config.mjs",
     "test:serverless-tanstack-start": "yarn build:serverless-tanstack-start-runtime && vitest run --config vitest.serverless-tanstack-start.config.mjs"
   },
   "dependencies": {

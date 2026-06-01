@@ -138,10 +138,21 @@ const nextConfig: NextConfig = {
     "127.0.0.1",
     "::1",
   ],
+  serverExternalPackages: [
+    "esbuild",
+  ],
   outputFileTracingIncludes: {
     "/api/serverless/compile": serverlessCompileTraceGlobs,
     "/api/serverless/expressjs/request": serverlessExpressRequestTraceGlobs,
     "/api/serverless/expressjs/types": serverlessExpressTypeTraceGlobs,
+    "/api/serverless/next-lite/request": [
+      "./node_modules/@esbuild/**/*",
+      ...collectRuntimePackageGlobs([
+        "esbuild",
+        "react",
+        "react-dom",
+      ]),
+    ],
     "/api/serverless/tanstack-start/core-rpc": serverlessCompileTraceGlobs,
     "/api/serverless/types": serverlessTypeTraceGlobs,
     ...(!isVercel

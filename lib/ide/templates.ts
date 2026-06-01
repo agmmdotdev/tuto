@@ -1868,6 +1868,237 @@ function ServerFunctionsRoute() {
     ],
   },
   {
+    id: "serverless-next-lite-playground",
+    name: "Serverless Next Lite Playground",
+    previewPath: "app/page.tsx",
+    files: [
+      {
+        path: "README.md",
+        language: "md",
+        description: "A minimal App Router subset for the lightweight Next Lite compiler.",
+        content: `# Serverless Next Lite Playground
+
+This template targets the current Next Lite slice:
+
+- app/layout.tsx wraps rendered pages
+- app/page.tsx renders the root route
+- app/posts/layout.tsx wraps the posts segment
+- app/posts/[postId]/layout.tsx wraps the dynamic post detail segment
+- app/posts/[postId]/page.tsx renders a dynamic route
+- params and searchParams are passed into page components
+
+This route intentionally avoids CSS imports, next/link, next/navigation, client components, server actions, route handlers, and RSC streaming until those are implemented in the lightweight compiler.`,
+      },
+      {
+        path: "package.json",
+        language: "json",
+        description: "Project manifest for the lightweight Next Lite playground.",
+        content: `{
+  "name": "serverless-next-lite-playground",
+  "private": true
+}
+`,
+      },
+      {
+        path: "tsconfig.json",
+        language: "json",
+        description: "TypeScript configuration for the lightweight App Router subset.",
+        content: `{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "es2022"],
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx"
+  },
+  "include": ["app/**/*.ts", "app/**/*.tsx"]
+}
+`,
+      },
+      {
+        path: "app/layout.tsx",
+        language: "tsx",
+        description: "Root layout for the Next Lite SSR subset.",
+        content: `import type { CSSProperties, ReactNode } from "react";
+
+const bodyStyle: CSSProperties = {
+  margin: 0,
+  background: "#f6f3ec",
+  color: "#1d2320",
+  fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
+};
+
+const shellStyle: CSSProperties = {
+  margin: "0 auto",
+  maxWidth: 920,
+  padding: "40px 20px",
+};
+
+const navStyle: CSSProperties = {
+  display: "flex",
+  gap: 16,
+  marginBottom: 32,
+};
+
+export default function RootLayout({ children }: { children: ReactNode }) {
+  return (
+    <html lang="en">
+      <body style={bodyStyle}>
+        <main style={shellStyle}>
+          <nav style={navStyle}>
+            <a href="/">Home</a>
+            <a href="/posts/first-post?tab=notes">Dynamic post</a>
+          </nav>
+          {children}
+        </main>
+      </body>
+    </html>
+  );
+}
+`,
+      },
+      {
+        path: "app/page.tsx",
+        language: "tsx",
+        description: "Root page rendered by the lightweight Next Lite compiler.",
+        content: `import type { CSSProperties } from "react";
+
+const panelStyle: CSSProperties = {
+  border: "1px solid #d6d0c4",
+  borderRadius: 8,
+  background: "#fffdf8",
+  padding: 28,
+};
+
+const eyebrowStyle: CSSProperties = {
+  margin: 0,
+  color: "#56625b",
+  fontSize: 13,
+  fontWeight: 700,
+  letterSpacing: 0,
+  textTransform: "uppercase",
+};
+
+export default function Page() {
+  return (
+    <section style={panelStyle}>
+      <p style={eyebrowStyle}>Next Lite SSR</p>
+      <h1>Page and layout are rendered by the lightweight compiler.</h1>
+      <p>
+        This is the first parity slice: server-rendered App Router pages,
+        a root layout, dynamic route params, and search params.
+      </p>
+      <p>
+        Open <a href="/posts/first-post?tab=notes">/posts/first-post?tab=notes</a>
+        to test the dynamic route.
+      </p>
+    </section>
+  );
+}
+`,
+      },
+      {
+        path: "app/posts/layout.tsx",
+        language: "tsx",
+        description: "Nested posts layout for the Next Lite SSR subset.",
+        content: `import type { CSSProperties, ReactNode } from "react";
+
+const postsShellStyle: CSSProperties = {
+  borderLeft: "4px solid #537168",
+  paddingLeft: 20,
+};
+
+const labelStyle: CSSProperties = {
+  color: "#537168",
+  fontSize: 13,
+  fontWeight: 700,
+  margin: "0 0 12px",
+};
+
+export default function PostsLayout({ children }: { children: ReactNode }) {
+  return (
+    <section style={postsShellStyle}>
+      <p style={labelStyle}>Nested posts layout</p>
+      {children}
+    </section>
+  );
+}
+`,
+      },
+      {
+        path: "app/posts/[postId]/layout.tsx",
+        language: "tsx",
+        description: "Nested post detail layout for the Next Lite SSR subset.",
+        content: `import type { CSSProperties, ReactNode } from "react";
+
+const detailShellStyle: CSSProperties = {
+  background: "#eff6f3",
+  border: "1px solid #c9d7ca",
+  borderRadius: 8,
+  padding: 20,
+};
+
+const labelStyle: CSSProperties = {
+  color: "#3f5d53",
+  fontSize: 13,
+  fontWeight: 700,
+  margin: "0 0 12px",
+};
+
+export default function PostDetailLayout({ children }: { children: ReactNode }) {
+  return (
+    <section style={detailShellStyle}>
+      <p style={labelStyle}>Dynamic post detail layout</p>
+      {children}
+    </section>
+  );
+}
+`,
+      },
+      {
+        path: "app/posts/[postId]/page.tsx",
+        language: "tsx",
+        description: "Dynamic page route rendered with params and searchParams.",
+        content: `import type { CSSProperties } from "react";
+
+type PageProps = {
+  params: {
+    postId: string;
+  };
+  searchParams: {
+    tab?: string;
+  };
+};
+
+const panelStyle: CSSProperties = {
+  border: "1px solid #c9d7ca",
+  borderRadius: 8,
+  background: "#fbfffb",
+  padding: 28,
+};
+
+export default function PostPage({ params, searchParams }: PageProps) {
+  return (
+    <section style={panelStyle}>
+      <p>Dynamic route</p>
+      <h1>Post: {params.postId}</h1>
+      <p>Selected tab: {searchParams.tab ?? "overview"}</p>
+      <p>
+        Edit this file, save, then request another post id to verify that the
+        compiled route matcher is using the current workspace snapshot.
+      </p>
+    </section>
+  );
+}
+`,
+      },
+    ],
+  },
+  {
     id: "serverless-nextjs-runtime-playground",
     name: "Serverless Next Runtime Playground",
     previewPath: "app/page.tsx",
@@ -2625,6 +2856,10 @@ export function getServerlessTemplate() {
 
 export function getServerlessNextjsTemplate() {
   return getTemplate("serverless-nextjs-playground");
+}
+
+export function getServerlessNextLiteTemplate() {
+  return getTemplate("serverless-next-lite-playground");
 }
 
 export function getServerlessTanstackStartTemplate() {
