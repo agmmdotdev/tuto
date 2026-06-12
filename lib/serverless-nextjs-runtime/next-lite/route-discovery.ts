@@ -11,10 +11,20 @@ export type NextLiteRoute = {
   pageFile: string;
   layoutFiles: string[];
   layoutFile: string | null;
+} | {
+  kind: "route-handler";
+  pathname: string;
+  pattern: string;
+  patternParts: string[];
+  routeFile: string;
+  pageFile?: never;
+  layoutFiles?: never;
+  layoutFile?: never;
 };
 
 const pageFileNames = ["page.tsx", "page.ts", "page.jsx", "page.js"];
 const layoutFileNames = ["layout.tsx", "layout.ts", "layout.jsx", "layout.js"];
+const routeHandlerFileNames = ["route.ts", "route.tsx", "route.js", "route.jsx"];
 
 async function findFirstExistingFile(directory: string, fileNames: readonly string[]) {
   for (const fileName of fileNames) {
@@ -32,6 +42,10 @@ async function findFirstExistingFile(directory: string, fileNames: readonly stri
 
 function isPageFile(fileName: string) {
   return pageFileNames.includes(fileName);
+}
+
+function isRouteHandlerFile(fileName: string) {
+  return routeHandlerFileNames.includes(fileName);
 }
 
 function isInvisibleAppSegment(segment: string) {
@@ -74,48 +88,81 @@ async function findLayoutChain(appDir: string, pageDirectory: string) {
   return layoutFiles;
 }
 
-async function scanPageFiles(appDir: string, directory = appDir): Promise<string[]> {
+async function scanRouteFiles(
+  appDir: string,
+  directory = appDir,
+): Promise<Array<{ kind: "page" | "route-handler"; filePath: string }>> {
   const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => []);
-  const pageFiles: string[] = [];
+  const routeFiles: Array<{ kind: "page" | "route-handler"; filePath: string }> = [];
 
   for (const entry of entries) {
     const entryPath = path.join(directory, entry.name);
     if (entry.isDirectory()) {
-      pageFiles.push(...(await scanPageFiles(appDir, entryPath)));
+      routeFiles.push(...(await scanRouteFiles(appDir, entryPath)));
       continue;
     }
 
     if (entry.isFile() && isPageFile(entry.name)) {
-      pageFiles.push(entryPath);
+      routeFiles.push({ kind: "page", filePath: entryPath });
+    } else if (entry.isFile() && isRouteHandlerFile(entry.name)) {
+      routeFiles.push({ kind: "route-handler", filePath: entryPath });
     }
   }
 
-  return pageFiles;
+  return routeFiles;
+}
+
+function assertNoPageHandlerConflicts(routes: readonly NextLiteRoute[]) {
+  const pagePathnames = new Set(
+    routes.filter((route) => route.kind === "page").map((route) => route.pathname),
+  );
+  const handlerConflict = routes.find(
+    (route) => route.kind === "route-handler" && pagePathnames.has(route.pathname),
+  );
+
+  if (handlerConflict) {
+    throw new Error(
+      `next-lite does not support app/page and app/route at the same pathname: ${handlerConflict.pathname}`,
+    );
+  }
 }
 
 export async function discoverNextLiteRoutes(workspaceRoot: string): Promise<NextLiteRoute[]> {
   const appDir = path.join(workspaceRoot, "app");
-  const pageFiles = await scanPageFiles(appDir);
+  const routeFiles = await scanRouteFiles(appDir);
 
-  if (pageFiles.length === 0) {
-    throw new Error("next-lite requires at least one app/**/page file.");
+  if (routeFiles.length === 0) {
+    throw new Error("next-lite requires at least one app/**/page or app/**/route file.");
   }
 
   const routes = await Promise.all(
-    pageFiles.map(async (pageFile) => {
-      const layoutFiles = await findLayoutChain(appDir, path.dirname(pageFile));
-      const pathname = pageDirectoryToPathname(appDir, path.dirname(pageFile));
+    routeFiles.map(async ({ kind, filePath }) => {
+      const pathname = pageDirectoryToPathname(appDir, path.dirname(filePath));
+
+      if (kind === "route-handler") {
+        return {
+          kind,
+          pathname,
+          pattern: routePattern(pathname),
+          patternParts: routePatternParts(pathname),
+          routeFile: filePath,
+        };
+      }
+
+      const layoutFiles = await findLayoutChain(appDir, path.dirname(filePath));
       return {
         kind: "page" as const,
         pathname,
         pattern: routePattern(pathname),
         patternParts: routePatternParts(pathname),
-        pageFile,
+        pageFile: filePath,
         layoutFiles,
         layoutFile: layoutFiles[0] ?? null,
       };
     }),
   );
+
+  assertNoPageHandlerConflicts(routes);
 
   return routes.sort(compareRoutes);
 }

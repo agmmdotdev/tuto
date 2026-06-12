@@ -69,4 +69,23 @@ describe("next-lite playground template", () => {
     expect(html).toContain("Nested posts layout");
     expect(html).toContain("Dynamic post detail layout");
   });
+
+  it("compiles and runs the template route handler", async () => {
+    const root = await createTemplateFixture();
+    const artifact = await buildNextLiteApp({
+      outDir: path.join(root, ".next-lite"),
+      workspaceRoot: root,
+    });
+    const renderer = await loadNextLiteRenderer(artifact);
+    const response = await renderer.renderNextLiteRequest(
+      new Request("http://next-lite.test/api/health"),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      runtime: "next-lite",
+      path: "/api/health",
+    });
+  });
 });

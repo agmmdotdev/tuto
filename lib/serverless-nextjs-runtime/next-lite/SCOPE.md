@@ -32,14 +32,14 @@ Last verified against the working tree on 2026-06-01.
 
 | Capability | Status | Evidence | Notes |
 | --- | --- | --- | --- |
-| `app/page.tsx` | supported | `test/.../next-lite-static-render.test.ts` | Root + nested. |
-| `app/layout.tsx` | supported | `test/.../next-lite-static-render.test.ts` | Single + nested layout chain (root → posts → post-detail). |
-| Invisible segments `(group)`, `@slot`, `_private` | supported | `route-discovery.ts` (`isInvisibleAppSegment`) | Filtered during discovery; tested implicitly. |
-| Route discovery (filesystem → `NextLiteRoute[]`) | supported | `route-discovery.ts`, `next-lite-static-render.test.ts` | Sorts by vendored `compareRoutes`. |
-| Nested routes | supported | `next-lite-static-render.test.ts` | |
-| Dynamic segments `[id]` | supported | `next-lite-static-render.test.ts` | |
-| Catch-all segments `[...rest]` | supported | `test/.../next-lite-routing-vendored.test.ts` | Direct unit test of vendored `matchRoutePattern`. |
-| Optional catch-all segments `[[...slug]]` | supported | `test/.../next-lite-routing-vendored.test.ts` | |
+| `app/page.tsx` | supported | `test/.../next-lite-static-render.test.ts`, `test/.../next-lite-route-discovery.test.ts` | Root + nested. |
+| `app/layout.tsx` | supported | `test/.../next-lite-static-render.test.ts`, `test/.../next-lite-route-discovery.test.ts` | Single + nested layout chain (root → posts → post-detail). Direct discovery test pins the chain order and missing-level holes. |
+| Invisible segments `(group)`, `@slot`, `_private` | supported (literal `_private` only) | `test/.../next-lite-route-discovery.test.ts` | Direct discovery test covers each kind alone and all three combined. `_private` is matched literally, not as a general underscore-prefix rule — narrower than current Next.js, see the pinned test for the exact contract. |
+| Route discovery (filesystem → `NextLiteRoute[]`) | supported | `route-discovery.ts`, `test/.../next-lite-route-discovery.test.ts` | Direct unit test covers sort order, error paths, page routes, and route handler routes. |
+| Nested routes | supported | `test/.../next-lite-static-render.test.ts`, `test/.../next-lite-route-discovery.test.ts` | |
+| Dynamic segments `[id]` | supported | `test/.../next-lite-static-render.test.ts`, `test/.../next-lite-route-discovery.test.ts` | |
+| Catch-all segments `[...rest]` | supported | `test/.../next-lite-routing-vendored.test.ts`, `test/.../next-lite-route-discovery.test.ts` | Direct unit test of vendored `matchRoutePattern` plus discovery-level pattern. |
+| Optional catch-all segments `[[...slug]]` | supported | `test/.../next-lite-routing-vendored.test.ts`, `test/.../next-lite-route-discovery.test.ts` | |
 | URL-encoded dynamic params | supported | `next-lite-static-render.test.ts` | Decoded by vendored `matchRoutePattern`. |
 | `params` prop on page | supported | `next-lite-template.test.ts`, `next-lite-static-render.test.ts` | |
 | `searchParams` prop on page | supported | `next-lite-template.test.ts` | Single value and array forms. |
@@ -50,7 +50,7 @@ Last verified against the working tree on 2026-06-01.
 | `template.tsx` | unsupported | — | Not implemented. |
 | Parallel routes `@slot` | unsupported | — | Filtered out by discovery; no rendering. |
 | Intercepting routes `(.)`, `(..)`, `(...)` | unsupported | — | Not implemented. |
-| Route groups `(group)` | supported (filtering only) | `route-discovery.ts` | Used to hide route groups from URL; no layout-merging semantics. |
+| Route groups `(group)` | supported (filtering only) | `test/.../next-lite-route-discovery.test.ts` | Used to hide route groups from URL; no layout-merging semantics. |
 
 ## Reused / vendored behavior (Rule 4 tests must pin these)
 
@@ -60,20 +60,48 @@ Last verified against the working tree on 2026-06-01.
 | Route trie / matching | vendored | `vendor/vinext-routing/route-trie.ts`, `vendor/vinext-routing/route-matching.ts` | Exercised in `next-lite-static-render.test.ts`. |
 | `compareRoutes` precedence | vendored | `vendor/vinext-routing/utils.ts`, `test/.../next-lite-routing-vendored.test.ts` | Static > dynamic > catch-all, `+` < `*`, alphabetic tie-break. |
 | `decodeRouteSegment` / `normalizePathnameForRouteMatch` / `decodeMatchedParams` | vendored | `vendor/vinext-routing/utils.ts`, `test/.../next-lite-routing-vendored.test.ts` | |
-| Next error digest parsing (`NEXT_REDIRECT`, `NEXT_NOT_FOUND`, `NEXT_HTTP_ERROR_FALLBACK`) | vendored | `vendor/vinext-server/next-error-digest.ts`, `test/.../next-lite-next-error-digest.test.ts` | Used by the new policy module. No runtime wiring yet. |
+| Next error digest parsing (`NEXT_REDIRECT`, `NEXT_NOT_FOUND`, `NEXT_HTTP_ERROR_FALLBACK`) | vendored | `vendor/vinext-server/next-error-digest.ts`, `test/.../next-lite-next-error-digest.test.ts` | Used by the route handler policy module and dispatch path. |
 | `app-route-handler-policy.ts` (upstream file) | not vendored | — | File imports `app-route-handler-runtime.js`; not isolated. Replaced with local policy module. |
 | `app-route-handler-runtime.ts`, `app-route-handler-dispatch.ts` | not vendored | — | Rule 3 deferral. |
-| Vinext `next/*` shims (`NextRequest`, `NextResponse`, etc.) | unsupported | — | Would require either `vinext/shims/server` (delegated) or a local shim. Not started. |
+| Vinext `next/*` shims (`NextRequest`, `NextResponse`, etc.) | partial | `next-server-shim.ts`, `test/.../next-lite-route-handler-render.test.ts` | Local lightweight `next/server` shim supports `NextResponse.json()` and `NextResponse.redirect()`. `NextRequest` is intentionally not exported yet. |
 
 ## Route handlers
 
 | Capability | Status | Evidence | Notes |
 | --- | --- | --- | --- |
-| HTTP method policy (allowed methods, auto-HEAD, auto-OPTIONS, Allow header) | supported (policy only) | `route-handler-policy.ts`, `test/.../next-lite-route-handler-policy.test.ts` | Policy primitive. No request-pipeline wiring yet. |
-| Digest → `Response` mapping (`redirect()`, `notFound()`, `forbidden()`, `unauthorized()`) | supported (policy only) | `route-handler-policy.ts`, `test/.../next-lite-route-handler-policy.test.ts` | Uses vendored digest parser. |
-| `app/.../route.ts` discovery | unsupported | — | Not implemented. |
-| `app/.../route.ts` execution in the request pipeline | unsupported | — | Not implemented. |
+| HTTP method policy (allowed methods, auto-HEAD, auto-OPTIONS, Allow header) | supported | `route-handler-policy.ts`, `test/.../next-lite-route-handler-policy.test.ts`, `test/.../next-lite-route-handler-render.test.ts` | Policy primitive is wired into the generated request pipeline. |
+| Digest → `Response` mapping (`redirect()`, `notFound()`, `forbidden()`, `unauthorized()`) | supported | `route-handler-policy.ts`, `test/.../next-lite-route-handler-policy.test.ts` | Uses vendored digest parser and is called by route handler dispatch. |
+| `app/.../route.ts` discovery | supported | `test/.../next-lite-route-discovery.test.ts` | Covers `.ts`, `.tsx`, `.js`, `.jsx`, dynamic pattern generation, route-only workspaces, and page/handler conflicts. |
+| `app/.../route.ts` execution in the request pipeline | supported | `test/.../next-lite-route-handler-render.test.ts` | Uses standard Web `Request` input. Handlers may return standard Web `Response` or the local `NextResponse` shim. |
 | Dynamic / static route handler cache policy | unsupported | — | Not implemented. |
+
+## Route Handler Request / Response Roadmap
+
+Current focus: keep the route handler runtime on the standard Web platform contract while adding only the smallest `next/server` compatibility surface needed by common App Router examples.
+
+What is supported now:
+
+- Route handlers receive the original standard Web `Request`.
+- Route handlers receive decoded params as the second argument: `{ params }`.
+- Route handlers must return a standard Web `Response`.
+- Method policy is wired: valid HTTP methods, auto-`HEAD`, auto-`OPTIONS`, `405` with `Allow`, and invalid-method `400`.
+- `next/server` is aliased to a local lightweight shim during the Next Lite build.
+- `NextResponse.json(body, init?)` is supported.
+- `NextResponse.redirect(url, init?)` is supported for redirect statuses `301`, `302`, `303`, `307`, and `308`.
+
+Next `Response` slice to consider:
+
+- Add only concrete `NextResponse` members that are needed by template or route handler examples.
+- Possible future members: cookie mutation helpers, rewritten URLs, and other response metadata helpers.
+- Each member must get direct route-handler render tests before it moves out of unsupported scope.
+
+Left for later `Request` work:
+
+- Do not implement full `NextRequest` yet.
+- Keep handler input as standard Web `Request` until a concrete feature needs more.
+- `NextRequest` is intentionally not exported by the local `next/server` shim.
+- Later `NextRequest` work should be split into explicit slices such as `nextUrl`, cookies, headers helpers, geo/ip metadata, and middleware interaction.
+- Avoid vendoring Vinext's full app route runtime for this; it pulls in orchestration and shim dependencies that violate the current lightweight boundary.
 
 ## Client / server directives
 

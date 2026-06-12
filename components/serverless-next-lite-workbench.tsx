@@ -18,7 +18,7 @@ export function ServerlessNextLiteWorkbench({
         badge: "SSR SUBSET",
         dependencyLabel: "esbuild + vendored Vinext routing",
         explorerCopy:
-          "This route compiles the saved App Router snapshot with the lightweight Next Lite compiler. It currently supports server-rendered page routes, a root layout, dynamic params, and search params without booting Vite or a real Next runtime.",
+          "This route compiles the saved App Router snapshot with the lightweight Next Lite compiler. It currently supports server-rendered page routes, nested layouts, dynamic params, search params, and Web Request/Response route handlers without booting Vite or a real Next runtime.",
         modeValue: "serverless",
         runtimeValue: "next-lite",
         requestPathPlaceholder: "/posts/first-post?tab=notes",

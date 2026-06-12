@@ -71,3 +71,4 @@ shim.
 If the playground later moves to a real project filesystem and a persistent
 language server, this shim can be removed and replaced with normal TanStack
 route generation plus `tsserver`.
+

@@ -1885,9 +1885,17 @@ This template targets the current Next Lite slice:
 - app/posts/layout.tsx wraps the posts segment
 - app/posts/[postId]/layout.tsx wraps the dynamic post detail segment
 - app/posts/[postId]/page.tsx renders a dynamic route
+- nested layout chains are discovered from root to leaf
+- missing layout levels are skipped without blocking route discovery
+- route groups (folder names like (marketing)) are hidden from the URL
+- @slot and the literal _private segment are hidden from the URL
+- page/layout files can use .tsx, .ts, .jsx, or .js
 - params and searchParams are passed into page components
+- app/**/route.ts handlers can return standard Web Response objects
+- route handlers receive the original Request and decoded params context
+- route handlers can import NextResponse from next/server for JSON responses
 
-This route intentionally avoids CSS imports, next/link, next/navigation, client components, server actions, route handlers, and RSC streaming until those are implemented in the lightweight compiler.`,
+This route intentionally avoids CSS imports, next/link, next/navigation, client components, server actions, NextRequest, and RSC streaming until those are implemented in the lightweight compiler.`,
       },
       {
         path: "package.json",
@@ -1952,6 +1960,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <nav style={navStyle}>
             <a href="/">Home</a>
             <a href="/posts/first-post?tab=notes">Dynamic post</a>
+            <a href="/api/health">API health</a>
           </nav>
           {children}
         </main>
@@ -1998,6 +2007,23 @@ export default function Page() {
       </p>
     </section>
   );
+}
+`,
+      },
+      {
+        path: "app/api/health/route.ts",
+        language: "ts",
+        description: "Route handler using the lightweight next/server response shim.",
+        content: `import { NextResponse } from "next/server";
+
+export function GET(request: Request) {
+  const url = new URL(request.url);
+
+  return NextResponse.json({
+    ok: true,
+    runtime: "next-lite",
+    path: url.pathname,
+  });
 }
 `,
       },

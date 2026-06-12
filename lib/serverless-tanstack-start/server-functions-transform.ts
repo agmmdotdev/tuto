@@ -185,6 +185,18 @@ export async function transformStartServerFunctions(
       continue;
     }
 
+    if (
+      !code.includes("createServerFn") &&
+      !code.includes("createMiddleware") &&
+      !code.includes("createServerOnlyFn") &&
+      !code.includes("createClientOnlyFn") &&
+      !code.includes("createIsomorphicFn")
+    ) {
+      clientFiles.set(workspacePath, code);
+      serverFiles.set(workspacePath, code);
+      continue;
+    }
+
     const id = toAbsoluteModuleId(root, workspacePath);
     const clientResult = await clientCompiler.compile({
       code,
