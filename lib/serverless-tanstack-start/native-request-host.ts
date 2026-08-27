@@ -43,6 +43,33 @@ function resolveTargetUrl(requestUrl: URL) {
   return targetUrl.origin === requestUrl.origin ? targetUrl : null;
 }
 
+function rewriteSameOriginRedirect(
+  headers: Headers,
+  requestUrl: URL,
+  targetUrl: URL,
+) {
+  const location = headers.get("location");
+  if (!location) return;
+
+  let redirectUrl: URL;
+  try {
+    redirectUrl = new URL(location, targetUrl);
+  } catch {
+    return;
+  }
+  if (redirectUrl.origin !== targetUrl.origin) return;
+
+  const gatewayUrl = new URL(requestUrl);
+  gatewayUrl.searchParams.set(
+    "path",
+    `${redirectUrl.pathname}${redirectUrl.search}${redirectUrl.hash}`,
+  );
+  headers.set(
+    "location",
+    `${gatewayUrl.pathname}${gatewayUrl.search}${gatewayUrl.hash}`,
+  );
+}
+
 export async function executeNativeArtifactRequest(
   request: Request,
   options: { acceptHtml?: boolean } = {},
@@ -120,6 +147,7 @@ export async function executeNativeArtifactRequest(
   headers.set("x-tuto-worker-request", String(execution.workerRequest));
   headers.set("x-tuto-worker-reused", String(execution.workerReused));
   headers.delete("content-length");
+  rewriteSameOriginRedirect(headers, requestUrl, targetUrl);
 
   return new Response(execution.body, {
     headers,

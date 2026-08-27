@@ -13,7 +13,10 @@ import {
 } from "../../app/api/serverless/tanstack-start/core-rpc/route";
 import { GET as getNativeAsset } from "../../app/api/serverless/tanstack-start/core-asset/route";
 import { GET as handleNativeRender } from "../../app/api/serverless/tanstack-start/core-render/route";
-import { POST as handleNativeRoutePost } from "../../app/api/serverless/tanstack-start/core-route/route";
+import {
+  GET as handleNativeRouteGet,
+  POST as handleNativeRoutePost,
+} from "../../app/api/serverless/tanstack-start/core-route/route";
 import { GET as getClientKernel } from "../../app/api/serverless/tanstack-start/kernel/client/route";
 import {
   clearTanstackStartArtifactCache,
@@ -464,6 +467,16 @@ test("the native Start host renders a workspace router with loaders", async () =
 export const Route = createFileRoute('/api/hello')({
   server: {
     handlers: {
+      GET: async ({ request }) => {
+        const url = new URL(request.url);
+        if (url.searchParams.get('external') === '1') {
+          return Response.redirect('https://example.com/outside', 302);
+        }
+        if (url.searchParams.get('landed') === '1') {
+          return Response.json({ landed: true, path: url.pathname });
+        }
+        return Response.redirect(new URL('/api/hello?landed=1', url), 307);
+      },
       POST: async ({ request }) => Response.json({
         body: await request.json(),
         method: request.method,
@@ -603,6 +616,53 @@ export function getRouter() {
       source: "server-route-secret-marker",
     });
 
+    const redirectResponse = await handleNativeRouteGet(
+      new Request(
+        `http://tuto.local/api/serverless/tanstack-start/core-route?revision=${preview.revision}&token=${preview.rpcToken}&path=%2Fapi%2Fhello`,
+        { redirect: "manual" },
+      ),
+    );
+    assert.equal(redirectResponse.status, 307);
+    const redirectLocation = redirectResponse.headers.get("location");
+    assert.ok(redirectLocation);
+    const redirectGatewayUrl = new URL(redirectLocation, "http://tuto.local");
+    assert.equal(
+      redirectGatewayUrl.pathname,
+      "/api/serverless/tanstack-start/core-route",
+    );
+    assert.equal(
+      redirectGatewayUrl.searchParams.get("revision"),
+      preview.revision,
+    );
+    assert.equal(
+      redirectGatewayUrl.searchParams.get("token"),
+      preview.rpcToken,
+    );
+    assert.equal(
+      redirectGatewayUrl.searchParams.get("path"),
+      "/api/hello?landed=1",
+    );
+    const redirectedRouteResponse = await handleNativeRouteGet(
+      new Request(redirectGatewayUrl, { redirect: "manual" }),
+    );
+    assert.equal(redirectedRouteResponse.status, 200);
+    assert.deepEqual(await redirectedRouteResponse.json(), {
+      landed: true,
+      path: "/api/hello",
+    });
+
+    const externalRedirectResponse = await handleNativeRouteGet(
+      new Request(
+        `http://tuto.local/api/serverless/tanstack-start/core-route?revision=${preview.revision}&token=${preview.rpcToken}&path=${encodeURIComponent("/api/hello?external=1")}`,
+        { redirect: "manual" },
+      ),
+    );
+    assert.equal(externalRedirectResponse.status, 302);
+    assert.equal(
+      externalRedirectResponse.headers.get("location"),
+      "https://example.com/outside",
+    );
+
     const clientAsset = await getNativeAsset(
       new Request(
         `http://tuto.local/api/serverless/tanstack-start/core-asset?revision=${preview.revision}&token=${preview.rpcToken}&kind=client`,
@@ -615,6 +675,9 @@ export function getRouter() {
     );
     assert.ok((await clientAsset.text()).length > 100);
     assert.match(preview.ssrClientBundle, /tanstack-start\/core-route/);
+    assert.match(preview.ssrClientBundle, /input instanceof Request/);
+    assert.match(preview.ssrClientBundle, /new Request\(input, init\)/);
+    assert.match(preview.ssrClientBundle, /credentials: "include"/);
     assert.doesNotMatch(preview.ssrClientBundle, /data-ssr/);
     assert.doesNotMatch(preview.ssrClientBundle, /server-route-secret-marker/);
 

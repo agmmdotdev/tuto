@@ -134,14 +134,18 @@ into one buffer before Next.js returns them to the browser.
 File routes with `server.handlers` also execute through the same official Start
 host. The authenticated route gateway forwards the HTTP method, headers, body,
 status, repeated cookies, and streamed response. The hydration entry proxies
-ordinary same-origin string/URL `fetch()` calls to that gateway. The official
-TanStack Router compiler removes `server`, `headers`, and `ssr` route options
-from the client revision, preventing server-handler code from leaking into the
-browser bundle.
+same-origin string, URL, and `Request` object `fetch()` calls to that gateway.
+Request objects retain their method, headers, body, redirect mode, and signal
+while gateway credentials are forced to `include`. Same-origin
+`Location` responses are rewritten through the current
+document or route gateway, retaining the revision and capability token across
+redirect hops; external redirects remain external. The official TanStack Router
+compiler removes `server`, `headers`, and `ssr` route options from the client
+revision, preventing server-handler code from leaking into the browser bundle.
 
 This remains a checkpoint rather than the complete production host. The server
-bundle and CSS are still revision-wide; redirect-aware route proxying,
-Request-object fetch proxying, and browser hydration/navigation coverage remain.
+bundle and CSS are still revision-wide, and browser hydration/navigation
+coverage remains.
 
 ### Cross-instance artifact storage
 
@@ -213,9 +217,8 @@ and its H3 request/session graph.
 
 ## Remaining architecture work
 
-1. complete the Start router host with route-level server chunks and CSS,
-   redirect-aware route proxying, Request-object fetch proxying, and browser
-   hydration/navigation coverage.
+1. complete the Start router host with route-level server chunks and CSS plus
+   browser hydration/navigation coverage.
 2. move execution behind a hardened sandbox such as an isolated container or
    microVM before treating arbitrary untrusted student code as safe for a
    multi-tenant production service. The current child-process boundary protects

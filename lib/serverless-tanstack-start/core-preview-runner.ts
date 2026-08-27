@@ -15,6 +15,7 @@ import { Scanner } from "@tailwindcss/oxide";
 import type { ChangedContent, SourceEntry } from "@tailwindcss/oxide";
 import { compile as compileTailwind } from "tailwindcss";
 import kernelManifest from "./kernel-manifest.generated.json";
+import { createTanstackStartRouteFetch } from "./client-route-fetch";
 import {
   toWorkspaceModuleId,
   transformStartServerFunctions,
@@ -1028,22 +1029,12 @@ globalThis.${kernelManifest.client.routerKey} = getRouter;
 globalThis.${kernelManifest.client.startInstanceKey} = startInstance;
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
-globalThis.fetch = (input, init) => {
-  if (typeof input !== 'string' && !(input instanceof URL)) {
-    return nativeFetch(input, init);
-  }
-  const url = new URL(String(input), globalThis.location.href);
-  if (
-    url.origin === globalThis.location.origin &&
-    !url.pathname.startsWith('/api/serverless/tanstack-start/')
-  ) {
-    return nativeFetch(
-      ${JSON.stringify(serverRouteBase)} + encodeURIComponent(url.pathname + url.search),
-      { ...init, credentials: 'include' },
-    );
-  }
-  return nativeFetch(input, init);
-};
+const createRouteFetch = ${createTanstackStartRouteFetch.toString()};
+globalThis.fetch = createRouteFetch(
+  nativeFetch,
+  globalThis.location,
+  ${JSON.stringify(serverRouteBase)},
+);
 
 startTransition(() => {
   hydrateRoot(document, <StrictMode><StartClient /></StrictMode>);

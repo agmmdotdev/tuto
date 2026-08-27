@@ -854,6 +854,7 @@ What is real here:
 - real \`src/start.ts\` request middleware, function middleware, request/response helpers, cookies, and sessions for server-function requests
 - real router SSR, loader execution, hydration, and compiled CSS through the official Start handler
 - route-level client component chunks and matched-route preloads from the official Router compiler
+- same-origin string, URL, and Request fetches plus redirect hops through the revision-pinned route gateway
 
 What is intentionally still experimental here:
 

@@ -6,6 +6,7 @@ await buildTanstackStartKernels();
 
 await build({
   entryPoints: [
+    "lib/serverless-tanstack-start/client-route-fetch.ts",
     "lib/serverless-tanstack-start/core-preview-runner.ts",
     "lib/serverless-tanstack-start/core-rpc-runner.ts",
     "lib/serverless-tanstack-start/core-compiler-runner.ts",
@@ -30,10 +31,15 @@ await Promise.all(
     const contents = await readFile(filePath, "utf8");
     await writeFile(
       filePath,
-      contents.replaceAll(
-        'require("./server-functions-transform")',
-        'require("./server-functions-transform.generated.cjs")',
-      ),
+      contents
+        .replaceAll(
+          'require("./server-functions-transform")',
+          'require("./server-functions-transform.generated.cjs")',
+        )
+        .replaceAll(
+          'require("./client-route-fetch")',
+          'require("./client-route-fetch.generated.cjs")',
+        ),
     );
   }),
 );
