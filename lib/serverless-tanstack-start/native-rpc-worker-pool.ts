@@ -13,6 +13,7 @@ export type NativeWorkerArtifact = {
   kernelId: string;
   revision: string;
   serverBundle: string;
+  serverChunks: Record<string, string>;
 };
 
 export type NativeRpcWorkerExecution = {

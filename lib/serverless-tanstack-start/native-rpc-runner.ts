@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -88,12 +88,25 @@ async function initialize(
   runtimeDirectory = await mkdtemp(
     path.join(tmpdir(), "tuto-start-rpc-worker-"),
   );
-  const runtimePath = path.join(runtimeDirectory, "artifact.mjs");
+  const initializedRuntimeDirectory = runtimeDirectory;
+  const runtimePath = path.join(initializedRuntimeDirectory, "artifact.mjs");
   const kernelPath = path.resolve(
     process.cwd(),
     "lib",
     "serverless-tanstack-start",
     kernelManifest.server.file,
+  );
+  await Promise.all(
+    Object.entries(command.artifact.serverChunks).map(
+      async ([chunkName, chunkSource]) => {
+        if (!/^chunks\/[A-Za-z0-9_-]+\.js$/.test(chunkName)) {
+          throw new Error("Invalid TanStack Start server chunk name.");
+        }
+        const chunkPath = path.join(initializedRuntimeDirectory, chunkName);
+        await mkdir(path.dirname(chunkPath), { recursive: true });
+        await writeFile(chunkPath, chunkSource, "utf8");
+      },
+    ),
   );
   await writeFile(runtimePath, command.artifact.serverBundle, "utf8");
   await import(pathToFileURL(kernelPath).href);

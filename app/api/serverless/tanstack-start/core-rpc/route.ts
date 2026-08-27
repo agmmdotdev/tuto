@@ -92,6 +92,7 @@ async function handleNativeRpc(request: Request) {
         kernelId: artifact.kernelId,
         revision: artifact.revision,
         serverBundle: artifact.serverBundle,
+        serverChunks: artifact.serverChunks,
       },
       nativeRequest,
     );

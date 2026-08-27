@@ -28,7 +28,10 @@ function artifact(revision: string): TanstackStartArtifact {
     kernelId: kernelManifest.id,
     revision,
     routeManifest: {
-      "/hello": { preloads: ["/api/start/chunks/hello"] },
+      "/hello": {
+        css: ["/api/start/styles/hello"],
+        preloads: ["/api/start/chunks/hello"],
+      },
     },
     rpcToken: "t".repeat(43),
     ssrClientBundle: "",
@@ -36,7 +39,13 @@ function artifact(revision: string): TanstackStartArtifact {
       "chunks/hello-ABC123.js": "export const hello = true;",
     },
     ssrCss: "",
+    ssrCssChunks: {
+      "chunks/chunk-CSS123.css": ".hello { color: green; }",
+    },
     serverBundle: "export const durable = true;",
+    serverChunks: {
+      "chunks/chunk-SERVER123.js": "export const route = true;",
+    },
     serverFnIds: ["server-fn"],
     success: true,
   };

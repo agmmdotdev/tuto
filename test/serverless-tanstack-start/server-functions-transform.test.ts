@@ -142,11 +142,12 @@ test("leaves plain modules without creating server function manifest entries", a
   assert.match(result.resolverModule, /const manifest = \{\n\};/);
 });
 
-test("uses the official Router compiler to emit lazy client route modules", async () => {
+test("uses the official Router compiler to emit lazy client and server route modules", async () => {
   const files: WorkspaceFileMap = new Map([
     [
       "src/routes/hello.tsx",
-      `import { createFileRoute } from '@tanstack/react-router';
+      `import './hello.css';
+import { createFileRoute } from '@tanstack/react-router';
 
 const routeLabel = 'hello';
 const HelloComponent = () => <main data-route-chunk>{routeLabel}</main>;
@@ -161,6 +162,7 @@ export const Route = createFileRoute('/hello')({
   },
 });`,
     ],
+    ["src/routes/hello.css", ".hello { color: green; }"],
   ]);
 
   const result = await transformFiles(files, "client-route-split");
@@ -179,10 +181,24 @@ export const Route = createFileRoute('/hello')({
   assert.match(reference, /tsr-split=component/);
   assert.doesNotMatch(reference, /data-route-chunk/);
   assert.doesNotMatch(reference, /server-route-secret/);
+  assert.doesNotMatch(reference, /hello\.css/);
   assert.match(split, /data-route-chunk/);
+  assert.match(split, /hello\.css/);
   assert.doesNotMatch(split, /server-route-secret/);
   assert.match(shared, /routeLabel/);
   assert.doesNotMatch(shared, /server-route-secret/);
+  const serverReference = getFile(
+    result.serverFiles,
+    "src/routes/hello.tsx",
+  );
+  const serverSplit = getFile(
+    result.serverRouteSplits,
+    "src/routes/hello.tsx?tsr-split=component",
+  );
+  assert.match(serverReference, /lazyRouteComponent/);
+  assert.match(serverReference, /server-route-secret/);
+  assert.doesNotMatch(serverReference, /data-route-chunk/);
+  assert.match(serverSplit, /data-route-chunk/);
 });
 
 test("rewrites createServerFn handlers into client RPC stubs and server split exports", async () => {

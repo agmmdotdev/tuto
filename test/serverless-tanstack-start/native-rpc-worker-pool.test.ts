@@ -29,6 +29,7 @@ function artifact(revisionCharacter: string): NativeWorkerArtifact {
     kernelId: "test-kernel",
     revision: revisionCharacter.repeat(64),
     serverBundle: "",
+    serverChunks: {},
   };
 }
 

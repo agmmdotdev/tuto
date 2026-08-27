@@ -129,6 +129,7 @@ export async function executeNativeArtifactRequest(
         kernelId: resolution.artifact.kernelId,
         revision: resolution.artifact.revision,
         serverBundle: resolution.artifact.serverBundle,
+        serverChunks: resolution.artifact.serverChunks,
       },
       nativeRequest,
     );

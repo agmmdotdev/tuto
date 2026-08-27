@@ -29,7 +29,9 @@ function artifact(revision: string): TanstackStartArtifact {
     ssrClientBundle: "",
     ssrClientChunks: {},
     ssrCss: "",
+    ssrCssChunks: {},
     serverBundle: `globalThis.revision=${JSON.stringify(revision)}`,
+    serverChunks: {},
     serverFnIds: [revision],
     success: true,
   };

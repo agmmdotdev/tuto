@@ -19,7 +19,9 @@ export async function GET(request: Request) {
     kind === "client"
       ? resolution.artifact.ssrClientBundle
       : kind === "style"
-        ? resolution.artifact.ssrCss
+        ? requestedChunk
+          ? (resolution.artifact.ssrCssChunks[requestedChunk] ?? null)
+          : resolution.artifact.ssrCss
         : kind === "chunk" && requestedChunk
           ? (resolution.artifact.ssrClientChunks[requestedChunk] ?? null)
           : null;

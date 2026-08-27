@@ -83,13 +83,19 @@ function HomeRoute() {
     path: "src/routes/index.tsx",
   },
   {
-    content: `import { createFileRoute } from '@tanstack/react-router';
+    content: `import './about.css';
+import { createFileRoute } from '@tanstack/react-router';
 
 export const Route = createFileRoute('/about')({
-  component: () => <h2 data-testid="about-route">Lazy route loaded in the browser</h2>,
+  component: () => <h2 className="about-route" data-testid="about-route">Lazy route loaded in the browser</h2>,
 });`,
     language: "tsx",
     path: "src/routes/about.tsx",
+  },
+  {
+    content: `.about-route { color: rgb(12, 34, 56); }`,
+    language: "css",
+    path: "src/routes/about.css",
   },
   {
     content: `import { createFileRoute } from '@tanstack/react-router';
@@ -202,10 +208,12 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   const browserErrors = collectBrowserErrors(page);
   const renderPath = await compilePreview(request);
   const routeChunks = new Set<string>();
+  const routeStyles = new Set<string>();
 
   page.on("response", (response) => {
     const url = response.url();
     if (url.includes("/core-asset") && url.includes("kind=chunk")) routeChunks.add(url);
+    if (url.includes("/core-asset") && url.includes("kind=style") && url.includes("name=")) routeStyles.add(url);
   });
 
   const renderResponse = await page.goto(new URL(renderPath, baseURL).href);
@@ -241,8 +249,11 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   await expect(page.getByTestId("redirect-result")).toContainText('"landed":true');
 
   const chunksBeforeNavigation = new Set(routeChunks);
+  expect(routeStyles.size).toBe(0);
   await page.getByTestId("about-link").click();
   await expect(page.getByTestId("about-route")).toHaveText("Lazy route loaded in the browser");
+  await expect(page.getByTestId("about-route")).toHaveCSS("color", "rgb(12, 34, 56)");
   expect([...routeChunks].some((url) => !chunksBeforeNavigation.has(url))).toBe(true);
+  expect(routeStyles.size).toBeGreaterThan(0);
   expect(browserErrors).toEqual([]);
 });

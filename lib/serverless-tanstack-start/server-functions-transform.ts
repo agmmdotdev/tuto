@@ -59,6 +59,7 @@ export type StartServerFunctionsTransform = {
   resolverModule: string;
   serverFiles: WorkspaceFileMap;
   serverFnsById: Record<string, ServerFn>;
+  serverRouteSplits: WorkspaceFileMap;
   serverSplits: WorkspaceFileMap;
 };
 
@@ -107,7 +108,10 @@ async function importRouterCompilerInternals(): Promise<RouterCompilerInternals>
 }
 
 function routeIdFromCode(code: string) {
-  return code.match(/\bcreateFileRoute\s*\(\s*(["'`])([^"'`]+)\1\s*\)/)?.[2];
+  return (
+    code.match(/\bcreateFileRoute\s*\(\s*(["'`])([^"'`]+)\1\s*\)/)?.[2] ??
+    (/\bcreateRootRoute\s*\(/.test(code) ? "__root__" : undefined)
+  );
 }
 
 function routeSplitModuleId(
@@ -117,7 +121,11 @@ function routeSplitModuleId(
   return `${workspacePath}?tsr-split=${grouping.slice().sort().join("---")}`;
 }
 
-async function compileClientRoutes(files: WorkspaceFileMap, root: string) {
+async function compileRoutes(
+  files: WorkspaceFileMap,
+  root: string,
+  options: { deleteNodes?: Set<string>; stripRouteCssImports?: boolean } = {},
+) {
   const {
     compileCodeSplitReferenceRoute,
     compileCodeSplitSharedRoute,
@@ -151,14 +159,22 @@ async function compileClientRoutes(files: WorkspaceFileMap, root: string) {
       code,
       codeSplitGroupings,
       compilerPlugins: [],
-      deleteNodes: new Set(["headers", "server", "ssr"]),
+      deleteNodes: options.deleteNodes ?? new Set(),
       filename: id,
       id,
       ...(sharedBindings.size > 0 ? { sharedBindings } : {}),
       targetFramework: "react",
     });
     if (!result?.code) continue;
-    files.set(workspacePath, result.code);
+    files.set(
+      workspacePath,
+      options.stripRouteCssImports
+        ? result.code.replace(
+            /\bimport\s+(["'])[^"'\r\n]+\.css(?:\?[^"'\r\n]*)?\1\s*;?/g,
+            "",
+          )
+        : result.code,
+    );
 
     for (const grouping of codeSplitGroupings) {
       const splitId = routeSplitModuleId(workspacePath, grouping);
@@ -395,8 +411,16 @@ export async function transformStartServerFunctions(
     }
   }
 
-  const { clientRouteIds, clientRouteSplits } = await compileClientRoutes(
+  const { clientRouteIds, clientRouteSplits } = await compileRoutes(
     clientFiles,
+    root,
+    {
+      deleteNodes: new Set(["headers", "server", "ssr"]),
+      stripRouteCssImports: true,
+    },
+  );
+  const { clientRouteSplits: serverRouteSplits } = await compileRoutes(
+    serverFiles,
     root,
   );
 
@@ -407,6 +431,7 @@ export async function transformStartServerFunctions(
     serverFiles,
     serverSplits,
     serverFnsById,
+    serverRouteSplits,
     resolverModule: createServerFnResolverModule(serverFnsById, root),
   };
 }

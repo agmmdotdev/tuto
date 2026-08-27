@@ -23,6 +23,7 @@ export type NativeWorkerCommand =
         kernelId: string;
         revision: string;
         serverBundle: string;
+        serverChunks: Record<string, string>;
       };
       maxResponseBytes: number;
       type: "initialize";

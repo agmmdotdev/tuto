@@ -71,6 +71,10 @@ type TailwindLoadStylesheet = NonNullable<
 >;
 type TailwindModuleResult = Awaited<ReturnType<TailwindLoadModule>>;
 type TailwindStylesheetResult = Awaited<ReturnType<TailwindLoadStylesheet>>;
+type RouteManifestEntry = {
+  css?: string[];
+  preloads: string[];
+};
 type ServerlessPreviewResult = {
   buildMetrics: {
     clientFrameworkInputs: number;
@@ -86,12 +90,14 @@ type ServerlessPreviewResult = {
   diagnostics: BuildDiagnostic[];
   durationMs: number;
   revision: string;
-  routeManifest: Record<string, { preloads: string[] }>;
+  routeManifest: Record<string, RouteManifestEntry>;
   rpcToken: string;
   ssrClientBundle: string;
   ssrClientChunks: Record<string, string>;
   ssrCss: string;
+  ssrCssChunks: Record<string, string>;
   serverBundle: string;
+  serverChunks: Record<string, string>;
   serverFnIds: string[];
 };
 
@@ -551,10 +557,12 @@ function createServerWorkspacePlugin({
   entrySource,
   files,
   resolverSource,
+  root,
 }: {
   entrySource: string;
   files: WorkspaceFileMap;
   resolverSource: string;
+  root: string;
 }): Plugin {
   return {
     name: "tuto-real-start-server-workspace",
@@ -571,6 +579,13 @@ function createServerWorkspacePlugin({
         }),
       );
       buildApi.onResolve({ filter: /.*/ }, (args) => {
+        const rootedModule = toWorkspaceModuleId(root, args.path);
+        if (files.has(rootedModule)) {
+          return {
+            path: rootedModule,
+            namespace: "tuto-server-workspace",
+          };
+        }
         if (files.has(args.path)) {
           return { path: args.path, namespace: "tuto-server-workspace" };
         }
@@ -777,7 +792,7 @@ async function buildNativeServerBundle({
 }: {
   clientAssetUrl: string;
   cssAssetUrl?: string;
-  routeManifest: Record<string, { preloads: string[] }>;
+  routeManifest: Record<string, RouteManifestEntry>;
   root: string;
   transform: StartServerFunctionsTransform;
 }) {
@@ -785,27 +800,29 @@ async function buildNativeServerBundle({
   const startModule = findWorkspaceFile(serverFiles, "src/start");
   const routerModule = findWorkspaceFile(serverFiles, "src/router");
   if (Object.keys(transform.serverFnsById).length === 0 && !routerModule) {
-    return { code: "", frameworkInputs: 0 };
+    return { chunks: {}, code: "", frameworkInputs: 0 };
   }
-  const imports: string[] = [];
   const entries: string[] = [];
 
-  for (const [index, [id, serverFn]] of Object.entries(
-    transform.serverFnsById,
-  ).entries()) {
+  for (const [splitId, splitSource] of transform.serverRouteSplits) {
+    serverFiles.set(splitId, splitSource);
+  }
+
+  for (const [id, serverFn] of Object.entries(transform.serverFnsById)) {
     const splitModuleId = toWorkspaceModuleId(root, serverFn.extractedFilename);
     const splitSource = transform.serverSplits.get(splitModuleId);
     if (!splitSource) {
       throw new Error(`Missing server split for function ${id}.`);
     }
     serverFiles.set(splitModuleId, splitSource);
-    imports.push(
-      `import { ${serverFn.functionName} as action${index} } from ${JSON.stringify(
+    entries.push(
+      `${JSON.stringify(id)}: () => import(${JSON.stringify(
         splitModuleId,
-      )};`,
+      )}).then((module) => module[${JSON.stringify(serverFn.functionName)}]),`,
     );
-    entries.push(`${JSON.stringify(id)}: action${index},`);
   }
+
+  const { __root__: rootRouteManifest, ...childRouteManifest } = routeManifest;
 
   const startInstanceSource = startModule
     ? `import { startInstance } from ${JSON.stringify(startModule)};
@@ -817,26 +834,31 @@ globalThis.${kernelManifest.server.routerKey} = getRouter;
 globalThis.${kernelManifest.server.manifestKey} = ${JSON.stringify({
         routes: {
           __root__: {
-            ...(cssAssetUrl ? { css: [cssAssetUrl] } : {}),
-            preloads: [clientAssetUrl],
+            css: [
+              ...(cssAssetUrl ? [cssAssetUrl] : []),
+              ...(rootRouteManifest?.css ?? []),
+            ],
+            preloads: [
+              clientAssetUrl,
+              ...(rootRouteManifest?.preloads ?? []),
+            ],
             scripts: [
               { attrs: { src: kernelManifest.client.url } },
               { attrs: { src: clientAssetUrl, type: "module" } },
             ],
           },
-          ...routeManifest,
+          ...childRouteManifest,
         },
       })};`
     : `delete globalThis.${kernelManifest.server.routerKey};
 delete globalThis.${kernelManifest.server.manifestKey};`;
   const resolverSource = `${startInstanceSource}
 ${routerSource}
-${imports.join("\n")}
 const actions = { ${entries.join("\n")} };
 globalThis.${kernelManifest.server.resolverKey} = async function getServerFnById(id) {
-  const action = actions[id];
-  if (!action) throw new Error('Unknown server function: ' + id);
-  return action;
+  const loadAction = actions[id];
+  if (!loadAction) throw new Error('Unknown server function: ' + id);
+  return loadAction();
 }`;
   const entrySource = resolverSource;
   const result = await build({
@@ -855,7 +877,9 @@ globalThis.${kernelManifest.server.resolverKey} = async function getServerFnById
     jsxImportSource: "react",
     legalComments: "none",
     logLevel: "silent",
-    outfile: "/out/server-runtime.js",
+    chunkNames: "chunks/chunk-[hash]",
+    entryNames: "entry",
+    outdir: "/out",
     platform: "node",
     plugins: [
       createKernelExternalPlugin("server"),
@@ -863,16 +887,27 @@ globalThis.${kernelManifest.server.resolverKey} = async function getServerFnById
         entrySource,
         files: serverFiles,
         resolverSource,
+        root,
       }),
     ],
+    splitting: true,
     target: ["node22"],
     treeShaking: true,
     write: false,
   });
-  const output = result.outputFiles.find((file) => file.path.endsWith(".js"));
+  const output = result.outputFiles.find((file) =>
+    file.path.replaceAll("\\", "/").endsWith("/entry.js"),
+  );
   if (!output)
     throw new Error("The Start server runtime did not produce JavaScript.");
   return {
+    chunks: Object.fromEntries(
+      result.outputFiles
+        .filter(
+          (file) => file.path.endsWith(".js") && file.path !== output.path,
+        )
+        .map((file) => [relativeOutputName(file.path), file.text]),
+    ),
     code: output.text,
     frameworkInputs: 0,
   };
@@ -892,18 +927,44 @@ function routeChunkUrl(chunkAssetBase: string, outputName: string) {
   return `${chunkAssetBase}${encodeURIComponent(outputName)}`;
 }
 
+function routeStyleUrl(styleAssetBase: string, outputName: string) {
+  return `${styleAssetBase}${encodeURIComponent(outputName)}`;
+}
+
+function routeStyleLoader(styleUrl: string) {
+  return `
+if (typeof document !== "undefined") {
+  const styleHref = new URL(${JSON.stringify(styleUrl)}, document.baseURI).href;
+  const existingStyle = [...document.querySelectorAll('link[rel="stylesheet"]')]
+    .find((link) => link.href === styleHref);
+  if (!existingStyle) {
+    await new Promise((resolve, reject) => {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = styleHref;
+      link.addEventListener("load", resolve, { once: true });
+      link.addEventListener("error", () => reject(new Error("Unable to load route stylesheet.")), { once: true });
+      document.head.append(link);
+    });
+  }
+}
+`;
+}
+
 function buildClientRouteManifest({
   chunks,
   chunkAssetBase,
+  styleAssetBase,
   metafile,
   routeIds,
 }: {
   chunks: Record<string, string>;
   chunkAssetBase: string;
+  styleAssetBase: string;
   metafile: NonNullable<Awaited<ReturnType<typeof build>>["metafile"]>;
   routeIds: Record<string, string>;
 }) {
-  const manifest: Record<string, { preloads: string[] }> = {};
+  const manifest: Record<string, RouteManifestEntry> = {};
   const outputByName = new Map(
     Object.entries(metafile.outputs).map(([outputPath, output]) => [
       relativeOutputName(outputPath),
@@ -976,9 +1037,90 @@ function buildClientRouteManifest({
     for (const preload of collectPreloads(relativeOutputName(outputPath))) {
       if (!entry.preloads.includes(preload)) entry.preloads.push(preload);
     }
+    if (output.cssBundle) {
+      const cssName = relativeOutputName(output.cssBundle);
+      const cssUrl = routeStyleUrl(styleAssetBase, cssName);
+      entry.css ??= [];
+      if (!entry.css.includes(cssUrl)) entry.css.push(cssUrl);
+    }
   }
 
   return manifest;
+}
+
+function workspacePathFromMetafileInput(
+  inputPath: string,
+  files: WorkspaceFileMap,
+) {
+  const namespaceSeparator = inputPath.indexOf(":");
+  const candidate =
+    namespaceSeparator === -1
+      ? inputPath
+      : inputPath.slice(namespaceSeparator + 1);
+  return files.has(candidate) ? candidate : null;
+}
+
+async function buildStaticClientCss({
+  entryFiles,
+  entryOutputName,
+  metafile,
+  root,
+}: {
+  entryFiles: WorkspaceFileMap;
+  entryOutputName: string;
+  metafile: NonNullable<Awaited<ReturnType<typeof build>>["metafile"]>;
+  root: string;
+}) {
+  const entryOutput = Object.entries(metafile.outputs).find(
+    ([outputPath]) => relativeOutputName(outputPath) === entryOutputName,
+  )?.[1];
+  const entryPoint = entryOutput?.entryPoint;
+  if (!entryPoint) return "";
+
+  const staticInputs = new Set<string>();
+  const pending = [entryPoint];
+  while (pending.length > 0) {
+    const inputPath = pending.pop();
+    if (!inputPath || staticInputs.has(inputPath)) continue;
+    staticInputs.add(inputPath);
+    const input = metafile.inputs[inputPath];
+    if (!input) continue;
+    for (const imported of input.imports) {
+      if (!imported.external && imported.kind !== "dynamic-import") {
+        pending.push(imported.path);
+      }
+    }
+  }
+
+  const cssInputs = [...staticInputs]
+    .map((inputPath) => workspacePathFromMetafileInput(inputPath, entryFiles))
+    .filter((inputPath): inputPath is string => inputPath !== null)
+    .filter((inputPath) => loaderForPath(inputPath) === "css");
+  if (cssInputs.length === 0) return "";
+
+  const cssEntryPath = "__tuto_ssr_static_css_entry__.js";
+  const cssFiles = new Map(entryFiles);
+  cssFiles.set(
+    cssEntryPath,
+    cssInputs
+      .map((inputPath) => `import ${JSON.stringify(`./${inputPath}`)};`)
+      .join("\n"),
+  );
+  const result = await build({
+    absWorkingDir: absoluteWorkingDirectory,
+    bundle: true,
+    charset: "utf8",
+    entryPoints: [cssEntryPath],
+    legalComments: "none",
+    logLevel: "silent",
+    outdir: "/out/static-css",
+    platform: "browser",
+    plugins: [createWorkspacePlugin(cssFiles, root)],
+    write: false,
+  });
+  return (
+    result.outputFiles.find((file) => file.path.endsWith(".css"))?.text ?? ""
+  );
 }
 
 async function buildSsrClientBundle({
@@ -987,6 +1129,7 @@ async function buildSsrClientBundle({
   root,
   serverRouteBase,
   serverFnBase,
+  styleAssetBase,
   routeIds,
   routeSplits,
 }: {
@@ -995,6 +1138,7 @@ async function buildSsrClientBundle({
   root: string;
   serverRouteBase: string;
   serverFnBase: string;
+  styleAssetBase: string;
   routeIds: Record<string, string>;
   routeSplits: WorkspaceFileMap;
 }) {
@@ -1004,6 +1148,7 @@ async function buildSsrClientBundle({
       chunks: {},
       code: "",
       css: "",
+      cssChunks: {},
       frameworkInputs: 0,
       routeManifest: {},
     };
@@ -1071,7 +1216,7 @@ startTransition(() => {
     target: ["es2022"],
     treeShaking: true,
     metafile: true,
-    chunkNames: "chunks/[name]-[hash]",
+    chunkNames: "chunks/chunk-[hash]",
     splitting: true,
     write: false,
   });
@@ -1080,24 +1225,54 @@ startTransition(() => {
   );
   if (!jsOutput)
     throw new Error("The Start SSR client did not produce JavaScript.");
-  const cssOutput = result.outputFiles.find((file) =>
-    file.path.endsWith(".css"),
+  const outputByName = new Map(
+    Object.entries(result.metafile.outputs).map(([outputPath, output]) => [
+      relativeOutputName(outputPath),
+      output,
+    ]),
   );
   const chunks = Object.fromEntries(
     result.outputFiles
       .filter(
         (file) => file.path.endsWith(".js") && file.path !== jsOutput.path,
       )
+      .map((file) => {
+        const outputName = relativeOutputName(file.path);
+        const cssBundle = outputByName.get(outputName)?.cssBundle;
+        return [
+          outputName,
+          cssBundle
+            ? `${routeStyleLoader(
+                routeStyleUrl(styleAssetBase, relativeOutputName(cssBundle)),
+              )}${file.text}`
+            : file.text,
+        ];
+      }),
+  );
+  const cssChunks = Object.fromEntries(
+    result.outputFiles
+      .filter((file) =>
+        file.path.replaceAll("\\", "/").includes("/chunks/") &&
+        file.path.endsWith(".css"),
+      )
       .map((file) => [relativeOutputName(file.path), file.text]),
   );
+  const css = await buildStaticClientCss({
+    entryFiles,
+    entryOutputName: "entry.js",
+    metafile: result.metafile,
+    root,
+  });
   return {
     chunks,
     code: jsOutput.text,
-    css: cssOutput?.text ?? "",
+    css,
+    cssChunks,
     frameworkInputs: 0,
     routeManifest: buildClientRouteManifest({
       chunks,
       chunkAssetBase,
+      styleAssetBase,
       metafile: result.metafile,
       routeIds,
     }),
@@ -1120,6 +1295,7 @@ async function compilePreview(
     revision,
   )}&token=${encodeURIComponent(rpcToken)}&path=`;
   const chunkAssetBase = `${assetBase}chunk&name=`;
+  const styleAssetBase = `${assetBase}style&name=`;
 
   try {
     const originalFileMap = sanitizeWorkspaceFiles(files);
@@ -1187,6 +1363,7 @@ async function compilePreview(
       routeSplits: transform.clientRouteSplits,
       serverRouteBase,
       serverFnBase,
+      styleAssetBase,
     });
     const serverBuild = await buildNativeServerBundle({
       clientAssetUrl: `${assetBase}client`,
@@ -1196,6 +1373,7 @@ async function compilePreview(
       transform,
     });
     const serverBundle = serverBuild.code;
+    const serverChunks = serverBuild.chunks;
     const durationMs = Date.now() - startedAt;
     const buildMetrics = {
       clientFrameworkInputs: 0,
@@ -1205,9 +1383,19 @@ async function compilePreview(
         Object.values(ssrClientBuild.chunks).reduce(
           (bytes, chunk) => bytes + Buffer.byteLength(chunk),
           0,
+        ) +
+        Buffer.byteLength(ssrClientBuild.css) +
+        Object.values(ssrClientBuild.cssChunks).reduce(
+          (bytes, chunk) => bytes + Buffer.byteLength(chunk),
+          0,
         ),
       serverFrameworkInputs: serverBuild.frameworkInputs,
-      serverRevisionBytes: Buffer.byteLength(serverBundle),
+      serverRevisionBytes:
+        Buffer.byteLength(serverBundle) +
+        Object.values(serverChunks).reduce(
+          (bytes, chunk) => bytes + Buffer.byteLength(chunk),
+          0,
+        ),
       sharedClientKernelBytes: kernelManifest.client.bytes,
       sharedServerKernelBytes: kernelManifest.server.bytes,
     };
@@ -1236,7 +1424,9 @@ async function compilePreview(
       ssrClientBundle: ssrClientBuild.code,
       ssrClientChunks: ssrClientBuild.chunks,
       ssrCss: ssrClientBuild.css,
+      ssrCssChunks: ssrClientBuild.cssChunks,
       serverBundle,
+      serverChunks,
       serverFnIds: Object.keys(serverFnsById),
     };
   } catch (error) {
@@ -1261,7 +1451,9 @@ async function compilePreview(
       ssrClientBundle: "",
       ssrClientChunks: {},
       ssrCss: "",
+      ssrCssChunks: {},
       serverBundle: "",
+      serverChunks: {},
       serverFnIds: [],
     };
   }

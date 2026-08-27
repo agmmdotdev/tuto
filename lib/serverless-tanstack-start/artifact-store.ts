@@ -9,7 +9,7 @@ type ArtifactEnvelopePayload = {
   artifact: TanstackStartArtifact;
   createdAt: number;
   expiresAt: number;
-  version: 2;
+  version: 3;
 };
 
 type ArtifactEnvelope = ArtifactEnvelopePayload & {
@@ -106,6 +106,21 @@ function artifactIsValid(artifact: TanstackStartArtifact, revision: string) {
       ([name, value]) =>
         /^chunks\/[A-Za-z0-9_-]+\.js$/.test(name) && typeof value === "string",
     );
+  const cssChunksAreValid =
+    artifact.ssrCssChunks !== null &&
+    typeof artifact.ssrCssChunks === "object" &&
+    Object.entries(artifact.ssrCssChunks).every(
+      ([name, value]) =>
+        /^chunks\/[A-Za-z0-9_-]+\.css$/.test(name) &&
+        typeof value === "string",
+    );
+  const serverChunksAreValid =
+    artifact.serverChunks !== null &&
+    typeof artifact.serverChunks === "object" &&
+    Object.entries(artifact.serverChunks).every(
+      ([name, value]) =>
+        /^chunks\/[A-Za-z0-9_-]+\.js$/.test(name) && typeof value === "string",
+    );
   const routeManifestIsValid =
     artifact.routeManifest !== null &&
     typeof artifact.routeManifest === "object" &&
@@ -114,7 +129,10 @@ function artifactIsValid(artifact: TanstackStartArtifact, revision: string) {
         entry !== null &&
         typeof entry === "object" &&
         Array.isArray(entry.preloads) &&
-        entry.preloads.every((preload) => typeof preload === "string"),
+        entry.preloads.every((preload) => typeof preload === "string") &&
+        (entry.css === undefined ||
+          (Array.isArray(entry.css) &&
+            entry.css.every((stylesheet) => typeof stylesheet === "string"))),
     );
 
   return (
@@ -126,6 +144,8 @@ function artifactIsValid(artifact: TanstackStartArtifact, revision: string) {
     typeof artifact.html === "string" &&
     typeof artifact.ssrClientBundle === "string" &&
     clientChunksAreValid &&
+    cssChunksAreValid &&
+    serverChunksAreValid &&
     routeManifestIsValid &&
     typeof artifact.ssrCss === "string" &&
     typeof artifact.serverBundle === "string" &&
@@ -174,7 +194,7 @@ function createValidatedStore({
         );
       }
       if (
-        payload.version !== 2 ||
+        payload.version !== 3 ||
         !artifactIsValid(payload.artifact, revision)
       ) {
         throw new Error(
@@ -202,7 +222,7 @@ function createValidatedStore({
         artifact,
         createdAt: Date.now(),
         expiresAt: Date.now() + ttlMs,
-        version: 2,
+        version: 3,
       };
       const serialized = JSON.stringify({
         ...payload,

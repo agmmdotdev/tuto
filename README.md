@@ -35,6 +35,12 @@ yarn playwright install firefox
 yarn test:serverless-tanstack-start-browser
 ```
 
+The browser checkpoint covers SSR and hydration, middleware-backed server
+functions, Request body forwarding and redirects, lazy client chunks, and
+route-scoped CSS loaded during navigation. The compiler/request-host suite also
+verifies revision-pinned server entry and route/function chunks inside the
+isolated worker.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

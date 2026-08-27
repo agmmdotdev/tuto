@@ -854,6 +854,8 @@ What is real here:
 - real \`src/start.ts\` request middleware, function middleware, request/response helpers, cookies, and sessions for server-function requests
 - real router SSR, loader execution, hydration, and compiled CSS through the official Start handler
 - route-level client component chunks and matched-route preloads from the official Router compiler
+- route-scoped CSS assets loaded with lazy route chunks instead of one revision-wide stylesheet
+- route component and server-function chunks loaded on demand inside the revision-pinned worker
 - same-origin string, URL, and Request fetches plus redirect hops through the revision-pinned route gateway
 
 What is intentionally still experimental here:
@@ -864,9 +866,11 @@ What is intentionally still experimental here:
 - browser-side server function calls send only the native Start request plus revision and function id
 - server bundles execute in bounded, revision-pinned child workers, not in the Next.js host process
 
-This is the streaming SSR tier, not the complete production host: server code
-and CSS are still revision-wide. Hydration, lazy route navigation, server
-functions, Request bodies, and route redirects run in the browser checkpoint.
+This is the streaming SSR tier, not the complete production host. Hydration,
+lazy route navigation, route CSS, server functions, Request bodies, and route
+redirects run in the browser checkpoint. Server entry/chunk and CSS assets stay
+content-addressed and revision-pinned even though route/function chunks load on
+demand.
 Without durable storage, a missing hot artifact asks you to rebuild; configured
 durable storage restores it across app processes.`,
       },
@@ -1847,9 +1851,9 @@ function ServerFunctionsRoute() {
           </h2>
           <p className="max-w-3xl text-[17px] leading-7 text-stone-600">
             These calls use Start's client runtime and wire format. The endpoint
-            resolves the saved revision to a cached server bundle and executes
-            it in a warm revision-pinned child worker—no workspace files travel
-            on calls.
+            resolves the saved revision to a cached server entry and chunks,
+            then executes it in a warm revision-pinned child worker—no
+            workspace files travel on calls.
           </p>
         </div>
 

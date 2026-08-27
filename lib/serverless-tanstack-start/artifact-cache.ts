@@ -18,12 +18,14 @@ export type TanstackStartArtifact = {
   html: string;
   kernelId: string;
   revision: string;
-  routeManifest: Record<string, { preloads: string[] }>;
+  routeManifest: Record<string, { css?: string[]; preloads: string[] }>;
   rpcToken: string;
   ssrClientBundle: string;
   ssrClientChunks: Record<string, string>;
   ssrCss: string;
+  ssrCssChunks: Record<string, string>;
   serverBundle: string;
+  serverChunks: Record<string, string>;
   serverFnIds: string[];
   success: boolean;
 };
@@ -85,6 +87,14 @@ function artifactBytes(artifact: TanstackStartArtifact) {
     Buffer.byteLength(artifact.serverBundle) +
     Buffer.byteLength(artifact.ssrClientBundle) +
     Buffer.byteLength(artifact.ssrCss) +
+    Object.values(artifact.serverChunks).reduce(
+      (bytes, chunk) => bytes + Buffer.byteLength(chunk),
+      0,
+    ) +
+    Object.values(artifact.ssrCssChunks).reduce(
+      (bytes, chunk) => bytes + Buffer.byteLength(chunk),
+      0,
+    ) +
     Object.values(artifact.ssrClientChunks).reduce(
       (bytes, chunk) => bytes + Buffer.byteLength(chunk),
       0,
