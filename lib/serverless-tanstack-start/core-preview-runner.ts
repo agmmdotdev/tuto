@@ -865,9 +865,11 @@ globalThis.${kernelManifest.server.resolverKey} = async function getServerFnById
 
 async function buildSsrClientBundle({
   files,
+  serverRouteBase,
   serverFnBase,
 }: {
   files: WorkspaceFileMap;
+  serverRouteBase: string;
   serverFnBase: string;
 }) {
   const routerModule = findWorkspaceFile(files, "src/router");
@@ -889,6 +891,24 @@ ${
 
 globalThis.${kernelManifest.client.routerKey} = getRouter;
 globalThis.${kernelManifest.client.startInstanceKey} = startInstance;
+
+const nativeFetch = globalThis.fetch.bind(globalThis);
+globalThis.fetch = (input, init) => {
+  if (typeof input !== 'string' && !(input instanceof URL)) {
+    return nativeFetch(input, init);
+  }
+  const url = new URL(String(input), globalThis.location.href);
+  if (
+    url.origin === globalThis.location.origin &&
+    !url.pathname.startsWith('/api/serverless/tanstack-start/')
+  ) {
+    return nativeFetch(
+      ${JSON.stringify(serverRouteBase)} + encodeURIComponent(url.pathname + url.search),
+      { ...init, credentials: 'include' },
+    );
+  }
+  return nativeFetch(input, init);
+};
 
 startTransition(() => {
   hydrateRoot(document, <StrictMode><StartClient /></StrictMode>);
@@ -949,6 +969,9 @@ async function compilePreview(
   const assetBase = `/api/serverless/tanstack-start/core-asset?revision=${encodeURIComponent(
     revision,
   )}&token=${encodeURIComponent(rpcToken)}&kind=`;
+  const serverRouteBase = `/api/serverless/tanstack-start/core-route?revision=${encodeURIComponent(
+    revision,
+  )}&token=${encodeURIComponent(rpcToken)}&path=`;
 
   try {
     const originalFileMap = sanitizeWorkspaceFiles(files);
@@ -1006,6 +1029,7 @@ async function compilePreview(
 
     const ssrClientBuild = await buildSsrClientBundle({
       files: transformed,
+      serverRouteBase,
       serverFnBase,
     });
     const serverBuild = await buildNativeServerBundle({

@@ -117,12 +117,24 @@ revision hydration module, module preload, and stylesheet to the server-rendered
 document. The default starter template now exports a router factory and renders
 `HeadContent` and `Scripts` from its root route.
 
-This is the first router/SSR slice, not the complete production host. The worker
-protocol currently buffers the rendered response before returning it to Next.js,
-so the React render is streaming internally but the browser does not yet receive
-end-to-end streamed chunks. A complete generated route manifest, server-route
-dispatch verification, route-level chunking, and browser hydration/navigation
-coverage remain.
+The worker protocol now sends response headers, body chunks, and completion as
+separate IPC messages. The pool keeps the revision-pinned worker busy until the
+stream ends, retains the response-size and execution-time limits, and retires a
+worker when its stream fails or is cancelled. The render endpoint injects the
+preview bridge with a streaming transform, so React chunks are no longer joined
+into one buffer before Next.js returns them to the browser.
+
+File routes with `server.handlers` also execute through the same official Start
+host. The authenticated route gateway forwards the HTTP method, headers, body,
+status, repeated cookies, and streamed response. The hydration entry proxies
+ordinary same-origin string/URL `fetch()` calls to that gateway. The official
+TanStack Router compiler removes `server`, `headers`, and `ssr` route options
+from the client revision, preventing server-handler code from leaking into the
+browser bundle.
+
+This remains a checkpoint rather than the complete production host. A complete
+generated per-route manifest, route-level chunking, Request-object fetch proxying,
+and browser hydration/navigation coverage remain.
 
 ### Cross-instance artifact storage
 
@@ -195,9 +207,8 @@ and its H3 request/session graph.
 ## Remaining architecture work
 
 1. complete the Start router host with a generated per-route manifest,
-   route-level chunking, server-route coverage, and end-to-end response
-   streaming. The current checkpoint renders real router documents and loaders,
-   but buffers the worker response before returning it to the browser.
+   route-level client/server chunks, redirect-aware route proxying, Request-
+   object fetch proxying, and browser hydration/navigation coverage.
 2. move execution behind a hardened sandbox such as an isolated container or
    microVM before treating arbitrary untrusted student code as safe for a
    multi-tenant production service. The current child-process boundary protects
@@ -209,6 +220,7 @@ to isolate the compiler experiment. The integrated playground no longer relies
 on that private handler path; its request host and student-facing APIs come from
 the official React Start package exports.
 
-This checkpoint claims router SSR and hydration for the covered document path.
-It does not yet claim end-to-end streaming, complete server-route support, or
-RSC support. Those remain work for the full-runtime tier.
+This checkpoint claims router SSR, hydration, streamed document responses, and
+the covered server-route HTTP path. It does not yet claim production-complete
+route chunking, browser behavior, or RSC support. Those remain work for the
+full-runtime tier.

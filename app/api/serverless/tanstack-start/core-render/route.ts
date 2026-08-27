@@ -1,6 +1,4 @@
-import { resolveArtifactRequest } from "../../../../../lib/serverless-tanstack-start/artifact-request";
-import type { NativeRpcRequest } from "../../../../../lib/serverless-tanstack-start/native-rpc-protocol";
-import { getNativeRpcWorkerPool } from "../../../../../lib/serverless-tanstack-start/native-rpc-worker-pool";
+import { executeNativeArtifactRequest } from "../../../../../lib/serverless-tanstack-start/native-request-host";
 
 export const runtime = "nodejs";
 
@@ -30,81 +28,65 @@ const previewBridgeScript = `<script>
 })();
 </script>`;
 
-function resolveTargetUrl(requestUrl: URL) {
-  const targetPath = requestUrl.searchParams.get("path") ?? "/";
-  if (
-    !targetPath.startsWith("/") ||
-    targetPath.startsWith("//") ||
-    targetPath.length > 2_048
-  ) {
-    return null;
-  }
-
-  const targetUrl = new URL(targetPath, requestUrl.origin);
-  return targetUrl.origin === requestUrl.origin ? targetUrl : null;
-}
-
 export async function GET(request: Request) {
-  const requestUrl = new URL(request.url);
-  const targetUrl = resolveTargetUrl(requestUrl);
-  if (!targetUrl) {
-    return new Response("Invalid preview document path.", {
-      headers: { "cache-control": "no-store" },
-      status: 400,
-    });
+  const response = await executeNativeArtifactRequest(request, {
+    acceptHtml: true,
+  });
+  if (
+    !response.body ||
+    !response.headers.get("content-type")?.includes("text/html")
+  ) {
+    return response;
   }
 
-  const resolution = await resolveArtifactRequest(request);
-  if (!resolution.ok) {
-    return new Response(resolution.message, {
-      headers: { "cache-control": "no-store" },
-      status: resolution.status,
-    });
-  }
-  if (!resolution.artifact.serverBundle) {
-    return new Response("This revision does not contain a server router.", {
-      headers: { "cache-control": "no-store" },
-      status: 422,
-    });
-  }
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let tail = "";
+  let injected = false;
+  const body = response.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      flush(controller) {
+        tail += decoder.decode();
+        controller.enqueue(
+          encoder.encode(
+            injected
+              ? tail
+              : tail.replace("</body>", `${previewBridgeScript}</body>`),
+          ),
+        );
+      },
+      transform(chunk, controller) {
+        const text = decoder.decode(chunk, { stream: true });
+        if (injected) {
+          controller.enqueue(encoder.encode(text));
+          return;
+        }
 
-  const requestHeaders = new Headers(request.headers);
-  requestHeaders.set("accept", "text/html");
-  requestHeaders.set("origin", targetUrl.origin);
-  requestHeaders.set("sec-fetch-site", "same-origin");
-  const nativeRequest: NativeRpcRequest = {
-    headers: [...requestHeaders.entries()],
-    method: "GET",
-    url: targetUrl.toString(),
-  };
-  const execution = await getNativeRpcWorkerPool().execute(
-    {
-      kernelId: resolution.artifact.kernelId,
-      revision: resolution.artifact.revision,
-      serverBundle: resolution.artifact.serverBundle,
-    },
-    nativeRequest,
+        tail += text;
+        const bodyIndex = tail.indexOf("</body>");
+        if (bodyIndex >= 0) {
+          controller.enqueue(
+            encoder.encode(
+              `${tail.slice(0, bodyIndex)}${previewBridgeScript}${tail.slice(bodyIndex)}`,
+            ),
+          );
+          tail = "";
+          injected = true;
+          return;
+        }
+
+        const safeLength = Math.max(0, tail.length - "</body>".length + 1);
+        if (safeLength > 0) {
+          controller.enqueue(encoder.encode(tail.slice(0, safeLength)));
+          tail = tail.slice(safeLength);
+        }
+      },
+    }),
   );
-  const result = execution.result;
-  const headers = new Headers(result.headers);
-  headers.set("cache-control", "no-store");
-  headers.set("x-tuto-artifact-cache", resolution.artifactCache);
-  headers.set("x-tuto-worker-id", execution.workerId);
-  headers.set("x-tuto-worker-request", String(execution.workerRequest));
-  headers.set("x-tuto-worker-reused", String(execution.workerReused));
-  headers.delete("content-length");
-  const resultBody = Buffer.from(result.bodyBase64, "base64");
-  const body = headers.get("content-type")?.includes("text/html")
-    ? Buffer.from(
-        resultBody
-          .toString("utf8")
-          .replace("</body>", `${previewBridgeScript}</body>`),
-      )
-    : resultBody;
 
   return new Response(body, {
-    headers,
-    status: result.status,
-    statusText: result.statusText,
+    headers: response.headers,
+    status: response.status,
+    statusText: response.statusText,
   });
 }

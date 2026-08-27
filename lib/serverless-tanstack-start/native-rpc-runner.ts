@@ -16,6 +16,13 @@ type NativeHandler = (
 ) => Promise<Response>;
 
 const handlerKey = "__TUTO_TANSTACK_START_NATIVE_HANDLER__";
+const activeStreams = new Map<
+  string,
+  {
+    abortController: AbortController;
+    reader?: ReadableStreamDefaultReader<Uint8Array>;
+  }
+>();
 let handler: NativeHandler | undefined;
 let maxResponseBytes = 3_000_000;
 let runtimeDirectory: string | undefined;
@@ -103,7 +110,7 @@ async function initialize(
   send({ pid: process.pid, revision, type: "ready" });
 }
 
-function toRequest(payload: NativeRpcRequest) {
+function toRequest(payload: NativeRpcRequest, signal?: AbortSignal) {
   const method = payload.method.toUpperCase();
   const url = new URL(payload.url);
   if (payload.serverFnId) {
@@ -121,6 +128,7 @@ function toRequest(payload: NativeRpcRequest) {
     method,
     headers: payload.headers,
     body: method === "GET" || method === "HEAD" ? undefined : body,
+    signal,
   });
 }
 
@@ -145,16 +153,69 @@ async function execute(
   command: Extract<NativeWorkerCommand, { type: "execute" }>,
 ) {
   if (!handler) throw new Error("The native RPC worker is not initialized.");
-  const response = await handler(toRequest(command.request), { context: {} });
+  const abortController = new AbortController();
+  if (command.request.streamResponse) {
+    activeStreams.set(command.id, { abortController });
+  }
+  let response: Response;
+  try {
+    response = await handler(
+      toRequest(command.request, abortController.signal),
+      {
+        context: {},
+      },
+    );
+  } catch (error) {
+    activeStreams.delete(command.id);
+    throw error;
+  }
+  const responseHead = {
+    headers: responseHeaderEntries(response.headers),
+    status: response.status,
+    statusText: response.statusText,
+  };
+
+  if (command.request.streamResponse) {
+    send({ id: command.id, response: responseHead, type: "stream-start" });
+    if (!response.body) {
+      activeStreams.delete(command.id);
+      send({ id: command.id, type: "stream-end" });
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const active = activeStreams.get(command.id);
+    if (active) active.reader = reader;
+    let responseBytes = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        responseBytes += value.byteLength;
+        if (responseBytes > maxResponseBytes) {
+          throw new Error("TanStack streamed response is too large.");
+        }
+        send({
+          bodyBase64: Buffer.from(value).toString("base64"),
+          id: command.id,
+          type: "stream-chunk",
+        });
+      }
+      send({ id: command.id, type: "stream-end" });
+    } finally {
+      activeStreams.delete(command.id);
+      reader.releaseLock();
+    }
+    return;
+  }
+
   const responseBuffer = Buffer.from(await response.arrayBuffer());
   if (responseBuffer.byteLength > maxResponseBytes) {
     throw new Error("TanStack server function response is too large.");
   }
   const result: NativeRpcResult = {
     bodyBase64: responseBuffer.toString("base64"),
-    headers: responseHeaderEntries(response.headers),
-    status: response.status,
-    statusText: response.statusText,
+    ...responseHead,
   };
   send({ id: command.id, result, type: "result" });
 }
@@ -169,6 +230,12 @@ async function handleCommand(command: NativeWorkerCommand) {
     process.disconnect();
     return;
   }
+  if (command.type === "cancel") {
+    const active = activeStreams.get(command.id);
+    active?.abortController.abort("Response stream cancelled by host.");
+    await active?.reader?.cancel("Response stream cancelled by host.");
+    return;
+  }
   if (command.type === "execute") {
     try {
       await execute(command);
@@ -179,6 +246,10 @@ async function handleCommand(command: NativeWorkerCommand) {
 }
 
 process.on("message", (message: NativeWorkerCommand) => {
+  if (message.type === "cancel") {
+    void handleCommand(message);
+    return;
+  }
   executionQueue = executionQueue
     .then(() => handleCommand(message))
     .catch(async (error) => {

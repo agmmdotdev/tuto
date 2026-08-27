@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import type {
   NativeRpcRequest,
+  NativeRpcResponseHead,
   NativeRpcResult,
   NativeWorkerCommand,
   NativeWorkerMessage,
@@ -21,9 +22,24 @@ export type NativeRpcWorkerExecution = {
   workerReused: boolean;
 };
 
+export type NativeRpcWorkerStreamExecution = {
+  body: ReadableStream<Uint8Array>;
+  response: NativeRpcResponseHead;
+  workerId: string;
+  workerRequest: number;
+  workerReused: boolean;
+};
+
+type NativeWorkerStream = {
+  body: ReadableStream<Uint8Array>;
+  completed: Promise<void>;
+  response: NativeRpcResponseHead;
+};
+
 type WorkerLike = {
   alive: boolean;
   execute(request: NativeRpcRequest): Promise<NativeRpcResult>;
+  executeStream(request: NativeRpcRequest): Promise<NativeWorkerStream>;
   id: string;
   revision: string;
   terminate(reason?: string): void;
@@ -85,9 +101,15 @@ class NativeRpcChildWorker implements WorkerLike {
   private readyResolve?: () => void;
   private stderr = "";
   private pending?: {
+    completedReject?: (error: Error) => void;
+    completedResolve?: () => void;
+    controller?: ReadableStreamDefaultController<Uint8Array>;
     id: string;
+    mode: "buffered" | "stream";
     reject(error: Error): void;
-    resolve(result: NativeRpcResult): void;
+    resolveResult?: (result: NativeRpcResult) => void;
+    resolveStream?: (stream: NativeWorkerStream) => void;
+    started: boolean;
     timeout: ReturnType<typeof setTimeout>;
   };
 
@@ -141,7 +163,62 @@ class NativeRpcChildWorker implements WorkerLike {
         const pending = this.pending;
         this.pending = undefined;
         clearTimeout(pending.timeout);
-        pending.resolve(message.result);
+        pending.resolveResult?.(message.result);
+        return;
+      }
+      if (
+        message.type === "stream-start" &&
+        this.pending?.id === message.id &&
+        this.pending.mode === "stream"
+      ) {
+        const pending = this.pending;
+        pending.started = true;
+        pending.resolveStream?.({
+          body: new ReadableStream<Uint8Array>({
+            cancel: () => {
+              if (this.pending?.id === message.id) {
+                try {
+                  this.send({ id: message.id, type: "cancel" });
+                } finally {
+                  this.fail(
+                    new Error("TanStack response stream was cancelled."),
+                    true,
+                  );
+                }
+              }
+            },
+            start: (controller) => {
+              pending.controller = controller;
+            },
+          }),
+          completed: new Promise<void>((resolveCompleted, rejectCompleted) => {
+            pending.completedResolve = resolveCompleted;
+            pending.completedReject = rejectCompleted;
+          }),
+          response: message.response,
+        });
+        return;
+      }
+      if (
+        message.type === "stream-chunk" &&
+        this.pending?.id === message.id &&
+        this.pending.mode === "stream"
+      ) {
+        this.pending.controller?.enqueue(
+          Buffer.from(message.bodyBase64, "base64"),
+        );
+        return;
+      }
+      if (
+        message.type === "stream-end" &&
+        this.pending?.id === message.id &&
+        this.pending.mode === "stream"
+      ) {
+        const pending = this.pending;
+        this.pending = undefined;
+        clearTimeout(pending.timeout);
+        pending.controller?.close();
+        pending.completedResolve?.();
         return;
       }
       if (message.type === "error") {
@@ -150,9 +227,9 @@ class NativeRpcChildWorker implements WorkerLike {
         if (message.error.stack) error.stack = message.error.stack;
         if (message.id && this.pending?.id === message.id) {
           const pending = this.pending;
-          this.pending = undefined;
           clearTimeout(pending.timeout);
           pending.reject(error);
+          this.pending = undefined;
         }
         if (message.fatal || !message.id) this.fail(error, true);
       }
@@ -195,8 +272,9 @@ class NativeRpcChildWorker implements WorkerLike {
     this.readyReject = undefined;
     this.readyResolve = undefined;
     if (this.pending) {
-      clearTimeout(this.pending.timeout);
-      this.pending.reject(error);
+      const pending = this.pending;
+      clearTimeout(pending.timeout);
+      pending.reject(error);
       this.pending = undefined;
     }
     if (kill) this.child.kill("SIGKILL");
@@ -220,12 +298,62 @@ class NativeRpcChildWorker implements WorkerLike {
       timeout.unref();
       this.pending = {
         id,
+        mode: "buffered",
         reject: rejectResult,
-        resolve: resolveResult,
+        resolveResult,
+        started: false,
         timeout,
       };
       try {
         this.send({ id, request, type: "execute" });
+      } catch (error) {
+        this.fail(
+          error instanceof Error ? error : new Error(String(error)),
+          true,
+        );
+      }
+    });
+  }
+
+  async executeStream(request: NativeRpcRequest) {
+    await this.ready;
+    if (!this.alive) throw new Error("TanStack RPC worker is unavailable.");
+    if (this.pending) throw new Error("TanStack RPC worker is already busy.");
+    const id = randomUUID();
+
+    return new Promise<NativeWorkerStream>((resolveStream, rejectStream) => {
+      const timeout = setTimeout(() => {
+        this.fail(
+          new Error(
+            `TanStack request exceeded the ${this.executionTimeoutMs}ms execution limit.`,
+          ),
+          true,
+        );
+      }, this.executionTimeoutMs);
+      timeout.unref();
+      this.pending = {
+        id,
+        mode: "stream",
+        reject: (error) => {
+          if (this.pending?.started) {
+            try {
+              this.pending.controller?.error(error);
+            } catch {}
+            this.pending.completedReject?.(error);
+          } else {
+            rejectStream(error);
+          }
+        },
+        resolveStream,
+        started: false,
+        timeout,
+      };
+      try {
+        this.send({
+          id,
+          request: { ...request, streamResponse: true },
+          type: "execute",
+        });
       } catch (error) {
         this.fail(
           error instanceof Error ? error : new Error(String(error)),
@@ -240,8 +368,9 @@ class NativeRpcChildWorker implements WorkerLike {
     this.alive = false;
     this.readyReject?.(new Error("TanStack RPC worker was retired."));
     if (this.pending) {
-      clearTimeout(this.pending.timeout);
-      this.pending.reject(new Error("TanStack RPC worker was retired."));
+      const pending = this.pending;
+      clearTimeout(pending.timeout);
+      pending.reject(new Error("TanStack RPC worker was retired."));
       this.pending = undefined;
     }
     if (this.child.connected) {
@@ -368,6 +497,22 @@ export class NativeRpcWorkerPool {
     }
   }
 
+  private release(entry: PoolEntry) {
+    if (!this.entries.has(entry)) return;
+    entry.busy = false;
+    entry.lastUsed = Date.now();
+    if (entry.completedRequests >= this.maxRequestsPerWorker) {
+      this.retire(entry, "request limit reached");
+    } else {
+      entry.idleTimer = setTimeout(
+        () => this.retire(entry, "idle TTL reached"),
+        this.idleTtlMs,
+      );
+      entry.idleTimer.unref();
+      this.notifyWaiters();
+    }
+  }
+
   async execute(
     artifact: NativeWorkerArtifact,
     request: NativeRpcRequest,
@@ -389,20 +534,37 @@ export class NativeRpcWorkerPool {
       this.retire(entry, "execution failed");
       throw error;
     } finally {
-      if (this.entries.has(entry)) {
-        entry.busy = false;
-        entry.lastUsed = Date.now();
-        if (entry.completedRequests >= this.maxRequestsPerWorker) {
-          this.retire(entry, "request limit reached");
-        } else {
-          entry.idleTimer = setTimeout(
-            () => this.retire(entry!, "idle TTL reached"),
-            this.idleTtlMs,
-          );
-          entry.idleTimer.unref();
-          this.notifyWaiters();
-        }
-      }
+      this.release(entry);
+    }
+  }
+
+  async executeStream(
+    artifact: NativeWorkerArtifact,
+    request: NativeRpcRequest,
+  ): Promise<NativeRpcWorkerStreamExecution> {
+    const entry = await this.acquire(artifact);
+    const workerRequest = entry.completedRequests + 1;
+    const workerReused = entry.completedRequests > 0;
+
+    try {
+      const stream = await entry.worker.executeStream(request);
+      void stream.completed.then(
+        () => {
+          entry.completedRequests += 1;
+          this.release(entry);
+        },
+        () => this.retire(entry, "stream execution failed"),
+      );
+      return {
+        body: stream.body,
+        response: stream.response,
+        workerId: entry.worker.id,
+        workerRequest,
+        workerReused,
+      };
+    } catch (error) {
+      this.retire(entry, "stream startup failed");
+      throw error;
     }
   }
 

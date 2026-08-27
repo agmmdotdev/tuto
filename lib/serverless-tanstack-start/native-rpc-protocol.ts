@@ -3,14 +3,18 @@ export type NativeRpcRequest = {
   headers: Array<[string, string]>;
   method: string;
   serverFnId?: string;
+  streamResponse?: boolean;
   url: string;
 };
 
-export type NativeRpcResult = {
-  bodyBase64: string;
+export type NativeRpcResponseHead = {
   headers: Array<[string, string]>;
   status: number;
   statusText: string;
+};
+
+export type NativeRpcResult = NativeRpcResponseHead & {
+  bodyBase64: string;
 };
 
 export type NativeWorkerCommand =
@@ -27,6 +31,10 @@ export type NativeWorkerCommand =
       id: string;
       request: NativeRpcRequest;
       type: "execute";
+    }
+  | {
+      id: string;
+      type: "cancel";
     }
   | {
       type: "shutdown";
@@ -52,4 +60,18 @@ export type NativeWorkerMessage =
       id: string;
       result: NativeRpcResult;
       type: "result";
+    }
+  | {
+      id: string;
+      response: NativeRpcResponseHead;
+      type: "stream-start";
+    }
+  | {
+      bodyBase64: string;
+      id: string;
+      type: "stream-chunk";
+    }
+  | {
+      id: string;
+      type: "stream-end";
     };

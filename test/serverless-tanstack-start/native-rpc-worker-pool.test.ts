@@ -39,6 +39,17 @@ function fakeWorkerFactory() {
     async execute() {
       return result;
     },
+    async executeStream() {
+      return {
+        body: new ReadableStream({
+          start(controller) {
+            controller.close();
+          },
+        }),
+        completed: Promise.resolve(),
+        response: result,
+      };
+    },
     id: `fake-worker-${++sequence}`,
     revision: workerArtifact.revision,
     terminate() {
@@ -50,6 +61,52 @@ function fakeWorkerFactory() {
 
 afterEach(() => {
   for (const pool of pools.splice(0)) pool.shutdown();
+});
+
+test("keeps a revision worker busy until its response stream ends", async () => {
+  let completeStream!: () => void;
+  const streamCompleted = new Promise<void>((resolveStream) => {
+    completeStream = resolveStream;
+  });
+  const pool = new NativeRpcWorkerPool({
+    idleTtlMs: 60_000,
+    maxWorkers: 1,
+    workerFactory: (workerArtifact, onExit) => ({
+      alive: true,
+      async execute() {
+        return result;
+      },
+      async executeStream() {
+        return {
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("streamed"));
+              controller.close();
+            },
+          }),
+          completed: streamCompleted,
+          response: result,
+        };
+      },
+      id: "fake-stream-worker",
+      revision: workerArtifact.revision,
+      terminate() {
+        this.alive = false;
+        onExit();
+      },
+    }),
+  });
+  pools.push(pool);
+
+  const execution = await pool.executeStream(artifact("s"), request);
+  assert.equal(pool.inspect().busyWorkers, 1);
+  assert.equal(await new Response(execution.body).text(), "streamed");
+  assert.equal(pool.inspect().busyWorkers, 1);
+
+  completeStream();
+  await streamCompleted;
+  await new Promise((resolveTick) => setTimeout(resolveTick, 0));
+  assert.equal(pool.inspect().busyWorkers, 0);
 });
 
 test("reuses a worker only for its pinned revision and evicts by LRU", async () => {

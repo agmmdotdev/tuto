@@ -862,10 +862,10 @@ What is intentionally still experimental here:
 - browser-side server function calls send only the native Start request plus revision and function id
 - server bundles execute in bounded, revision-pinned child workers, not in the Next.js host process
 
-This is the first SSR tier, not the complete production host: worker responses
-are buffered and the route manifest is still revision-wide. Without durable
-storage, a missing hot artifact asks you to rebuild; configured durable storage
-restores it across app processes.`,
+This is the streaming SSR tier, not the complete production host: the route
+manifest and hydration bundle are still revision-wide. Without durable storage,
+a missing hot artifact asks you to rebuild; configured durable storage restores
+it across app processes.`,
       },
       {
         path: "index.html",

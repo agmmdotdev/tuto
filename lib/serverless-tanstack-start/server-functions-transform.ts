@@ -10,6 +10,18 @@ type StartCompilerInternals = {
   createStartCompiler: typeof createStartCompilerType;
   detectKindsInCode: typeof detectKindsInCodeType;
 };
+type RouterCompilerInternals = {
+  compileCodeSplitReferenceRoute(options: {
+    addHmr: boolean;
+    code: string;
+    codeSplitGroupings: [];
+    compilerPlugins: [];
+    deleteNodes: Set<string>;
+    filename: string;
+    id: string;
+    targetFramework: "react";
+  }): { code: string } | null;
+};
 type StartCompilerEnv = Parameters<typeof detectKindsInCodeType>[1];
 
 export type StartServerFunctionsTransform = {
@@ -39,6 +51,53 @@ export async function importStartCompilerInternals(): Promise<StartCompilerInter
     createStartCompiler: host.createStartCompiler,
     detectKindsInCode: compiler.detectKindsInCode,
   };
+}
+
+async function importRouterCompilerInternals(): Promise<RouterCompilerInternals> {
+  const packageRoot = path.dirname(
+    require.resolve("@tanstack/router-plugin/package.json"),
+  );
+  return import(
+    pathToFileURL(
+      path.join(
+        packageRoot,
+        "dist",
+        "esm",
+        "core",
+        "code-splitter",
+        "compilers.js",
+      ),
+    ).toString()
+  ) as Promise<RouterCompilerInternals>;
+}
+
+async function stripClientServerRouteOptions(
+  files: WorkspaceFileMap,
+  root: string,
+) {
+  const { compileCodeSplitReferenceRoute } =
+    await importRouterCompilerInternals();
+
+  for (const [workspacePath, code] of files) {
+    if (
+      !/^src\/routes\/.+\.[cm]?[tj]sx?$/.test(workspacePath) ||
+      (!code.includes("createFileRoute") && !code.includes("createRootRoute"))
+    ) {
+      continue;
+    }
+    const id = toAbsoluteModuleId(root, workspacePath);
+    const result = compileCodeSplitReferenceRoute({
+      addHmr: false,
+      code,
+      codeSplitGroupings: [],
+      compilerPlugins: [],
+      deleteNodes: new Set(["headers", "server", "ssr"]),
+      filename: id,
+      id,
+      targetFramework: "react",
+    });
+    if (result?.code) files.set(workspacePath, result.code);
+  }
 }
 
 export function toAbsoluteModuleId(root: string, workspacePath: string) {
@@ -249,6 +308,8 @@ export async function transformStartServerFunctions(
       );
     }
   }
+
+  await stripClientServerRouteOptions(clientFiles, root);
 
   return {
     clientFiles,

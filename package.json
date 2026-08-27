@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "build:serverless-tanstack-start-transform": "esbuild lib/serverless-tanstack-start/server-functions-transform.ts --bundle --platform=node --format=cjs --target=node22 --outfile=lib/serverless-tanstack-start/server-functions-transform.generated.cjs --external:@tanstack/start-plugin-core",
+    "build:serverless-tanstack-start-transform": "esbuild lib/serverless-tanstack-start/server-functions-transform.ts --bundle --platform=node --format=cjs --target=node22 --outfile=lib/serverless-tanstack-start/server-functions-transform.generated.cjs --external:@tanstack/router-plugin --external:@tanstack/start-plugin-core",
     "build:serverless-tanstack-start-runners": "node scripts/build-serverless-tanstack-start-runners.mjs",
     "build:serverless-tanstack-start-runtime": "yarn build:serverless-tanstack-start-transform && yarn build:serverless-tanstack-start-runners",
     "start": "next start",

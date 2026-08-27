@@ -13,6 +13,7 @@ import {
 } from "../../app/api/serverless/tanstack-start/core-rpc/route";
 import { GET as getNativeAsset } from "../../app/api/serverless/tanstack-start/core-asset/route";
 import { GET as handleNativeRender } from "../../app/api/serverless/tanstack-start/core-render/route";
+import { POST as handleNativeRoutePost } from "../../app/api/serverless/tanstack-start/core-route/route";
 import { GET as getClientKernel } from "../../app/api/serverless/tanstack-start/kernel/client/route";
 import {
   clearTanstackStartArtifactCache,
@@ -451,6 +452,25 @@ test("the native Start host renders a workspace router with loaders", async () =
       content: "export {};",
     },
     {
+      path: "src/routes/api.hello.ts",
+      language: "ts",
+      content: `import { createFileRoute } from '@tanstack/react-router';
+export const Route = createFileRoute('/api/hello')({
+  server: {
+    handlers: {
+      POST: async ({ request }) => Response.json({
+        body: await request.json(),
+        method: request.method,
+        source: 'server-route-secret-marker',
+      }, {
+        status: 201,
+        headers: { 'x-server-route': 'native-start' },
+      }),
+    },
+  },
+});`,
+    },
+    {
       path: "src/router.tsx",
       language: "tsx",
       content: `import React from 'react';
@@ -461,6 +481,7 @@ import {
   createRoute,
   createRouter,
 } from '@tanstack/react-router';
+import { Route as apiRouteImport } from './routes/api.hello';
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -478,12 +499,18 @@ const helloRoute = createRoute({
   component: HelloRoute,
 });
 
+const apiRoute = apiRouteImport.update({
+  id: '/api/hello',
+  path: '/api/hello',
+  getParentRoute: () => rootRoute,
+});
+
 function HelloRoute() {
   const data = helloRoute.useLoaderData();
   return <h1 data-ssr="true">{data.message}</h1>;
 }
 
-const routeTree = rootRoute.addChildren([helloRoute]);
+const routeTree = rootRoute.addChildren([helloRoute, apiRoute]);
 
 export function getRouter() {
   return createRouter({ routeTree });
@@ -527,6 +554,26 @@ export function getRouter() {
     assert.match(html, /loader rendered on the server/);
     assert.match(html, /tanstack-start\/kernel\/client/);
     assert.match(html, /tanstack-start\/core-asset/);
+    assert.match(html, /tuto-serverless-preview-log/);
+
+    const routeResponse = await handleNativeRoutePost(
+      new Request(
+        `http://tuto.local/api/serverless/tanstack-start/core-route?revision=${preview.revision}&token=${preview.rpcToken}&path=%2Fapi%2Fhello`,
+        {
+          body: JSON.stringify({ name: "Ada" }),
+          headers: { "content-type": "application/json" },
+          method: "POST",
+        },
+      ),
+    );
+    assert.equal(routeResponse.status, 201);
+    assert.equal(routeResponse.headers.get("x-server-route"), "native-start");
+    assert.equal(routeResponse.headers.get("x-tuto-worker-reused"), "true");
+    assert.deepEqual(await routeResponse.json(), {
+      body: { name: "Ada" },
+      method: "POST",
+      source: "server-route-secret-marker",
+    });
 
     const clientAsset = await getNativeAsset(
       new Request(
@@ -539,6 +586,8 @@ export function getRouter() {
       /text\/javascript/,
     );
     assert.ok((await clientAsset.text()).length > 100);
+    assert.match(preview.ssrClientBundle, /tanstack-start\/core-route/);
+    assert.doesNotMatch(preview.ssrClientBundle, /server-route-secret-marker/);
   } finally {
     clearTanstackStartArtifactCache();
     clearNativeRpcWorkerPoolForTests();
