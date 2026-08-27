@@ -97,6 +97,18 @@ worker startup. The worker limits can be tuned with
 `TUTO_TANSTACK_WORKER_STARTUP_TIMEOUT_MS`, and
 `TUTO_TANSTACK_WORKER_MAX_RESPONSE_BYTES`.
 
+Compiled server entry and chunk sources do not cross the child-process IPC
+channel. The host writes each SHA-256-addressed blob once into a shared runtime
+directory and builds immutable runtime views with hard links. A view is keyed by
+the complete runtime manifest, so different compiler outputs for the same
+workspace revision can coexist. Workers receive only the revision, kernel ID,
+entry hash, and absolute entry path. Cross-process pin files keep live views out
+of cleanup; released views are pruned least-recently-used with defaults of 24
+views and 64 MiB of unique blobs. Configure the directory and bounds with
+`TUTO_TANSTACK_SERVER_RUNTIME_ROOT`,
+`TUTO_TANSTACK_SERVER_RUNTIME_MAX_REVISIONS`, and
+`TUTO_TANSTACK_SERVER_RUNTIME_MAX_BYTES`.
+
 Successful RPC responses expose `x-tuto-worker-id`,
 `x-tuto-worker-request`, and `x-tuto-worker-reused` for diagnostics. These are
 observability headers, not application state or cache keys.
@@ -217,9 +229,10 @@ and its H3 request/session graph.
 
 ## Remaining architecture work
 
-1. complete the Start router host with route-level server chunks and CSS plus
-   browser hydration/navigation coverage.
-2. move execution behind a hardened sandbox such as an isolated container or
+1. add the full-runtime features that are still outside this checkpoint, such
+   as React Server Components.
+2. move execution and the shared runtime directory behind a hardened sandbox
+   such as an isolated container or
    microVM before treating arbitrary untrusted student code as safe for a
    multi-tenant production service. The current child-process boundary protects
    the Next.js host module graph and makes worker lifecycle enforceable; it is
@@ -231,6 +244,7 @@ on that private handler path; its request host and student-facing APIs come from
 the official React Start package exports.
 
 This checkpoint claims router SSR, hydration, streamed document responses,
-matched-route client component chunks, and the covered server-route HTTP path.
-It does not yet claim production-complete server/CSS chunking, browser behavior,
-or RSC support. Those remain work for the full-runtime tier.
+matched-route client component chunks, route/server-function ESM chunks,
+route-scoped CSS loading during browser navigation, and the covered server-route
+HTTP path. It does not yet claim RSC support or an operating-system security
+boundary. Those remain work for the full-runtime tier.

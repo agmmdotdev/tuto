@@ -1,5 +1,5 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
+import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import kernelManifest from "./kernel-manifest.generated.json";
@@ -25,7 +25,7 @@ const activeStreams = new Map<
 >();
 let handler: NativeHandler | undefined;
 let maxResponseBytes = 3_000_000;
-let runtimeDirectory: string | undefined;
+let runtimeEntryPath: string | undefined;
 let revision: string | undefined;
 let executionQueue = Promise.resolve();
 let shuttingDown = false;
@@ -63,54 +63,49 @@ async function cleanup() {
   delete (globalThis as typeof globalThis & Record<string, unknown>)[
     kernelManifest.server.manifestKey
   ];
-  if (runtimeDirectory) {
-    await rm(runtimeDirectory, { force: true, recursive: true });
-  }
 }
 
 async function initialize(
   command: Extract<NativeWorkerCommand, { type: "initialize" }>,
 ) {
-  if (handler || runtimeDirectory) {
+  if (handler || runtimeEntryPath) {
     throw new Error("The native RPC worker is already initialized.");
   }
-  if (command.artifact.kernelId !== kernelManifest.id) {
+  if (command.runtime.kernelId !== kernelManifest.id) {
     throw new Error(
-      `Unknown TanStack Start server kernel: ${command.artifact.kernelId}`,
+      `Unknown TanStack Start server kernel: ${command.runtime.kernelId}`,
     );
   }
-  if (!/^[a-f0-9]{64}$/.test(command.artifact.revision)) {
+  if (!/^[a-f0-9]{64}$/.test(command.runtime.revision)) {
     throw new Error("Invalid TanStack Start artifact revision.");
+  }
+  if (!/^[a-f0-9]{64}$/.test(command.runtime.entryHash)) {
+    throw new Error("Invalid TanStack Start runtime entry hash.");
+  }
+  if (!path.isAbsolute(command.runtime.entryPath)) {
+    throw new Error("TanStack Start runtime entry path must be absolute.");
   }
 
   maxResponseBytes = command.maxResponseBytes;
-  revision = command.artifact.revision;
-  runtimeDirectory = await mkdtemp(
-    path.join(tmpdir(), "tuto-start-rpc-worker-"),
-  );
-  const initializedRuntimeDirectory = runtimeDirectory;
-  const runtimePath = path.join(initializedRuntimeDirectory, "artifact.mjs");
+  revision = command.runtime.revision;
+  runtimeEntryPath = await realpath(command.runtime.entryPath);
+  const runtimeStat = await stat(runtimeEntryPath);
+  if (!runtimeStat.isFile() || path.basename(runtimeEntryPath) !== "entry.mjs") {
+    throw new Error("Invalid TanStack Start runtime entry file.");
+  }
+  const entrySource = await readFile(runtimeEntryPath);
+  const entryHash = createHash("sha256").update(entrySource).digest("hex");
+  if (entryHash !== command.runtime.entryHash) {
+    throw new Error("TanStack Start runtime entry failed integrity validation.");
+  }
   const kernelPath = path.resolve(
     process.cwd(),
     "lib",
     "serverless-tanstack-start",
     kernelManifest.server.file,
   );
-  await Promise.all(
-    Object.entries(command.artifact.serverChunks).map(
-      async ([chunkName, chunkSource]) => {
-        if (!/^chunks\/[A-Za-z0-9_-]+\.js$/.test(chunkName)) {
-          throw new Error("Invalid TanStack Start server chunk name.");
-        }
-        const chunkPath = path.join(initializedRuntimeDirectory, chunkName);
-        await mkdir(path.dirname(chunkPath), { recursive: true });
-        await writeFile(chunkPath, chunkSource, "utf8");
-      },
-    ),
-  );
-  await writeFile(runtimePath, command.artifact.serverBundle, "utf8");
   await import(pathToFileURL(kernelPath).href);
-  await import(pathToFileURL(runtimePath).href);
+  await import(pathToFileURL(runtimeEntryPath).href);
   handler = (globalThis as typeof globalThis & Record<string, unknown>)[
     handlerKey
   ] as NativeHandler | undefined;

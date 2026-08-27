@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, test } from "vitest";
 import type {
@@ -9,8 +11,10 @@ import {
   NativeRpcWorkerPool,
   type NativeWorkerArtifact,
 } from "../../lib/serverless-tanstack-start/native-rpc-worker-pool";
+import { ServerRuntimeStore } from "../../lib/serverless-tanstack-start/server-runtime-store";
 
 const pools: NativeRpcWorkerPool[] = [];
+const runtimeRoots: string[] = [];
 const request: NativeRpcRequest = {
   headers: [],
   method: "POST",
@@ -26,7 +30,7 @@ const result: NativeRpcResult = {
 
 function artifact(revisionCharacter: string): NativeWorkerArtifact {
   return {
-    kernelId: "test-kernel",
+    kernelId: "e".repeat(20),
     revision: revisionCharacter.repeat(64),
     serverBundle: "",
     serverChunks: {},
@@ -60,8 +64,50 @@ function fakeWorkerFactory() {
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const pool of pools.splice(0)) pool.shutdown();
+  await Promise.all(
+    runtimeRoots.splice(0).map((root) =>
+      rm(root, { force: true, recursive: true }),
+    ),
+  );
+});
+
+test("sends only a content-addressed entry path when initializing a child", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "tuto-worker-ipc-test-"));
+  runtimeRoots.push(root);
+  const pool = new NativeRpcWorkerPool({
+    idleTtlMs: 60_000,
+    maxWorkers: 1,
+    runtimeStore: new ServerRuntimeStore({ root }),
+    workerPath: path.resolve(
+      process.cwd(),
+      "test",
+      "fixtures",
+      "native-rpc-path-worker.cjs",
+    ),
+  });
+  pools.push(pool);
+
+  const execution = await pool.execute(
+    {
+      kernelId: "e".repeat(20),
+      revision: "f".repeat(64),
+      serverBundle: `globalThis.marker = "ipc-secret-source";\n`,
+      serverChunks: {},
+    },
+    request,
+  );
+
+  assert.deepEqual(
+    JSON.parse(Buffer.from(execution.result.bodyBase64, "base64").toString()),
+    {
+      entryContainsSource: true,
+      entryPathIsAbsolute: true,
+      initializeBytesUnderOneKilobyte: true,
+      sourceCrossedIpc: false,
+    },
+  );
 });
 
 test("keeps a revision worker busy until its response stream ends", async () => {
@@ -72,30 +118,33 @@ test("keeps a revision worker busy until its response stream ends", async () => 
   const pool = new NativeRpcWorkerPool({
     idleTtlMs: 60_000,
     maxWorkers: 1,
-    workerFactory: (workerArtifact, onExit) => ({
-      alive: true,
-      async execute() {
-        return result;
-      },
-      async executeStream() {
-        return {
-          body: new ReadableStream({
-            start(controller) {
-              controller.enqueue(new TextEncoder().encode("streamed"));
-              controller.close();
-            },
-          }),
-          completed: streamCompleted,
-          response: result,
-        };
-      },
-      id: "fake-stream-worker",
-      revision: workerArtifact.revision,
-      terminate() {
-        this.alive = false;
-        onExit();
-      },
-    }),
+    workerFactory: async (workerArtifact, onExit) => {
+      const worker = {
+        alive: true,
+        async execute() {
+          return result;
+        },
+        async executeStream() {
+          return {
+            body: new ReadableStream({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode("streamed"));
+                controller.close();
+              },
+            }),
+            completed: streamCompleted,
+            response: result,
+          };
+        },
+        id: "fake-stream-worker",
+        revision: workerArtifact.revision,
+        terminate() {
+          worker.alive = false;
+          onExit();
+        },
+      };
+      return worker;
+    },
   });
   pools.push(pool);
 
@@ -154,10 +203,13 @@ test("retires workers after their request cap", async () => {
 });
 
 test("kills a native child that exceeds the execution timeout", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "tuto-worker-timeout-test-"));
+  runtimeRoots.push(root);
   const pool = new NativeRpcWorkerPool({
     executionTimeoutMs: 25,
     idleTtlMs: 60_000,
     maxWorkers: 1,
+    runtimeStore: new ServerRuntimeStore({ root }),
     startupTimeoutMs: 2_000,
     workerPath: path.resolve(
       process.cwd(),

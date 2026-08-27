@@ -8,13 +8,13 @@ import type {
   NativeWorkerCommand,
   NativeWorkerMessage,
 } from "./native-rpc-protocol";
+import {
+  getServerRuntimeStore,
+  type ServerRuntimeArtifact,
+  type ServerRuntimeStore,
+} from "./server-runtime-store";
 
-export type NativeWorkerArtifact = {
-  kernelId: string;
-  revision: string;
-  serverBundle: string;
-  serverChunks: Record<string, string>;
-};
+export type NativeWorkerArtifact = ServerRuntimeArtifact;
 
 export type NativeRpcWorkerExecution = {
   result: NativeRpcResult;
@@ -49,7 +49,7 @@ type WorkerLike = {
 type WorkerFactory = (
   artifact: NativeWorkerArtifact,
   onExit: () => void,
-) => WorkerLike;
+) => Promise<WorkerLike> | WorkerLike;
 
 type PoolEntry = {
   busy: boolean;
@@ -66,6 +66,7 @@ export type NativeRpcWorkerPoolOptions = {
   maxResponseBytes?: number;
   maxWorkers?: number;
   startupTimeoutMs?: number;
+  runtimeStore?: ServerRuntimeStore;
   workerFactory?: WorkerFactory;
   workerPath?: string;
 };
@@ -115,14 +116,19 @@ class NativeRpcChildWorker implements WorkerLike {
   };
 
   constructor({
-    artifact,
+    runtime,
     executionTimeoutMs,
     maxResponseBytes,
     onExit,
     startupTimeoutMs,
     workerPath,
   }: {
-    artifact: NativeWorkerArtifact;
+    runtime: {
+      entryHash: string;
+      entryPath: string;
+      kernelId: string;
+      revision: string;
+    };
     executionTimeoutMs: number;
     maxResponseBytes: number;
     onExit: () => void;
@@ -132,7 +138,7 @@ class NativeRpcChildWorker implements WorkerLike {
     this.executionTimeoutMs = executionTimeoutMs;
     this.maxOutputBytes = maxResponseBytes;
     this.onExit = onExit;
-    this.revision = artifact.revision;
+    this.revision = runtime.revision;
     this.child = spawn(process.execPath, [workerPath], {
       cwd: process.cwd(),
       stdio: ["ignore", "ignore", "pipe", "ipc"],
@@ -252,8 +258,8 @@ class NativeRpcChildWorker implements WorkerLike {
     });
     this.child.once("spawn", () => {
       this.send({
-        artifact,
         maxResponseBytes,
+        runtime,
         type: "initialize",
       });
     });
@@ -391,6 +397,8 @@ export class NativeRpcWorkerPool {
   private readonly maxWorkers: number;
   private readonly workerFactory: WorkerFactory;
   private readonly waiters = new Set<() => void>();
+  private closed = false;
+  private pendingSpawns = 0;
   private retiredWorkers = 0;
   private spawnedWorkers = 0;
 
@@ -415,6 +423,7 @@ export class NativeRpcWorkerPool {
         "serverless-tanstack-start",
         "native-rpc-runner.generated.cjs",
       );
+    const runtimeStore = options.runtimeStore ?? getServerRuntimeStore();
     this.idleTtlMs = positiveInteger(options.idleTtlMs, defaultIdleTtlMs);
     this.maxRequestsPerWorker = positiveInteger(
       options.maxRequestsPerWorker,
@@ -423,15 +432,29 @@ export class NativeRpcWorkerPool {
     this.maxWorkers = positiveInteger(options.maxWorkers, defaultMaxWorkers);
     this.workerFactory =
       options.workerFactory ??
-      ((artifact, onExit) =>
-        new NativeRpcChildWorker({
-          artifact,
-          executionTimeoutMs,
-          maxResponseBytes,
-          onExit,
-          startupTimeoutMs,
-          workerPath,
-        }));
+      (async (artifact, onExit) => {
+        const lease = await runtimeStore.acquire(artifact);
+        try {
+          return new NativeRpcChildWorker({
+            executionTimeoutMs,
+            maxResponseBytes,
+            onExit: () => {
+              void lease.release().then(onExit, onExit);
+            },
+            runtime: {
+              entryHash: lease.entryHash,
+              entryPath: lease.entryPath,
+              kernelId: lease.kernelId,
+              revision: lease.revision,
+            },
+            startupTimeoutMs,
+            workerPath,
+          });
+        } catch (error) {
+          await lease.release();
+          throw error;
+        }
+      });
   }
 
   private notifyWaiters() {
@@ -453,11 +476,18 @@ export class NativeRpcWorkerPool {
     this.notifyWaiters();
   }
 
-  private spawnEntry(artifact: NativeWorkerArtifact) {
+  private async spawnEntry(artifact: NativeWorkerArtifact) {
     const entryRef: { current?: PoolEntry } = {};
-    const worker = this.workerFactory(artifact, () => {
+    const worker = await this.workerFactory(artifact, () => {
       if (entryRef.current) this.retire(entryRef.current, "worker exited");
     });
+    if (this.closed) {
+      worker.terminate("pool shut down during startup");
+      throw new Error("TanStack RPC worker pool is shut down.");
+    }
+    if (!worker.alive) {
+      throw new Error("TanStack RPC worker exited during startup.");
+    }
     const entry: PoolEntry = {
       busy: true,
       completedRequests: 0,
@@ -472,6 +502,9 @@ export class NativeRpcWorkerPool {
 
   private async acquire(artifact: NativeWorkerArtifact): Promise<PoolEntry> {
     while (true) {
+      if (this.closed) {
+        throw new Error("TanStack RPC worker pool is shut down.");
+      }
       for (const entry of this.entries) {
         if (!entry.worker.alive) this.retire(entry, "worker unavailable");
       }
@@ -484,8 +517,14 @@ export class NativeRpcWorkerPool {
         reusable.idleTimer = undefined;
         return reusable;
       }
-      if (this.entries.size < this.maxWorkers) {
-        return this.spawnEntry(artifact);
+      if (this.entries.size + this.pendingSpawns < this.maxWorkers) {
+        this.pendingSpawns += 1;
+        try {
+          return await this.spawnEntry(artifact);
+        } finally {
+          this.pendingSpawns -= 1;
+          this.notifyWaiters();
+        }
       }
       const evictable = [...this.entries]
         .filter((entry) => !entry.busy)
@@ -590,9 +629,12 @@ export class NativeRpcWorkerPool {
   }
 
   shutdown() {
+    if (this.closed) return;
+    this.closed = true;
     for (const entry of [...this.entries]) {
       this.retire(entry, "pool shutdown");
     }
+    this.notifyWaiters();
   }
 }
 

@@ -19,11 +19,11 @@ export type NativeRpcResult = NativeRpcResponseHead & {
 
 export type NativeWorkerCommand =
   | {
-      artifact: {
+      runtime: {
+        entryHash: string;
+        entryPath: string;
         kernelId: string;
         revision: string;
-        serverBundle: string;
-        serverChunks: Record<string, string>;
       };
       maxResponseBytes: number;
       type: "initialize";
