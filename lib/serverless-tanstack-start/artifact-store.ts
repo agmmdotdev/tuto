@@ -9,6 +9,10 @@ import path from "node:path";
 import { AwsClient } from "aws4fetch";
 import kernelManifest from "./kernel-manifest.generated.json";
 import type { TanstackStartArtifact } from "./artifact-cache";
+import type {
+  ServerRuntimeArtifact,
+  ServerRuntimeSource,
+} from "./server-runtime-store";
 
 type LegacyArtifactEnvelopePayload = {
   artifact: TanstackStartArtifact;
@@ -73,6 +77,11 @@ export type TanstackStartArtifactServerResult =
     serverChunks: Record<string, string>;
   };
 
+export type TanstackStartArtifactServerRuntimeResult =
+  TanstackStartArtifactMetadata & {
+    runtime: ServerRuntimeArtifact;
+  };
+
 export type TanstackStartArtifactSummary = TanstackStartArtifactMetadata & {
   html: string;
 };
@@ -108,6 +117,9 @@ export type TanstackStartArtifactStore = {
   getServer?(
     revision: string,
   ): Promise<TanstackStartArtifactServerResult | null>;
+  getServerRuntime?(
+    revision: string,
+  ): Promise<TanstackStartArtifactServerRuntimeResult | null>;
   getSummary?(revision: string): Promise<TanstackStartArtifactSummary | null>;
   put(artifact: TanstackStartArtifact): Promise<void>;
 };
@@ -342,7 +354,7 @@ function artifactIsValid(
 }
 
 function artifactMetadata(
-  artifact: TanstackStartArtifact | ArtifactManifest,
+  artifact: TanstackStartArtifactMetadata,
 ): TanstackStartArtifactMetadata {
   return {
     buildMetrics: artifact.buildMetrics,
@@ -387,6 +399,20 @@ function artifactAssetDescriptor(
     case "style-chunk":
       return manifest.sources.ssrCssChunks[asset.name] ?? null;
   }
+}
+
+function inlineServerRuntime(
+  artifact: Pick<
+    TanstackStartArtifact,
+    "kernelId" | "revision" | "serverBundle" | "serverChunks"
+  >,
+): ServerRuntimeArtifact {
+  return {
+    kernelId: artifact.kernelId,
+    revision: artifact.revision,
+    serverBundle: artifact.serverBundle,
+    serverChunks: artifact.serverChunks,
+  };
 }
 
 function descriptorIsValid(value: unknown): value is ArtifactBlobDescriptor {
@@ -573,7 +599,10 @@ export function createTanstackStartArtifactStore({
     }
   };
 
-  const loadBlob = async (descriptor: ArtifactBlobDescriptor) => {
+  const loadBlob = async (
+    descriptor: ArtifactBlobDescriptor,
+    cacheResult = true,
+  ) => {
     const cached = cache.get(descriptor.hash);
     if (cached !== undefined) {
       if (Buffer.byteLength(cached) !== descriptor.bytes) {
@@ -595,9 +624,17 @@ export function createTanstackStartArtifactStore({
         `Stored TanStack artifact blob ${descriptor.hash} failed integrity validation.`,
       );
     }
-    cache.set(descriptor.hash, source);
+    if (cacheResult) cache.set(descriptor.hash, source);
     return source;
   };
+
+  const deferredSource = (
+    descriptor: ArtifactBlobDescriptor,
+  ): ServerRuntimeSource => ({
+    bytes: descriptor.bytes,
+    hash: descriptor.hash,
+    load: () => loadBlob(descriptor, false),
+  });
 
   const loadDescriptors = async (descriptors: ArtifactBlobDescriptor[]) => {
     const uniqueDescriptors = new Map<string, ArtifactBlobDescriptor>();
@@ -773,6 +810,34 @@ export function createTanstackStartArtifactStore({
             ([name, descriptor]) => [name, blobs.get(descriptor.hash)!],
           ),
         ),
+      };
+    },
+
+    async getServerRuntime(revision) {
+      const payload = await loadManifest(revision);
+      if (!payload) return null;
+      if (payload.version === 3) {
+        return {
+          ...artifactMetadata(payload.artifact),
+          runtime: inlineServerRuntime(payload.artifact),
+        };
+      }
+      return {
+        ...artifactMetadata(payload.artifact),
+        runtime: {
+          kernelId: payload.artifact.kernelId,
+          revision: payload.artifact.revision,
+          serverBundle: "",
+          serverChunks: {},
+          serverSources: {
+            chunks: Object.fromEntries(
+              Object.entries(payload.artifact.sources.serverChunks).map(
+                ([name, descriptor]) => [name, deferredSource(descriptor)],
+              ),
+            ),
+            entry: deferredSource(payload.artifact.sources.serverBundle),
+          },
+        },
       };
     },
 
@@ -1063,6 +1128,23 @@ export async function getDurableTanstackStartServerArtifact(revision: string) {
         ...artifactMetadata(artifact),
         serverBundle: artifact.serverBundle,
         serverChunks: artifact.serverChunks,
+      }
+    : null;
+}
+
+export async function getDurableTanstackStartServerRuntimeArtifact(
+  revision: string,
+) {
+  const store = getStore();
+  if (!store) return null;
+  if (store.getServerRuntime) return store.getServerRuntime(revision);
+  const artifact = store.getServer
+    ? await store.getServer(revision)
+    : await store.get(revision);
+  return artifact
+    ? {
+        ...artifactMetadata(artifact),
+        runtime: inlineServerRuntime(artifact),
       }
     : null;
 }

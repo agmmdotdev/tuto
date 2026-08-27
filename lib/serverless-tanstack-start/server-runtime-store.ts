@@ -18,6 +18,14 @@ export type ServerRuntimeArtifact = {
   revision: string;
   serverBundle: string;
   serverChunks: Record<string, string>;
+  serverSources?: {
+    chunks: Record<string, ServerRuntimeSource>;
+    entry: ServerRuntimeSource;
+  };
+};
+
+export type ServerRuntimeSource = RuntimeFile & {
+  load(): Promise<string>;
 };
 
 type RuntimeFile = {
@@ -87,6 +95,17 @@ function fileDescriptor(source: string): RuntimeFile {
   };
 }
 
+function sourceDescriptor(source: ServerRuntimeSource): RuntimeFile {
+  if (
+    !Number.isSafeInteger(source.bytes) ||
+    source.bytes < 0 ||
+    !/^[a-f0-9]{64}$/.test(source.hash)
+  ) {
+    throw new Error("Invalid TanStack Start runtime source descriptor.");
+  }
+  return { bytes: source.bytes, hash: source.hash };
+}
+
 function errorCode(error: unknown) {
   return error instanceof Error && "code" in error
     ? String((error as NodeJS.ErrnoException).code)
@@ -101,20 +120,28 @@ function runtimeManifest(artifact: ServerRuntimeArtifact): RuntimeManifest {
     throw new Error("Invalid TanStack Start kernel id.");
   }
 
+  const deferred = artifact.serverSources;
   const chunks = Object.fromEntries(
-    Object.entries(artifact.serverChunks)
+    Object.entries(deferred?.chunks ?? artifact.serverChunks)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([name, source]) => {
         if (!chunkNamePattern.test(name)) {
           throw new Error("Invalid TanStack Start server chunk name.");
         }
-        return [name, fileDescriptor(source)];
+        return [
+          name,
+          typeof source === "string"
+            ? fileDescriptor(source)
+            : sourceDescriptor(source),
+        ];
       }),
   );
 
   return {
     chunks,
-    entry: fileDescriptor(artifact.serverBundle),
+    entry: deferred
+      ? sourceDescriptor(deferred.entry)
+      : fileDescriptor(artifact.serverBundle),
     kernelId: artifact.kernelId,
     revision: artifact.revision,
     version: 1,
@@ -233,7 +260,10 @@ export class ServerRuntimeStore {
     }
   }
 
-  private async materializeBlob(source: string, descriptor: RuntimeFile) {
+  private async materializeBlob(
+    source: string | ServerRuntimeSource,
+    descriptor: RuntimeFile,
+  ) {
     const destination = this.blobPath(descriptor.hash);
     if (await pathExists(destination)) {
       await this.verifyBlob(destination, descriptor);
@@ -244,7 +274,18 @@ export class ServerRuntimeStore {
       this.temporaryRoot,
       `${descriptor.hash}-${process.pid}-${randomUUID()}.tmp`,
     );
-    await writeFile(temporaryPath, source, {
+    const deferred = typeof source !== "string";
+    const contents = deferred ? await source.load() : source;
+    if (
+      deferred &&
+      (Buffer.byteLength(contents) !== descriptor.bytes ||
+        sha256(contents) !== descriptor.hash)
+    ) {
+      throw new Error(
+        `Runtime source ${descriptor.hash} failed integrity validation.`,
+      );
+    }
+    await writeFile(temporaryPath, contents, {
       encoding: "utf8",
       flag: "wx",
       mode: 0o444,
@@ -302,15 +343,19 @@ export class ServerRuntimeStore {
       return this.validateRevision(revisionPath, manifest, id);
     }
 
+    const deferred = artifact.serverSources;
     const entryBlob = await this.materializeBlob(
-      artifact.serverBundle,
+      deferred?.entry ?? artifact.serverBundle,
       manifest.entry,
     );
     const chunkBlobs = new Map<string, string>();
     for (const [name, descriptor] of Object.entries(manifest.chunks)) {
       chunkBlobs.set(
         name,
-        await this.materializeBlob(artifact.serverChunks[name]!, descriptor),
+        await this.materializeBlob(
+          deferred?.chunks[name] ?? artifact.serverChunks[name]!,
+          descriptor,
+        ),
       );
     }
 
@@ -511,6 +556,12 @@ export class ServerRuntimeStore {
       };
     });
   }
+}
+
+export function serverRuntimeHasEntry(artifact: ServerRuntimeArtifact) {
+  return artifact.serverSources
+    ? artifact.serverSources.entry.bytes > 0
+    : artifact.serverBundle.length > 0;
 }
 
 function createConfiguredStore() {

@@ -1,6 +1,7 @@
 import { resolveArtifactServerRequest } from "./artifact-request";
 import type { NativeRpcRequest } from "./native-rpc-protocol";
 import { getNativeRpcWorkerPool } from "./native-rpc-worker-pool";
+import { serverRuntimeHasEntry } from "./server-runtime-store";
 
 const maxRequestBytes = 1_250_000;
 
@@ -90,7 +91,7 @@ export async function executeNativeArtifactRequest(
       status: resolution.status,
     });
   }
-  if (!resolution.artifact.serverBundle) {
+  if (!serverRuntimeHasEntry(resolution.runtime)) {
     return new Response("This revision does not contain a server router.", {
       headers: { "cache-control": "no-store" },
       status: 422,
@@ -125,12 +126,7 @@ export async function executeNativeArtifactRequest(
   let execution;
   try {
     execution = await getNativeRpcWorkerPool().executeStream(
-      {
-        kernelId: resolution.artifact.kernelId,
-        revision: resolution.artifact.revision,
-        serverBundle: resolution.artifact.serverBundle,
-        serverChunks: resolution.artifact.serverChunks,
-      },
+      resolution.runtime,
       nativeRequest,
     );
   } catch (error) {

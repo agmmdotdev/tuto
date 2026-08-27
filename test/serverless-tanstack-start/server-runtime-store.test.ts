@@ -23,6 +23,36 @@ function artifact(revisionCharacter: string): ServerRuntimeArtifact {
   };
 }
 
+function deferredArtifact(
+  revisionCharacter: string,
+  onLoad: () => void,
+): ServerRuntimeArtifact {
+  const inline = artifact(revisionCharacter);
+  const source = (contents: string) => ({
+    bytes: Buffer.byteLength(contents),
+    hash: createHash("sha256").update(contents).digest("hex"),
+    async load() {
+      onLoad();
+      return contents;
+    },
+  });
+  return {
+    kernelId: inline.kernelId,
+    revision: inline.revision,
+    serverBundle: "",
+    serverChunks: {},
+    serverSources: {
+      chunks: Object.fromEntries(
+        Object.entries(inline.serverChunks).map(([name, contents]) => [
+          name,
+          source(contents),
+        ]),
+      ),
+      entry: source(inline.serverBundle),
+    },
+  };
+}
+
 async function temporaryRoot() {
   const root = await mkdtemp(path.join(tmpdir(), "tuto-runtime-store-test-"));
   temporaryRoots.push(root);
@@ -88,6 +118,42 @@ test("atomically reuses one revision across independent host stores", async () =
     revisions: 1,
   });
   await Promise.all([first.release(), second.release()]);
+});
+
+test("reuses a materialized runtime without invoking deferred source loaders", async () => {
+  const root = await temporaryRoot();
+  let initialLoads = 0;
+  const firstStore = new ServerRuntimeStore({ root });
+  const first = await firstStore.acquire(
+    deferredArtifact("9", () => {
+      initialLoads += 1;
+    }),
+  );
+  assert.equal(initialLoads, 2);
+  await first.release();
+
+  let repeatedLoads = 0;
+  const secondStore = new ServerRuntimeStore({ root });
+  const second = await secondStore.acquire(
+    deferredArtifact("9", () => {
+      repeatedLoads += 1;
+    }),
+  );
+  assert.equal(second.entryPath, first.entryPath);
+  assert.equal(repeatedLoads, 0);
+  await second.release();
+});
+
+test("rejects a deferred source that does not match its descriptor", async () => {
+  const root = await temporaryRoot();
+  const sourceArtifact = deferredArtifact("7", () => undefined);
+  sourceArtifact.serverSources!.entry.load = async () =>
+    artifact("7").serverBundle.replace("routeValue", "routeVaLue");
+
+  await assert.rejects(
+    new ServerRuntimeStore({ root }).acquire(sourceArtifact),
+    /runtime source .* failed integrity validation/i,
+  );
 });
 
 test("separates runtime output changes for the same workspace revision", async () => {

@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { afterEach, test } from "vitest";
 import {
   clearTanstackStartArtifactCache,
   type TanstackStartArtifact,
 } from "../../lib/serverless-tanstack-start/artifact-cache";
-import { resolveArtifactAssetRequest } from "../../lib/serverless-tanstack-start/artifact-request";
+import {
+  resolveArtifactAssetRequest,
+  resolveArtifactServerRequest,
+} from "../../lib/serverless-tanstack-start/artifact-request";
 import {
   getTanstackStartArtifactMetadata,
   setTanstackStartArtifactStoreForTests,
@@ -120,4 +124,49 @@ test("fails closed when the artifact identity changes after authorization", asyn
       status: 503,
     },
   );
+});
+
+test("resolves a deferred server runtime without invoking its source loaders", async () => {
+  let sourceLoads = 0;
+  const metadata = getTanstackStartArtifactMetadata(artifact);
+  setTanstackStartArtifactStoreForTests({
+    async get() {
+      throw new Error("full artifact should not be read");
+    },
+    async getMetadata() {
+      return metadata;
+    },
+    async getServerRuntime() {
+      return {
+        ...metadata,
+        runtime: {
+          kernelId: artifact.kernelId,
+          revision: artifact.revision,
+          serverBundle: "",
+          serverChunks: {},
+          serverSources: {
+            chunks: {},
+            entry: {
+              bytes: Buffer.byteLength(artifact.serverBundle),
+              hash: createHash("sha256")
+                .update(artifact.serverBundle)
+                .digest("hex"),
+              async load() {
+                sourceLoads += 1;
+                return artifact.serverBundle;
+              },
+            },
+          },
+        },
+      };
+    },
+    async put() {},
+  });
+
+  const resolution = await resolveArtifactServerRequest(
+    new Request(`http://tuto.local/rpc?revision=${revision}&token=${token}`),
+  );
+  assert.equal(resolution.ok, true);
+  assert.equal(sourceLoads, 0);
+  assert.ok(resolution.ok && resolution.runtime.serverSources);
 });

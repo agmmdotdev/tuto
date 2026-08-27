@@ -205,6 +205,15 @@ test("reads existing signed v3 monolithic artifacts during migration", async () 
     serverBundle: artifact(revision).serverBundle,
     serverChunks: artifact(revision).serverChunks,
   });
+  assert.deepEqual(await store.getServerRuntime!(revision), {
+    ...getTanstackStartArtifactMetadata(artifact(revision)),
+    runtime: {
+      kernelId: artifact(revision).kernelId,
+      revision,
+      serverBundle: artifact(revision).serverBundle,
+      serverChunks: artifact(revision).serverChunks,
+    },
+  });
 });
 
 test("fetches only absent verified blobs after a cold manifest read", async () => {
@@ -282,6 +291,41 @@ test("selectively reads metadata, one asset, and server runtime blobs", async ()
     artifact(revision).html,
   );
   assert.equal(backend.reads.length, 1);
+});
+
+test("hands server descriptors to the runtime without eager blob reads", async () => {
+  const revision = "8".repeat(64);
+  const backend = memoryBlobStore();
+  const writer = createTanstackStartArtifactStore({
+    blobStore: backend.store,
+    signingKey: "runtime-handoff-key",
+  });
+  await writer.put(artifact(revision));
+  const reader = createTanstackStartArtifactStore({
+    blobStore: backend.store,
+    signingKey: "runtime-handoff-key",
+  });
+
+  backend.reads.length = 0;
+  const selected = await reader.getServerRuntime!(revision);
+  assert.ok(selected?.runtime.serverSources);
+  assert.deepEqual(
+    backend.reads.map((key) => path.posix.basename(key)),
+    [`${revision}.json`],
+  );
+
+  backend.reads.length = 0;
+  assert.equal(
+    await selected.runtime.serverSources.entry.load(),
+    artifact(revision).serverBundle,
+  );
+  assert.equal(backend.reads.length, 1);
+
+  const [[chunkName, chunk]] = Object.entries(
+    selected.runtime.serverSources.chunks,
+  );
+  assert.equal(await chunk.load(), artifact(revision).serverChunks[chunkName]);
+  assert.equal(backend.reads.length, 2);
 });
 
 test("publishes the manifest only after every content blob", async () => {

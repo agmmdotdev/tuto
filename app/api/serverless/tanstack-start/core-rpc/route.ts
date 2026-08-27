@@ -88,12 +88,7 @@ async function handleNativeRpc(request: Request) {
       url: request.url,
     };
     const execution = await getNativeRpcWorkerPool().execute(
-      {
-        kernelId: artifact.kernelId,
-        revision: artifact.revision,
-        serverBundle: artifact.serverBundle,
-        serverChunks: artifact.serverChunks,
-      },
+      resolution.runtime,
       nativeRequest,
     );
     const result = execution.result;

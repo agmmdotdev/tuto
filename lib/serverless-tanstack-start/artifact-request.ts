@@ -8,13 +8,14 @@ import {
   getDurableTanstackStartArtifact,
   getDurableTanstackStartArtifactAsset,
   getDurableTanstackStartArtifactMetadata,
-  getDurableTanstackStartServerArtifact,
+  getDurableTanstackStartServerRuntimeArtifact,
   getTanstackStartArtifactMetadata,
   type TanstackStartArtifactAsset,
   type TanstackStartArtifactAssetResult,
   type TanstackStartArtifactMetadata,
-  type TanstackStartArtifactServerResult,
+  type TanstackStartArtifactServerRuntimeResult,
 } from "./artifact-store";
+import type { ServerRuntimeArtifact } from "./server-runtime-store";
 
 export type ArtifactRequestResolution =
   | {
@@ -43,9 +44,10 @@ export type ArtifactAssetRequestResolution =
 
 export type ArtifactServerRequestResolution =
   | {
-      artifact: TanstackStartArtifactServerResult;
+      artifact: TanstackStartArtifactMetadata;
       artifactCache: "durable" | "hot";
       ok: true;
+      runtime: ServerRuntimeArtifact;
     }
   | {
       message: string;
@@ -235,26 +237,29 @@ export async function resolveArtifactServerRequest(
   if (!authorization.ok) return authorization;
   if (authorization.hotArtifact) {
     return {
-      artifact: {
-        ...authorization.metadata,
+      artifact: authorization.metadata,
+      artifactCache: "hot",
+      ok: true,
+      runtime: {
+        kernelId: authorization.metadata.kernelId,
+        revision: authorization.metadata.revision,
         serverBundle: authorization.hotArtifact.serverBundle,
         serverChunks: authorization.hotArtifact.serverChunks,
       },
-      artifactCache: "hot",
-      ok: true,
     };
   }
 
-  let artifact: TanstackStartArtifactServerResult | null;
+  let selected: TanstackStartArtifactServerRuntimeResult | null;
   try {
-    artifact = await getDurableTanstackStartServerArtifact(
+    selected = await getDurableTanstackStartServerRuntimeArtifact(
       authorization.revision,
     );
   } catch (error) {
     return durableStoreFailure(error);
   }
-  if (!artifact) return missingArtifact();
-  if (!artifactIdentityMatches(authorization.metadata, artifact))
+  if (!selected) return missingArtifact();
+  if (!artifactIdentityMatches(authorization.metadata, selected))
     return changedArtifact();
-  return { artifact, artifactCache: "durable", ok: true };
+  const { runtime, ...artifact } = selected;
+  return { artifact, artifactCache: "durable", ok: true, runtime };
 }

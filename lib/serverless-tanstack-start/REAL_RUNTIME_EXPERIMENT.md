@@ -109,6 +109,14 @@ views and 64 MiB of unique blobs. Configure the directory and bounds with
 `TUTO_TANSTACK_SERVER_RUNTIME_MAX_REVISIONS`, and
 `TUTO_TANSTACK_SERVER_RUNTIME_MAX_BYTES`.
 
+Durable v4 revisions hand that runtime store signed source descriptors with lazy
+verified loaders instead of reconstructed server strings. The runtime store
+checks its local content hash before invoking a loader. A shared runtime hit
+therefore performs no server-source object reads, while a miss materializes one
+source at a time without retaining those sources in the artifact memory cache.
+Hot artifacts, custom stores, and signed v3 objects use the inline compatibility
+path.
+
 Successful RPC responses expose `x-tuto-worker-id`,
 `x-tuto-worker-request`, and `x-tuto-worker-reused` for diagnostics. These are
 observability headers, not application state or cache keys.
@@ -176,16 +184,20 @@ HMAC before requesting source blobs. Request authorization uses only that signed
 metadata, so an invalid capability token cannot trigger source reads. After
 authorization, each consumer resolves only the fields it needs: the compiler
 loads HTML, the asset gateway loads one client or CSS descriptor, and the
-server-function and render gateways load the server entry plus server chunks.
+server-function and render gateways hand lazy server descriptors to the runtime
+store. That store loads the server entry and chunks only when their hashes are
+not already materialized locally.
 Every selected blob is still checked for byte count and SHA-256 digest before
 use. Existing signed v3 monolithic objects remain readable through an eager
 fallback during rollout; new writes use v4. A missing or expired revision
 returns HTTP 410; an unavailable, incomplete, or corrupt durable store returns
 HTTP 503 instead of pretending the revision was evicted.
 
-A completely cold host now fetches the signed manifest and only the descriptors
-required by that request. The bounded manifest and verified-blob caches make
-repeated selections possible without additional object-store reads. The
+A completely cold host now fetches the signed manifest and only the source
+objects required by that request. Server runtime sources are materialized one at
+a time; an existing shared runtime view needs only the manifest. The bounded
+manifest, asset-blob, and disk runtime caches make repeated selections possible
+without additional object-store reads. The
 `x-tuto-artifact-cache: durable` diagnostic identifies the authoritative tier;
 it does not imply that the current call performed a physical durable-store
 request. Physical deduplication, manifest-last atomic publication, and integrity
