@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { BuildDiagnostic, WorkspaceFile } from "@/lib/ide/types";
-import kernelManifest from "./kernel-manifest.generated.json";
+import runtimeManifest from "./runtime-manifest.generated.json";
 
 export type TanstackStartBuildMetrics = {
   clientFrameworkInputs: number;
@@ -114,7 +114,7 @@ export function createWorkspaceRevision(files: WorkspaceFile[]) {
     .sort((left, right) => left.path.localeCompare(right.path));
 
   return createHash("sha256")
-    .update(`kernel:${kernelManifest.id}\n`)
+    .update(`runtime:${runtimeManifest.id}\n`)
     .update(JSON.stringify(canonicalFiles))
     .digest("hex");
 }

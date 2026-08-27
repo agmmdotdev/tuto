@@ -1,4 +1,5 @@
 import { build } from "esbuild";
+import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { buildTanstackStartKernels } from "./build-tanstack-start-kernels.mjs";
 
@@ -21,13 +22,15 @@ await build({
   },
 });
 
+const runnerPaths = [
+  "lib/serverless-tanstack-start/core-preview-runner.generated.cjs",
+  "lib/serverless-tanstack-start/core-rpc-runner.generated.cjs",
+  "lib/serverless-tanstack-start/core-compiler-runner.generated.cjs",
+  "lib/serverless-tanstack-start/native-rpc-runner.generated.cjs",
+];
+
 await Promise.all(
-  [
-    "lib/serverless-tanstack-start/core-preview-runner.generated.cjs",
-    "lib/serverless-tanstack-start/core-rpc-runner.generated.cjs",
-    "lib/serverless-tanstack-start/core-compiler-runner.generated.cjs",
-    "lib/serverless-tanstack-start/native-rpc-runner.generated.cjs",
-  ].map(async (filePath) => {
+  runnerPaths.map(async (filePath) => {
     const contents = await readFile(filePath, "utf8");
     await writeFile(
       filePath,
@@ -42,4 +45,23 @@ await Promise.all(
         ),
     );
   }),
+);
+
+const runtimePaths = [
+  "lib/serverless-tanstack-start/server-functions-transform.generated.cjs",
+  "lib/serverless-tanstack-start/client-route-fetch.generated.cjs",
+  ...runnerPaths,
+  "lib/serverless-tanstack-start/client-kernel.generated.js",
+  "lib/serverless-tanstack-start/server-kernel.generated.mjs",
+  "lib/serverless-tanstack-start/kernel-manifest.generated.json",
+];
+const runtimeHash = createHash("sha256");
+for (const filePath of runtimePaths) {
+  runtimeHash.update(`${filePath}\n`);
+  runtimeHash.update(await readFile(filePath));
+}
+await writeFile(
+  "lib/serverless-tanstack-start/runtime-manifest.generated.json",
+  `${JSON.stringify({ id: runtimeHash.digest("hex") }, null, 2)}\n`,
+  "utf8",
 );

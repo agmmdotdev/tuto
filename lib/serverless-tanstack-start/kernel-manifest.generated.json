@@ -1,7 +1,7 @@
 {
-  "id": "c737992289bfc139a206",
+  "id": "867fa4268d5a0ec70ac4",
   "client": {
-    "bytes": 337697,
+    "bytes": 337580,
     "exports": {
       "@tanstack/react-start": [
         "FRAME_HEADER_SIZE",
@@ -253,7 +253,7 @@
     "routerKey": "__TUTO_TANSTACK_START_CLIENT_ROUTER_FACTORY__",
     "serverFnBaseKey": "__TUTO_TANSTACK_START_SERVER_FN_BASE__",
     "startInstanceKey": "__TUTO_TANSTACK_START_CLIENT_INSTANCE__",
-    "url": "/api/serverless/tanstack-start/kernel/client?v=c737992289bfc139a206"
+    "url": "/api/serverless/tanstack-start/kernel/client?v=867fa4268d5a0ec70ac4"
   },
   "packages": {
     "@tanstack/react-router": "1.170.32",

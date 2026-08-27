@@ -376,6 +376,8 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
       charset: "utf8",
       define: {
         "process.env.NODE_ENV": '"production"',
+        "process.env.TSS_INLINE_CSS_ENABLED": "undefined",
+        "process.env.TSS_ROUTER_BASEPATH": "undefined",
         "process.env.TSS_SERVER_FN_BASE": `globalThis.${clientServerFnBaseKey}`,
       },
       format: "iife",
@@ -431,6 +433,11 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
   ]);
   const clientCode = clientBuild.outputFiles[0].text;
   const serverCode = serverBuild.outputFiles[0].text;
+  if (clientCode.includes("process.env.")) {
+    throw new Error(
+      "The TanStack Start client kernel contains an unresolved process.env reference.",
+    );
+  }
   const manifest = {
     id,
     client: {

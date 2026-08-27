@@ -15,7 +15,8 @@
     "measure:tanstack-start-kernels": "yarn build:serverless-tanstack-start-runtime && node scripts/measure-tanstack-start-kernels.mjs",
     "experiment:tanstack-real-runtime": "yarn build:serverless-tanstack-start-transform && node scripts/experiment-tanstack-real-runtime.mjs",
     "test:serverless-nextjs-runtime": "vitest run --config vitest.serverless-nextjs-runtime.config.mjs",
-    "test:serverless-tanstack-start": "yarn build:serverless-tanstack-start-runtime && vitest run --config vitest.serverless-tanstack-start.config.mjs"
+    "test:serverless-tanstack-start": "yarn build:serverless-tanstack-start-runtime && vitest run --config vitest.serverless-tanstack-start.config.mjs",
+    "test:serverless-tanstack-start-browser": "yarn build:serverless-tanstack-start-runtime && playwright test --config playwright.serverless-tanstack-start.config.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.11",
@@ -46,6 +47,7 @@
     "vite": "^8.0.1"
   },
   "devDependencies": {
+    "@playwright/test": "1.62.1",
     "@tailwindcss/postcss": "^4",
     "@types/express": "^5",
     "@types/node": "^20",

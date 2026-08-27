@@ -865,7 +865,8 @@ What is intentionally still experimental here:
 - server bundles execute in bounded, revision-pinned child workers, not in the Next.js host process
 
 This is the streaming SSR tier, not the complete production host: server code
-and CSS are still revision-wide, and browser navigation coverage remains.
+and CSS are still revision-wide. Hydration, lazy route navigation, server
+functions, Request bodies, and route redirects run in the browser checkpoint.
 Without durable storage, a missing hot artifact asks you to rebuild; configured
 durable storage restores it across app processes.`,
       },
