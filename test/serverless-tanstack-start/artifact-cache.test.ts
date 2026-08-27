@@ -25,6 +25,8 @@ function artifact(revision: string): TanstackStartArtifact {
     kernelId: "test-kernel",
     revision,
     rpcToken: "t".repeat(43),
+    ssrClientBundle: "",
+    ssrCss: "",
     serverBundle: `globalThis.revision=${JSON.stringify(revision)}`,
     serverFnIds: [revision],
     success: true,

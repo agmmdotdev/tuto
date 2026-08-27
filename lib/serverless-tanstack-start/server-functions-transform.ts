@@ -28,7 +28,9 @@ export async function importStartCompilerInternals(): Promise<StartCompilerInter
   );
   const esmRoot = path.join(packageRoot, "dist", "esm", "start-compiler");
 
-  const host = await import(pathToFileURL(path.join(esmRoot, "host.js")).toString());
+  const host = await import(
+    pathToFileURL(path.join(esmRoot, "host.js")).toString()
+  );
   const compiler = await import(
     pathToFileURL(path.join(esmRoot, "compiler.js")).toString()
   );
@@ -58,11 +60,18 @@ export function toWorkspaceModuleId(root: string, absoluteId: string) {
   return workspacePath ? `${workspacePath}${query}` : absoluteId;
 }
 
-export function createStartCoreResolver(root: string, fileMap: WorkspaceFileMap) {
+export function createStartCoreResolver(
+  root: string,
+  fileMap: WorkspaceFileMap,
+) {
   const extensions = ["", ".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs"];
 
   return async function resolveId(source: string, importer?: string) {
-    if (source.startsWith("@tanstack/") || source === "react" || source.startsWith("react/")) {
+    if (
+      source.startsWith("@tanstack/") ||
+      source === "react" ||
+      source.startsWith("react/")
+    ) {
       return source;
     }
 
@@ -106,17 +115,20 @@ function createCompiler({
     providerEnvName: "ssr",
     mode: "build",
     getKnownServerFns: () => serverFnsById,
-    onServerFnsById: (nextServerFns) => Object.assign(serverFnsById, nextServerFns),
+    onServerFnsById: (nextServerFns) =>
+      Object.assign(serverFnsById, nextServerFns),
     loadModule: async (moduleId) => {
       const workspacePath = toWorkspacePath(root, moduleId);
       const code = workspacePath ? fileMap.get(workspacePath) : undefined;
 
-      if (workspacePath && code) {
-        compiler.ingestModule({
-          code,
-          id: toAbsoluteModuleId(root, workspacePath),
-        });
-      }
+      compiler.ingestModule({
+        // Bare framework imports are already classified through the compiler's
+        // known-import table. Ingest an empty external module for other imports
+        // (for example React hooks co-located with a server function) so an
+        // unrelated call can resolve to `None` instead of aborting the build.
+        code: code ?? "export {};",
+        id: workspacePath ? toAbsoluteModuleId(root, workspacePath) : moduleId,
+      });
     },
     resolveId: createStartCoreResolver(root, fileMap),
   });
@@ -128,13 +140,15 @@ export function createServerFnResolverModule(
   serverFnsById: Record<string, ServerFn>,
   root: string,
 ) {
-  const manifestEntries = Object.entries(serverFnsById).map(([id, serverFn]) => {
-    const splitPath = toWorkspaceModuleId(root, serverFn.extractedFilename);
+  const manifestEntries = Object.entries(serverFnsById).map(
+    ([id, serverFn]) => {
+      const splitPath = toWorkspaceModuleId(root, serverFn.extractedFilename);
 
-    return `${JSON.stringify(id)}: { functionName: ${JSON.stringify(
-      serverFn.functionName,
-    )}, module: ${JSON.stringify(splitPath)} },`;
-  });
+      return `${JSON.stringify(id)}: { functionName: ${JSON.stringify(
+        serverFn.functionName,
+      )}, module: ${JSON.stringify(splitPath)} },`;
+    },
+  );
 
   return [
     "const manifest = {",
@@ -152,11 +166,10 @@ export async function transformStartServerFunctions(
   fileMap: WorkspaceFileMap,
   options: { root?: string } = {},
 ): Promise<StartServerFunctionsTransform> {
-  const {
-    createStartCompiler,
-    detectKindsInCode,
-  } = await importStartCompilerInternals();
-  const root = options.root ?? path.join(process.cwd(), ".tmp", "tanstack-start-core");
+  const { createStartCompiler, detectKindsInCode } =
+    await importStartCompilerInternals();
+  const root =
+    options.root ?? path.join(process.cwd(), ".tmp", "tanstack-start-core");
   const serverFnsById: Record<string, ServerFn> = {};
   const clientFiles: WorkspaceFileMap = new Map();
   const serverFiles: WorkspaceFileMap = new Map();
@@ -230,7 +243,10 @@ export async function transformStartServerFunctions(
     });
 
     if (splitResult?.code) {
-      serverSplits.set(toWorkspaceModuleId(root, serverFn.extractedFilename), splitResult.code);
+      serverSplits.set(
+        toWorkspaceModuleId(root, serverFn.extractedFilename),
+        splitResult.code,
+      );
     }
   }
 

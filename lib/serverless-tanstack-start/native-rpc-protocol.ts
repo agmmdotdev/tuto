@@ -2,7 +2,7 @@ export type NativeRpcRequest = {
   bodyBase64?: string;
   headers: Array<[string, string]>;
   method: string;
-  serverFnId: string;
+  serverFnId?: string;
   url: string;
 };
 
@@ -42,6 +42,7 @@ export type NativeWorkerMessage =
       error: {
         message: string;
         name: string;
+        stack?: string;
       };
       fatal?: boolean;
       id?: string;

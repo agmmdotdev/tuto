@@ -31,6 +31,7 @@ function errorMessage(error: unknown) {
   return {
     message: error instanceof Error ? error.message : String(error),
     name: error instanceof Error ? error.name : "Error",
+    stack: error instanceof Error ? error.stack : undefined,
   };
 }
 
@@ -48,6 +49,12 @@ async function cleanup() {
   ];
   delete (globalThis as typeof globalThis & Record<string, unknown>)[
     kernelManifest.server.startInstanceKey
+  ];
+  delete (globalThis as typeof globalThis & Record<string, unknown>)[
+    kernelManifest.server.routerKey
+  ];
+  delete (globalThis as typeof globalThis & Record<string, unknown>)[
+    kernelManifest.server.manifestKey
   ];
   if (runtimeDirectory) {
     await rm(runtimeDirectory, { force: true, recursive: true });
@@ -99,12 +106,14 @@ async function initialize(
 function toRequest(payload: NativeRpcRequest) {
   const method = payload.method.toUpperCase();
   const url = new URL(payload.url);
-  url.pathname = `${kernelManifest.server.serverFnBase}${encodeURIComponent(
-    payload.serverFnId,
-  )}`;
-  url.searchParams.delete("id");
-  url.searchParams.delete("revision");
-  url.searchParams.delete("token");
+  if (payload.serverFnId) {
+    url.pathname = `${kernelManifest.server.serverFnBase}${encodeURIComponent(
+      payload.serverFnId,
+    )}`;
+    url.searchParams.delete("id");
+    url.searchParams.delete("revision");
+    url.searchParams.delete("token");
+  }
   const body = payload.bodyBase64
     ? Buffer.from(payload.bodyBase64, "base64")
     : undefined;

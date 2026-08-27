@@ -86,6 +86,8 @@ type ServerlessPreviewResult = {
   durationMs: number;
   revision: string;
   rpcToken: string;
+  ssrClientBundle: string;
+  ssrCss: string;
   serverBundle: string;
   serverFnIds: string[];
 };
@@ -593,11 +595,17 @@ function createServerWorkspacePlugin({
       );
       buildApi.onLoad(
         { filter: /.*/, namespace: "tuto-server-workspace" },
-        (args) => ({
-          contents: files.get(args.path),
-          loader: loaderForPath(args.path),
-          resolveDir: absoluteWorkingDirectory,
-        }),
+        (args) => {
+          const loader = loaderForPath(args.path);
+          return {
+            // Route modules commonly import their stylesheet. The browser SSR
+            // entry compiles that stylesheet separately; the server only needs
+            // the module graph and must not try to resolve CSS package imports.
+            contents: loader === "css" ? "" : files.get(args.path),
+            loader,
+            resolveDir: absoluteWorkingDirectory,
+          };
+        },
       );
     },
   };
@@ -702,6 +710,15 @@ function buildFailurePreview(diagnostics: BuildDiagnostic[]) {
   return `<!doctype html><html><head><meta charset="utf-8" /><style>body{margin:0;padding:24px;background:#1e1e1e;color:#f5f5f5;font:14px/1.5 Consolas,monospace}article{border-top:1px solid #333;padding:16px}strong{color:#9cdcfe}pre{white-space:pre-wrap}</style></head><body>${body}</body></html>`;
 }
 
+function buildSsrPreviewRedirect(revision: string, rpcToken: string) {
+  const renderUrl = `/api/serverless/tanstack-start/core-render?revision=${encodeURIComponent(
+    revision,
+  )}&token=${encodeURIComponent(rpcToken)}&path=%2F`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Loading Start preview</title></head><body><script>location.replace(${JSON.stringify(
+    renderUrl,
+  )})</script></body></html>`;
+}
+
 function isEsbuildError(error: unknown): error is EsbuildError {
   return typeof error === "object" && error !== null;
 }
@@ -740,17 +757,22 @@ function normalizeBuildError(error: unknown): BuildDiagnostic[] {
 }
 
 async function buildNativeServerBundle({
+  clientAssetUrl,
+  cssAssetUrl,
   root,
   transform,
 }: {
+  clientAssetUrl: string;
+  cssAssetUrl?: string;
   root: string;
   transform: StartServerFunctionsTransform;
 }) {
-  if (Object.keys(transform.serverFnsById).length === 0) {
-    return { code: "", frameworkInputs: 0 };
-  }
   const serverFiles = new Map(transform.serverFiles);
   const startModule = findWorkspaceFile(serverFiles, "src/start");
+  const routerModule = findWorkspaceFile(serverFiles, "src/router");
+  if (Object.keys(transform.serverFnsById).length === 0 && !routerModule) {
+    return { code: "", frameworkInputs: 0 };
+  }
   const imports: string[] = [];
   const entries: string[] = [];
 
@@ -775,7 +797,25 @@ async function buildNativeServerBundle({
     ? `import { startInstance } from ${JSON.stringify(startModule)};
 globalThis.${kernelManifest.server.startInstanceKey} = startInstance;`
     : `delete globalThis.${kernelManifest.server.startInstanceKey};`;
+  const routerSource = routerModule
+    ? `import { getRouter } from ${JSON.stringify(routerModule)};
+globalThis.${kernelManifest.server.routerKey} = getRouter;
+globalThis.${kernelManifest.server.manifestKey} = ${JSON.stringify({
+        routes: {
+          __root__: {
+            ...(cssAssetUrl ? { css: [cssAssetUrl] } : {}),
+            preloads: [clientAssetUrl],
+            scripts: [
+              { attrs: { src: kernelManifest.client.url } },
+              { attrs: { src: clientAssetUrl, type: "module" } },
+            ],
+          },
+        },
+      })};`
+    : `delete globalThis.${kernelManifest.server.routerKey};
+delete globalThis.${kernelManifest.server.manifestKey};`;
   const resolverSource = `${startInstanceSource}
+${routerSource}
 ${imports.join("\n")}
 const actions = { ${entries.join("\n")} };
 globalThis.${kernelManifest.server.resolverKey} = async function getServerFnById(id) {
@@ -796,9 +836,10 @@ globalThis.${kernelManifest.server.resolverKey} = async function getServerFnById
     },
     entryPoints: ["__tuto_server_entry__"],
     format: "esm",
+    jsx: "automatic",
+    jsxImportSource: "react",
     legalComments: "none",
     logLevel: "silent",
-    metafile: true,
     outfile: "/out/server-runtime.js",
     platform: "node",
     plugins: [
@@ -818,14 +859,82 @@ globalThis.${kernelManifest.server.resolverKey} = async function getServerFnById
     throw new Error("The Start server runtime did not produce JavaScript.");
   return {
     code: output.text,
-    frameworkInputs: countFrameworkInputs(result.metafile.inputs),
+    frameworkInputs: 0,
   };
 }
 
-function countFrameworkInputs(inputs: Record<string, unknown>) {
-  return Object.keys(inputs).filter((input) =>
-    /node_modules[\\/](?:@tanstack[\\/]|react(?:-dom)?[\\/])/.test(input),
-  ).length;
+async function buildSsrClientBundle({
+  files,
+  serverFnBase,
+}: {
+  files: WorkspaceFileMap;
+  serverFnBase: string;
+}) {
+  const routerModule = findWorkspaceFile(files, "src/router");
+  if (!routerModule) return { code: "", css: "", frameworkInputs: 0 };
+  const startModule = findWorkspaceFile(files, "src/start");
+  const entryPath = "__tuto_ssr_client_entry__.tsx";
+  const entryFiles = new Map(files);
+  entryFiles.set(
+    entryPath,
+    `import React, { StrictMode, startTransition } from 'react';
+import { hydrateRoot } from 'react-dom/client';
+import { StartClient } from '@tanstack/react-start/client';
+import { getRouter } from ${JSON.stringify(`./${routerModule}`)};
+${
+  startModule
+    ? `import { startInstance } from ${JSON.stringify(`./${startModule}`)};`
+    : "const startInstance = undefined;"
+}
+
+globalThis.${kernelManifest.client.routerKey} = getRouter;
+globalThis.${kernelManifest.client.startInstanceKey} = startInstance;
+
+startTransition(() => {
+  hydrateRoot(document, <StrictMode><StartClient /></StrictMode>);
+});`,
+  );
+  const result = await build({
+    absWorkingDir: absoluteWorkingDirectory,
+    banner: {
+      js: `globalThis.${kernelManifest.client.serverFnBaseKey}=${JSON.stringify(
+        serverFnBase,
+      )};`,
+    },
+    bundle: true,
+    charset: "utf8",
+    define: {
+      "process.env.NODE_ENV": '"production"',
+      "process.env.TSS_ROUTER_BASEPATH": '"/"',
+      "process.env.TSS_SERVER_FN_BASE": JSON.stringify(serverFnBase),
+    },
+    entryPoints: [entryPath],
+    format: "esm",
+    jsx: "automatic",
+    jsxImportSource: "react",
+    legalComments: "none",
+    logLevel: "silent",
+    outdir: "/out",
+    platform: "browser",
+    plugins: [
+      createKernelExternalPlugin("client"),
+      createWorkspacePlugin(entryFiles),
+    ],
+    target: ["es2022"],
+    treeShaking: true,
+    write: false,
+  });
+  const jsOutput = result.outputFiles.find((file) => file.path.endsWith(".js"));
+  if (!jsOutput)
+    throw new Error("The Start SSR client did not produce JavaScript.");
+  const cssOutput = result.outputFiles.find((file) =>
+    file.path.endsWith(".css"),
+  );
+  return {
+    code: jsOutput.text,
+    css: cssOutput?.text ?? "",
+    frameworkInputs: 0,
+  };
 }
 
 async function compilePreview(
@@ -837,6 +946,9 @@ async function compilePreview(
   const serverFnBase = `/api/serverless/tanstack-start/core-rpc?revision=${encodeURIComponent(
     revision,
   )}&token=${encodeURIComponent(rpcToken)}&id=`;
+  const assetBase = `/api/serverless/tanstack-start/core-asset?revision=${encodeURIComponent(
+    revision,
+  )}&token=${encodeURIComponent(rpcToken)}&kind=`;
 
   try {
     const originalFileMap = sanitizeWorkspaceFiles(files);
@@ -871,7 +983,6 @@ async function compilePreview(
       legalComments: "none",
       logLevel: "silent",
       mainFields: ["browser", "module", "main"],
-      metafile: true,
       minify: true,
       outdir: "/out",
       platform: "browser",
@@ -893,15 +1004,22 @@ async function compilePreview(
     if (!jsOutput)
       throw new Error("The TanStack core preview did not produce JavaScript.");
 
+    const ssrClientBuild = await buildSsrClientBundle({
+      files: transformed,
+      serverFnBase,
+    });
     const serverBuild = await buildNativeServerBundle({
+      clientAssetUrl: `${assetBase}client`,
+      ...(ssrClientBuild.css ? { cssAssetUrl: `${assetBase}style` } : {}),
       root,
       transform,
     });
     const serverBundle = serverBuild.code;
     const durationMs = Date.now() - startedAt;
     const buildMetrics = {
-      clientFrameworkInputs: countFrameworkInputs(result.metafile.inputs),
-      clientRevisionBytes: jsOutput.contents.byteLength,
+      clientFrameworkInputs: 0,
+      clientRevisionBytes:
+        jsOutput.contents.byteLength + Buffer.byteLength(ssrClientBuild.code),
       serverFrameworkInputs: serverBuild.frameworkInputs,
       serverRevisionBytes: Buffer.byteLength(serverBundle),
       sharedClientKernelBytes: kernelManifest.client.bytes,
@@ -911,11 +1029,13 @@ async function compilePreview(
     return {
       buildMetrics,
       success: true,
-      html: injectPreviewAssets({
-        html,
-        cssText: cssOutput?.text ?? "",
-        jsText: jsOutput.text,
-      }),
+      html: ssrClientBuild.code
+        ? buildSsrPreviewRedirect(revision, rpcToken)
+        : injectPreviewAssets({
+            html,
+            cssText: cssOutput?.text ?? "",
+            jsText: jsOutput.text,
+          }),
       diagnostics: [
         createDiagnostic(
           "info",
@@ -926,6 +1046,8 @@ async function compilePreview(
       kernelId: kernelManifest.id,
       revision,
       rpcToken,
+      ssrClientBundle: ssrClientBuild.code,
+      ssrCss: ssrClientBuild.css,
       serverBundle,
       serverFnIds: Object.keys(serverFnsById),
     };
@@ -947,6 +1069,8 @@ async function compilePreview(
       kernelId: kernelManifest.id,
       revision,
       rpcToken,
+      ssrClientBundle: "",
+      ssrCss: "",
       serverBundle: "",
       serverFnIds: [],
     };

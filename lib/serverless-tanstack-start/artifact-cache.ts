@@ -19,6 +19,8 @@ export type TanstackStartArtifact = {
   kernelId: string;
   revision: string;
   rpcToken: string;
+  ssrClientBundle: string;
+  ssrCss: string;
   serverBundle: string;
   serverFnIds: string[];
   success: boolean;
@@ -77,7 +79,10 @@ function limits() {
 
 function artifactBytes(artifact: TanstackStartArtifact) {
   return (
-    Buffer.byteLength(artifact.html) + Buffer.byteLength(artifact.serverBundle)
+    Buffer.byteLength(artifact.html) +
+    Buffer.byteLength(artifact.serverBundle) +
+    Buffer.byteLength(artifact.ssrClientBundle) +
+    Buffer.byteLength(artifact.ssrCss)
   );
 }
 

@@ -16,14 +16,19 @@ const clientKernelPath = path.join(outputRoot, "client-kernel.generated.js");
 const serverKernelPath = path.join(outputRoot, "server-kernel.generated.mjs");
 const clientGlobalKey = "__TUTO_TANSTACK_START_CLIENT_KERNEL__";
 const clientServerFnBaseKey = "__TUTO_TANSTACK_START_SERVER_FN_BASE__";
+const clientRouterKey = "__TUTO_TANSTACK_START_CLIENT_ROUTER_FACTORY__";
+const clientStartInstanceKey = "__TUTO_TANSTACK_START_CLIENT_INSTANCE__";
 const serverGlobalKey = "__TUTO_TANSTACK_START_SERVER_KERNEL__";
 const serverHandlerKey = "__TUTO_TANSTACK_START_NATIVE_HANDLER__";
 const serverResolverKey = "__TUTO_TANSTACK_START_SERVER_FN_RESOLVER__";
 const serverStartInstanceKey = "__TUTO_TANSTACK_START_INSTANCE__";
+const serverRouterKey = "__TUTO_TANSTACK_START_ROUTER_FACTORY__";
+const serverManifestKey = "__TUTO_TANSTACK_START_MANIFEST__";
 const serverFnInternalBase = "/__tuto_server_fn/";
 
 const clientModules = [
   "@tanstack/react-start",
+  "@tanstack/react-start/client",
   "@tanstack/react-start/client-rpc",
   "@tanstack/react-router",
   "react",
@@ -33,9 +38,13 @@ const clientModules = [
   "react-dom/client",
 ];
 const serverModules = [
+  "@tanstack/react-router",
   "@tanstack/react-start",
   "@tanstack/react-start/server",
   "@tanstack/react-start/server-rpc",
+  "react",
+  "react/jsx-runtime",
+  "react-dom/server",
 ];
 
 function createStartEnvironmentPlugin(env) {
@@ -118,6 +127,70 @@ function createStartEnvironmentPlugin(env) {
   };
 }
 
+function createClientEntriesPlugin() {
+  return {
+    name: "tuto-start-client-kernel-entries",
+    setup(buildApi) {
+      buildApi.onResolve(
+        {
+          filter:
+            /^#tanstack-(?:router-entry|start-entry|start-plugin-adapters)$/,
+        },
+        (args) => ({
+          path: args.path,
+          namespace: "tuto-client-kernel-entry",
+        }),
+      );
+      buildApi.onLoad(
+        { filter: /.*/, namespace: "tuto-client-kernel-entry" },
+        (args) => {
+          if (args.path === "#tanstack-router-entry") {
+            return {
+              contents: `
+export async function getRouter() {
+  const factory = globalThis.${clientRouterKey};
+  if (typeof factory !== 'function') {
+    throw new Error('The SSR client router factory is not registered.');
+  }
+  return await factory();
+}
+`,
+              loader: "js",
+            };
+          }
+          if (args.path === "#tanstack-start-plugin-adapters") {
+            return {
+              contents:
+                "export const hasPluginAdapters = false; export const pluginSerializationAdapters = [];",
+              loader: "js",
+            };
+          }
+          return {
+            contents: `
+export const startInstance = {
+  async getOptions() {
+    const instance = globalThis.${clientStartInstanceKey};
+    const options = instance && typeof instance.getOptions === 'function'
+      ? await instance.getOptions()
+      : {};
+    return {
+      ...options,
+      serverFns: {
+        ...(options.serverFns ?? {}),
+        fetch: (url, init) => globalThis.fetch(url, { ...init, credentials: 'include' }),
+      },
+    };
+  },
+};
+`,
+            loader: "js",
+          };
+        },
+      );
+    },
+  };
+}
+
 function createServerEntriesPlugin() {
   return {
     name: "tuto-start-server-kernel-entries",
@@ -143,7 +216,11 @@ function createServerEntriesPlugin() {
             return {
               contents: `
 export async function getRouter() {
-  throw new Error('Router access is unavailable in the CSR server-function tier.');
+  const factory = globalThis.${serverRouterKey};
+  if (typeof factory !== 'function') {
+    throw new Error('This revision does not export getRouter from src/router.');
+  }
+  return await factory();
 }
 `,
               loader: "js",
@@ -158,8 +235,11 @@ export async function getRouter() {
           }
           if (args.path === "tanstack-start-manifest:v") {
             return {
-              contents:
-                "export function tsrStartManifest() { return { routes: {} }; }",
+              contents: `
+export function tsrStartManifest() {
+  return globalThis.${serverManifestKey} ?? { routes: {} };
+}
+`,
               loader: "js",
             };
           }
@@ -278,18 +358,14 @@ globalThis.${clientGlobalKey} = Object.freeze({
   modules: Object.freeze({ ${moduleMap(clientModules)} }),
 });`;
   const serverEntry = `${moduleImports(serverModules)}
-import { createStartHandler } from '@tanstack/react-start/server';
+import { createStartHandler, defaultStreamHandler } from '@tanstack/react-start/server';
 
 const modules = Object.freeze({ ${moduleMap(serverModules)} });
 globalThis.${serverGlobalKey} = Object.freeze({
   id: ${JSON.stringify(id)},
   modules,
 });
-const startHandler = createStartHandler(async () =>
-  new Response('Router requests are unavailable in the CSR server-function tier.', {
-    status: 501,
-  }),
-);
+const startHandler = createStartHandler(defaultStreamHandler);
 globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
   startHandler(request, requestOptions);`;
 
@@ -308,7 +384,10 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
       minify: true,
       outfile: clientKernelPath,
       platform: "browser",
-      plugins: [createStartEnvironmentPlugin("client")],
+      plugins: [
+        createClientEntriesPlugin(),
+        createStartEnvironmentPlugin("client"),
+      ],
       stdin: {
         contents: clientEntry,
         loader: "js",
@@ -360,7 +439,9 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
       file: path.basename(clientKernelPath),
       globalKey: clientGlobalKey,
       modules: clientModules,
+      routerKey: clientRouterKey,
       serverFnBaseKey: clientServerFnBaseKey,
+      startInstanceKey: clientStartInstanceKey,
       url: `/api/serverless/tanstack-start/kernel/client?v=${id}`,
     },
     packages,
@@ -372,6 +453,8 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
       handlerKey: serverHandlerKey,
       modules: serverModules,
       resolverKey: serverResolverKey,
+      routerKey: serverRouterKey,
+      manifestKey: serverManifestKey,
       serverFnBase: serverFnInternalBase,
       startInstanceKey: serverStartInstanceKey,
     },

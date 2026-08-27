@@ -106,6 +106,8 @@ function artifactIsValid(artifact: TanstackStartArtifact, revision: string) {
     typeof artifact.rpcToken === "string" &&
     /^[A-Za-z0-9_-]{43}$/.test(artifact.rpcToken) &&
     typeof artifact.html === "string" &&
+    typeof artifact.ssrClientBundle === "string" &&
+    typeof artifact.ssrCss === "string" &&
     typeof artifact.serverBundle === "string" &&
     Array.isArray(artifact.serverFnIds)
   );

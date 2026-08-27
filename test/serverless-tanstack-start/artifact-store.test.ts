@@ -28,6 +28,8 @@ function artifact(revision: string): TanstackStartArtifact {
     kernelId: kernelManifest.id,
     revision,
     rpcToken: "t".repeat(43),
+    ssrClientBundle: "",
+    ssrCss: "",
     serverBundle: "export const durable = true;",
     serverFnIds: ["server-fn"],
     success: true,

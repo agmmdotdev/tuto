@@ -9,6 +9,6 @@ The following items are remaining for the TanStack Start playground integration:
 3. **Monaco Diagnostics Refresh:**
    - Force a diagnostics compile check on all open Monaco editor models when the route tree is regenerated to resolve or display link type warnings instantly.
 4. **Full Start Router/SSR Host:**
-   - The public Start request host now handles the CSR server-function tier, including request middleware, request APIs, cookies, and sessions. Add the real router entry, route manifest, streaming HTML, and server-route dispatch for the full Start runtime tier.
+   - The public Start request host now renders real workspace routers and loaders and emits a hydration module, CSS, and manifest assets in addition to the server-function tier. Complete the generated per-route manifest, route-level chunking, server-route coverage, browser hydration/navigation tests, and end-to-end streaming (the current worker protocol buffers the response).
 5. **Harden Untrusted Execution:**
    - Move arbitrary student server code from the current bounded child-process lifecycle into a container or microVM security boundary before multi-tenant production use.

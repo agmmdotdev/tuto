@@ -852,6 +852,7 @@ What is real here:
 - real nested layouts, loaders, params, search state, links, and native Start RPC serialization
 - real \`@tanstack/start-client-core\` and \`@tanstack/start-server-core\` execution
 - real \`src/start.ts\` request middleware, function middleware, request/response helpers, cookies, and sessions for server-function requests
+- real router SSR, loader execution, hydration, and compiled CSS through the official Start handler
 
 What is intentionally still experimental here:
 
@@ -861,9 +862,10 @@ What is intentionally still experimental here:
 - browser-side server function calls send only the native Start request plus revision and function id
 - server bundles execute in bounded, revision-pinned child workers, not in the Next.js host process
 
-This is the CSR tier, not full Start SSR. Without durable storage, a missing hot
-artifact asks you to rebuild; configured durable storage restores it across app
-processes.`,
+This is the first SSR tier, not the complete production host: worker responses
+are buffered and the route manifest is still revision-wide. Without durable
+storage, a missing hot artifact asks you to rebuild; configured durable storage
+restores it across app processes.`,
       },
       {
         path: "index.html",
@@ -987,22 +989,21 @@ export const startInstance = createStart(() => ({
         path: "src/router.tsx",
         language: "tsx",
         description: "Router setup for the stateless TanStack playground.",
-        content: `import { createMemoryHistory } from "@tanstack/react-router";
-import { createRouter } from "@tanstack/react-router";
+        content: `import { createMemoryHistory, createRouter } from "@tanstack/react-router";
 import { routeTree } from "./routeTree.gen";
 
-const history = createMemoryHistory({
-  initialEntries: ["/"],
-});
+export function getRouter() {
+  return createRouter({
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+    routeTree,
+    defaultPreload: "intent",
+    defaultPendingMinMs: 180,
+    defaultPendingMs: 120,
+    scrollRestoration: false,
+  });
+}
 
-export const router = createRouter({
-  history,
-  routeTree,
-  defaultPreload: "intent",
-  defaultPendingMinMs: 180,
-  defaultPendingMs: 120,
-  scrollRestoration: false,
-});
+export const router = getRouter();
 
 declare module "@tanstack/react-router" {
   interface Register {
@@ -1230,8 +1231,10 @@ export async function loadPostById(postId: string) {
         description: "The TanStack root route shell and not-found state.",
         content: `import "../styles.css";
 import {
+  HeadContent,
   Link,
   Outlet,
+  Scripts,
   createRootRoute,
   useRouterState,
 } from "@tanstack/react-router";
@@ -1252,8 +1255,13 @@ function RootLayout() {
   });
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(201,108,54,0.22),transparent_24rem),radial-gradient(circle_at_85%_20%,rgba(118,90,68,0.16),transparent_20rem),linear-gradient(180deg,#fffaf3_0%,#efe2d1_100%)] font-sans text-stone-950">
-      <div className="relative mx-auto w-[min(1120px,calc(100%-32px))] pt-6 pb-14">
+    <html lang="en">
+      <head>
+        <HeadContent />
+      </head>
+      <body>
+        <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(201,108,54,0.22),transparent_24rem),radial-gradient(circle_at_85%_20%,rgba(118,90,68,0.16),transparent_20rem),linear-gradient(180deg,#fffaf3_0%,#efe2d1_100%)] font-sans text-stone-950">
+          <div className="relative mx-auto w-[min(1120px,calc(100%-32px))] pt-6 pb-14">
         <div className="pointer-events-none fixed top-16 right-[min(12vw,140px)] h-56 w-56 rounded-full bg-orange-400/25 blur-2xl" />
         <div className="pointer-events-none fixed bottom-14 left-[min(8vw,90px)] h-44 w-44 rounded-full bg-stone-700/15 blur-2xl" />
 
@@ -1264,7 +1272,7 @@ function RootLayout() {
         >
           <div className="space-y-4">
             <span className="inline-flex items-center gap-2 rounded-full bg-orange-500/12 px-3.5 py-2 text-[11px] font-bold uppercase tracking-[0.22em] text-orange-900/80">
-              TanStack Start / client-safe
+              TanStack Start / native SSR
             </span>
             <h1 className="max-w-4xl text-4xl font-semibold leading-[0.92] tracking-[-0.04em] text-stone-950 sm:text-6xl">
               Real route files running in a stateless Vercel preview.
@@ -1317,8 +1325,11 @@ function RootLayout() {
         <main className="relative z-10 mt-5">
           <Outlet />
         </main>
-      </div>
-    </div>
+          </div>
+        </div>
+        <Scripts />
+      </body>
+    </html>
   );
 }
 

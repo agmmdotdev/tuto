@@ -4,10 +4,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "vitest";
+import { materializeTanstackRouteTree } from "../../lib/ide/tanstack-route-tree";
+import { getServerlessTanstackStartTemplate } from "../../lib/ide/templates";
+import type { WorkspaceLanguage } from "../../lib/ide/types";
 import {
   OPTIONS as handleNativeRpcOptions,
   POST as handleNativeRpc,
 } from "../../app/api/serverless/tanstack-start/core-rpc/route";
+import { GET as getNativeAsset } from "../../app/api/serverless/tanstack-start/core-asset/route";
+import { GET as handleNativeRender } from "../../app/api/serverless/tanstack-start/core-render/route";
 import { GET as getClientKernel } from "../../app/api/serverless/tanstack-start/kernel/client/route";
 import {
   clearTanstackStartArtifactCache,
@@ -23,7 +28,7 @@ import { clearNativeRpcWorkerPoolForTests } from "../../lib/serverless-tanstack-
 
 type WorkspaceFileInput = {
   content: string;
-  language: "html" | "ts";
+  language: WorkspaceLanguage;
   path: string;
 };
 
@@ -40,6 +45,8 @@ type PreviewCompileResult = {
   kernelId: string;
   revision: string;
   rpcToken: string;
+  ssrClientBundle: string;
+  ssrCss: string;
   serverBundle: string;
   serverFnIds: string[];
   success: boolean;
@@ -145,6 +152,8 @@ globalThis.__tutoPreviewPromise = greet({ data: { name: ' Ada ' } })
     kernelId: preview.kernelId,
     revision: preview.revision,
     rpcToken: preview.rpcToken,
+    ssrClientBundle: preview.ssrClientBundle,
+    ssrCss: preview.ssrCss,
     serverBundle: preview.serverBundle,
     serverFnIds: preview.serverFnIds,
     success: true,
@@ -327,6 +336,8 @@ globalThis.__tutoPreviewPromise = inspectRequest()
     kernelId: preview.kernelId,
     revision: preview.revision,
     rpcToken: preview.rpcToken,
+    ssrClientBundle: preview.ssrClientBundle,
+    ssrCss: preview.ssrCss,
     serverBundle: preview.serverBundle,
     serverFnIds: preview.serverFnIds,
     success: true,
@@ -427,6 +438,161 @@ globalThis.__tutoPreviewPromise = inspectRequest()
   }
 });
 
+test("the native Start host renders a workspace router with loaders", async () => {
+  const files: WorkspaceFileInput[] = [
+    {
+      path: "index.html",
+      language: "html",
+      content: '<script type="module" src="./src/main.ts"></script>',
+    },
+    {
+      path: "src/main.ts",
+      language: "ts",
+      content: "export {};",
+    },
+    {
+      path: "src/router.tsx",
+      language: "tsx",
+      content: `import React from 'react';
+import {
+  Outlet,
+  Scripts,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from '@tanstack/react-router';
+
+const rootRoute = createRootRoute({
+  component: () => (
+    <html lang="en">
+      <head><title>Native Start SSR</title></head>
+      <body><main><Outlet /></main><Scripts /></body>
+    </html>
+  ),
+});
+
+const helloRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/hello',
+  loader: async () => ({ message: 'loader rendered on the server' }),
+  component: HelloRoute,
+});
+
+function HelloRoute() {
+  const data = helloRoute.useLoaderData();
+  return <h1 data-ssr="true">{data.message}</h1>;
+}
+
+const routeTree = rootRoute.addChildren([helloRoute]);
+
+export function getRouter() {
+  return createRouter({ routeTree });
+}`,
+    },
+  ];
+  const preview = compilePreview(files);
+
+  assert.equal(preview.success, true, preview.html);
+  assert.deepEqual(preview.serverFnIds, []);
+  assert.ok(preview.serverBundle.length > 0);
+  assert.ok(preview.ssrClientBundle.length > 0);
+  putTanstackStartArtifact({
+    buildMetrics: preview.buildMetrics,
+    diagnostics: [],
+    durationMs: 1,
+    html: preview.html,
+    kernelId: preview.kernelId,
+    revision: preview.revision,
+    rpcToken: preview.rpcToken,
+    ssrClientBundle: preview.ssrClientBundle,
+    ssrCss: preview.ssrCss,
+    serverBundle: preview.serverBundle,
+    serverFnIds: preview.serverFnIds,
+    success: true,
+  });
+
+  try {
+    const response = await handleNativeRender(
+      new Request(
+        `http://tuto.local/api/serverless/tanstack-start/core-render?revision=${preview.revision}&token=${preview.rpcToken}&path=%2Fhello`,
+      ),
+    );
+    const html = await response.text();
+
+    assert.equal(response.status, 200, html);
+    assert.match(response.headers.get("content-type") ?? "", /text\/html/);
+    assert.equal(response.headers.get("x-tuto-artifact-cache"), "hot");
+    assert.match(html, /Native Start SSR/);
+    assert.match(html, /data-ssr="true"/);
+    assert.match(html, /loader rendered on the server/);
+    assert.match(html, /tanstack-start\/kernel\/client/);
+    assert.match(html, /tanstack-start\/core-asset/);
+
+    const clientAsset = await getNativeAsset(
+      new Request(
+        `http://tuto.local/api/serverless/tanstack-start/core-asset?revision=${preview.revision}&token=${preview.rpcToken}&kind=client`,
+      ),
+    );
+    assert.equal(clientAsset.status, 200);
+    assert.match(
+      clientAsset.headers.get("content-type") ?? "",
+      /text\/javascript/,
+    );
+    assert.ok((await clientAsset.text()).length > 100);
+  } finally {
+    clearTanstackStartArtifactCache();
+    clearNativeRpcWorkerPoolForTests();
+  }
+});
+
+test("the complete Start starter template compiles and renders through SSR", async () => {
+  const template = getServerlessTanstackStartTemplate();
+  assert.ok(template);
+  const files = materializeTanstackRouteTree(template.files).map(
+    ({ content, language, path: filePath }) => ({
+      content,
+      language,
+      path: filePath,
+    }),
+  );
+  const preview = compilePreview(files);
+
+  assert.equal(preview.success, true, preview.html);
+  assert.ok(preview.serverBundle.length > 0);
+  assert.ok(preview.ssrClientBundle.length > 0);
+  assert.ok(preview.ssrCss.length > 0);
+  putTanstackStartArtifact({
+    buildMetrics: preview.buildMetrics,
+    diagnostics: [],
+    durationMs: 1,
+    html: preview.html,
+    kernelId: preview.kernelId,
+    revision: preview.revision,
+    rpcToken: preview.rpcToken,
+    ssrClientBundle: preview.ssrClientBundle,
+    ssrCss: preview.ssrCss,
+    serverBundle: preview.serverBundle,
+    serverFnIds: preview.serverFnIds,
+    success: true,
+  });
+
+  try {
+    const response = await handleNativeRender(
+      new Request(
+        `http://tuto.local/api/serverless/tanstack-start/core-render?revision=${preview.revision}&token=${preview.rpcToken}&path=%2F`,
+      ),
+    );
+    const html = await response.text();
+
+    assert.equal(response.status, 200, html);
+    assert.match(html, /Real file routes, loaders, params/);
+    assert.match(html, /tanstack-start\/core-asset/);
+  } finally {
+    clearTanstackStartArtifactCache();
+    clearNativeRpcWorkerPoolForTests();
+  }
+});
+
 test("native RPC rejects missing and incorrect capability tokens", async () => {
   const revision = "e".repeat(64);
   const serverFnId = "f".repeat(64);
@@ -446,6 +612,8 @@ test("native RPC rejects missing and incorrect capability tokens", async () => {
     kernelId: kernelManifest.id,
     revision,
     rpcToken,
+    ssrClientBundle: "",
+    ssrCss: "",
     serverBundle: "",
     serverFnIds: [serverFnId],
     success: true,

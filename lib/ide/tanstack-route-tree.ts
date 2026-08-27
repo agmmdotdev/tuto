@@ -60,13 +60,13 @@ function routePathFromStem(stem: string) {
 function parentPathFromFullPath(fullPath: string) {
   if (fullPath === "/") return null;
 
-  const trimmed =
-    fullPath.endsWith("/") && fullPath !== "/"
-      ? fullPath.slice(0, -1)
-      : fullPath;
-  const index = trimmed.lastIndexOf("/");
+  if (fullPath.endsWith("/")) {
+    return fullPath.slice(0, -1);
+  }
 
-  return index <= 0 ? "/" : trimmed.slice(0, index);
+  const index = fullPath.lastIndexOf("/");
+
+  return index <= 0 ? null : fullPath.slice(0, index);
 }
 
 function childPath(fullPath: string, parentFullPath: string | null) {
@@ -207,6 +207,8 @@ export const Link = React.forwardRef<HTMLAnchorElement, LinkProps<any>>(function
   return React.createElement("a", { ...props, ref, href: props.href ?? props.to ?? "#" });
 }) as <const TTo extends RoutePath>(props: LinkProps<TTo> & { ref?: React.Ref<HTMLAnchorElement> }) => React.ReactElement;
 export const Outlet = () => null;
+export const HeadContent = () => null;
+export const Scripts = () => null;
 export const RouterProvider = (_props: { router: unknown }) => null;
 export function createFileRoute<const TPath extends RoutePath>(_path: TPath) {
   return (_options: FileRouteOptions<TPath>) => ({
@@ -382,7 +384,7 @@ ${children.map((child) => `  ${child.identifier},`).join("\n")}
 const ${route.identifier}RouteWithChildren = ${route.identifier}._addFileChildren(${childMapName(route)});`;
     })
     .join("\n\n");
-  const rootChildren = routes.filter((route) => route.parentFullPath === "/");
+  const rootChildren = routes.filter((route) => route.parentFullPath === null);
   const rootChildrenMembers = rootChildren
     .map((route) => {
       const hasChildren = routesWithChildren.includes(route);

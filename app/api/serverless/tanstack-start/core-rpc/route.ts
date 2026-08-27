@@ -1,9 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
-import {
-  getTanstackStartArtifact,
-  putTanstackStartArtifact,
-} from "../../../../../lib/serverless-tanstack-start/artifact-cache";
-import { getDurableTanstackStartArtifact } from "../../../../../lib/serverless-tanstack-start/artifact-store";
+import { resolveArtifactRequest } from "../../../../../lib/serverless-tanstack-start/artifact-request";
 import type { NativeRpcRequest } from "../../../../../lib/serverless-tanstack-start/native-rpc-protocol";
 import { getNativeRpcWorkerPool } from "../../../../../lib/serverless-tanstack-start/native-rpc-worker-pool";
 
@@ -35,11 +30,6 @@ function corsHeadersFor(request: Request) {
   };
 }
 
-function matchesRpcToken(actual: string | null, expected: string) {
-  if (!actual || !/^[A-Za-z0-9_-]{43}$/.test(actual)) return false;
-  return timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
-}
-
 async function handleNativeRpc(request: Request) {
   const corsHeaders = corsHeadersFor(request);
 
@@ -47,7 +37,6 @@ async function handleNativeRpc(request: Request) {
     const url = new URL(request.url);
     const revision = url.searchParams.get("revision");
     const serverFnId = url.searchParams.get("id");
-    const rpcToken = url.searchParams.get("token");
 
     if (!revision || !/^[a-f0-9]{64}$/.test(revision) || !serverFnId) {
       return new Response(
@@ -59,36 +48,14 @@ async function handleNativeRpc(request: Request) {
       );
     }
 
-    let artifact = getTanstackStartArtifact(revision);
-    let artifactCache = "hot";
-    if (!artifact) {
-      try {
-        artifact = await getDurableTanstackStartArtifact(revision);
-      } catch (error) {
-        return new Response(
-          error instanceof Error
-            ? `Shared artifact storage is unavailable: ${error.message}`
-            : "Shared artifact storage is unavailable.",
-          { headers: corsHeaders, status: 503 },
-        );
-      }
-      if (artifact) {
-        artifactCache = "durable";
-        putTanstackStartArtifact(artifact);
-      }
-    }
-    if (!artifact) {
-      return new Response(
-        "This compiled revision is no longer available. Save or rebuild the preview and retry.",
-        { headers: corsHeaders, status: 410 },
-      );
-    }
-    if (!matchesRpcToken(rpcToken, artifact.rpcToken)) {
-      return new Response("Invalid preview RPC capability.", {
+    const resolution = await resolveArtifactRequest(request);
+    if (!resolution.ok) {
+      return new Response(resolution.message, {
         headers: corsHeaders,
-        status: 403,
+        status: resolution.status,
       });
     }
+    const { artifact, artifactCache } = resolution;
     if (!artifact.serverFnIds.includes(serverFnId)) {
       return new Response("Unknown server function for this revision.", {
         headers: corsHeaders,

@@ -147,6 +147,7 @@ class NativeRpcChildWorker implements WorkerLike {
       if (message.type === "error") {
         const error = new Error(message.error.message);
         error.name = message.error.name;
+        if (message.error.stack) error.stack = message.error.stack;
         if (message.id && this.pending?.id === message.id) {
           const pending = this.pending;
           this.pending = undefined;

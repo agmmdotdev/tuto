@@ -54,7 +54,7 @@ transform for both the client and server kernels.
 
 ## Playground integration
 
-The proof is now the playground's default CSR path. A save hashes the canonical
+The proof is now the playground's native compile path. A save hashes the canonical
 workspace snapshot, builds the browser and server artifacts once, and stores
 the result in a bounded LRU/TTL cache. The browser bundle uses the real Start
 client runtime with a base URL containing the revision and a random per-artifact
@@ -100,6 +100,29 @@ worker startup. The worker limits can be tuned with
 Successful RPC responses expose `x-tuto-worker-id`,
 `x-tuto-worker-request`, and `x-tuto-worker-reused` for diagnostics. These are
 observability headers, not application state or cache keys.
+
+### Router SSR checkpoint
+
+Workspace revisions that export `getRouter()` from `src/router.tsx` now use the
+official `createStartHandler(defaultStreamHandler)` document path. A capability-
+checked render endpoint dispatches the document request to the same revision-
+pinned worker used for server functions. Route matching, loaders, request
+middleware, router dehydration, and HTML rendering therefore run in the real
+Start server runtime.
+
+The compiler also creates a revision hydration module using `StartClient` and
+`hydrateRoot`, compiles the workspace CSS, and exposes both through authenticated
+artifact endpoints. The generated Start manifest adds the shared client kernel,
+revision hydration module, module preload, and stylesheet to the server-rendered
+document. The default starter template now exports a router factory and renders
+`HeadContent` and `Scripts` from its root route.
+
+This is the first router/SSR slice, not the complete production host. The worker
+protocol currently buffers the rendered response before returning it to Next.js,
+so the React render is streaming internally but the browser does not yet receive
+end-to-end streamed chunks. A complete generated route manifest, server-route
+dispatch verification, route-level chunking, and browser hydration/navigation
+coverage remain.
 
 ### Cross-instance artifact storage
 
@@ -157,22 +180,24 @@ they no longer traverse or emit those framework graphs.
 Run `yarn measure:tanstack-start-kernels` to rebuild and measure the boundary. A
 local two-edit measurement produced these uncompressed minified sizes:
 
-- shared client kernel: 352,198 bytes
-- shared server kernel: 366,259 bytes
-- first client/server revision: 3,027 / 3,777 bytes
-- edited client/server revision: 3,025 / 3,777 bytes
-- measured compile durations: 306 ms and 294 ms
+- shared client kernel: 337,697 bytes
+- shared server kernel: 459,186 bytes
+- first client/server revision: 3,027 / 3,887 bytes
+- edited client/server revision: 3,025 / 3,887 bytes
+- measured compile durations: 205 ms and 216 ms
 
 Those timings are local diagnostics, not a production latency claim. The
-important result is structural: each edit emitted about 6.8 KiB instead of
-rebundling roughly 718 KiB of shared framework code. The larger shared server
-kernel now contains Start's public request host and its H3 request/session graph.
+important result is structural: each non-router edit emitted about 6.9 KiB
+instead of rebundling roughly 797 KiB of shared framework code. The larger shared
+server kernel now contains Start's public request host, React SSR graph, Router,
+and its H3 request/session graph.
 
 ## Remaining architecture work
 
-1. add the full Start router/SSR host, route manifest, streaming HTML, and server
-   routes. The current request host intentionally returns 501 for router
-   requests because this remains the CSR server-function tier.
+1. complete the Start router host with a generated per-route manifest,
+   route-level chunking, server-route coverage, and end-to-end response
+   streaming. The current checkpoint renders real router documents and loaders,
+   but buffers the worker response before returning it to the browser.
 2. move execution behind a hardened sandbox such as an isolated container or
    microVM before treating arbitrary untrusted student code as safe for a
    multi-tenant production service. The current child-process boundary protects
@@ -184,5 +209,6 @@ to isolate the compiler experiment. The integrated playground no longer relies
 on that private handler path; its request host and student-facing APIs come from
 the official React Start package exports.
 
-This first experiment deliberately does not claim SSR, streaming HTML, server
-routes, or RSC support. Those remain the full-runtime tier.
+This checkpoint claims router SSR and hydration for the covered document path.
+It does not yet claim end-to-end streaming, complete server-route support, or
+RSC support. Those remain work for the full-runtime tier.
