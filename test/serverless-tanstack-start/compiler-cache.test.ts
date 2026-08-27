@@ -4,7 +4,10 @@ import {
   clearTanstackStartArtifactCache,
   type TanstackStartArtifact,
 } from "../../lib/serverless-tanstack-start/artifact-cache";
-import { setTanstackStartArtifactStoreForTests } from "../../lib/serverless-tanstack-start/artifact-store";
+import {
+  getTanstackStartArtifactMetadata,
+  setTanstackStartArtifactStoreForTests,
+} from "../../lib/serverless-tanstack-start/artifact-store";
 import { compileServerlessTanstackStartWorkspace } from "../../lib/serverless-tanstack-start/compiler";
 
 afterEach(() => {
@@ -73,9 +76,22 @@ test("a Start workspace compiles once per content revision", async () => {
 
 test("a durable artifact prevents recompilation after a hot-cache miss", async () => {
   const durable = new Map<string, TanstackStartArtifact>();
+  let fullReads = 0;
+  let summaryReads = 0;
   setTanstackStartArtifactStoreForTests({
     async get(revision) {
+      fullReads += 1;
       return durable.get(revision) ?? null;
+    },
+    async getSummary(revision) {
+      summaryReads += 1;
+      const artifact = durable.get(revision);
+      return artifact
+        ? {
+            ...getTanstackStartArtifactMetadata(artifact),
+            html: artifact.html,
+          }
+        : null;
     },
     async put(artifact) {
       durable.set(artifact.revision, artifact);
@@ -93,4 +109,6 @@ test("a durable artifact prevents recompilation after a hot-cache miss", async (
   assert.equal(restored.durationMs, 0);
   assert.equal(restored.revision, first.revision);
   assert.equal(restored.html, first.html);
+  assert.equal(summaryReads, 2);
+  assert.equal(fullReads, 0);
 });

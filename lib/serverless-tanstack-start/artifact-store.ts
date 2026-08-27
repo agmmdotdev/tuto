@@ -45,6 +45,38 @@ type ArtifactManifest = Omit<
   sources: ArtifactSourceManifest;
 };
 
+export type TanstackStartArtifactMetadata = Omit<
+  TanstackStartArtifact,
+  | "html"
+  | "serverBundle"
+  | "serverChunks"
+  | "ssrClientBundle"
+  | "ssrClientChunks"
+  | "ssrCss"
+  | "ssrCssChunks"
+>;
+
+export type TanstackStartArtifactAsset =
+  | { kind: "client" }
+  | { kind: "client-chunk"; name: string }
+  | { kind: "style" }
+  | { kind: "style-chunk"; name: string };
+
+export type TanstackStartArtifactAssetResult = {
+  artifact: TanstackStartArtifactMetadata;
+  body: string | null;
+};
+
+export type TanstackStartArtifactServerResult =
+  TanstackStartArtifactMetadata & {
+    serverBundle: string;
+    serverChunks: Record<string, string>;
+  };
+
+export type TanstackStartArtifactSummary = TanstackStartArtifactMetadata & {
+  html: string;
+};
+
 type ContentAddressedEnvelopePayload = {
   artifact: ArtifactManifest;
   createdAt: number;
@@ -68,6 +100,15 @@ export type ArtifactBlobStore = {
 
 export type TanstackStartArtifactStore = {
   get(revision: string): Promise<TanstackStartArtifact | null>;
+  getAsset?(
+    revision: string,
+    asset: TanstackStartArtifactAsset,
+  ): Promise<TanstackStartArtifactAssetResult | null>;
+  getMetadata?(revision: string): Promise<TanstackStartArtifactMetadata | null>;
+  getServer?(
+    revision: string,
+  ): Promise<TanstackStartArtifactServerResult | null>;
+  getSummary?(revision: string): Promise<TanstackStartArtifactSummary | null>;
   put(artifact: TanstackStartArtifact): Promise<void>;
 };
 
@@ -104,6 +145,7 @@ const defaultTtlMs = 60 * 60 * 1000;
 const defaultMaxBytes = 16 * 1024 * 1024;
 const defaultBlobCacheMaxBytes = 32 * 1024 * 1024;
 const defaultBlobConcurrency = 8;
+const defaultManifestCacheEntries = 64;
 const defaultPrefix = "tanstack-start/artifacts";
 const configuredStoreKey = Symbol.for("tuto.tanstack-start.durable-store.v2");
 let testStore: TanstackStartArtifactStore | null | undefined;
@@ -299,6 +341,54 @@ function artifactIsValid(
   );
 }
 
+function artifactMetadata(
+  artifact: TanstackStartArtifact | ArtifactManifest,
+): TanstackStartArtifactMetadata {
+  return {
+    buildMetrics: artifact.buildMetrics,
+    diagnostics: artifact.diagnostics,
+    durationMs: artifact.durationMs,
+    kernelId: artifact.kernelId,
+    revision: artifact.revision,
+    routeManifest: artifact.routeManifest,
+    rpcToken: artifact.rpcToken,
+    serverFnIds: artifact.serverFnIds,
+    success: artifact.success,
+  };
+}
+
+function artifactAssetBody(
+  artifact: TanstackStartArtifact,
+  asset: TanstackStartArtifactAsset,
+) {
+  switch (asset.kind) {
+    case "client":
+      return artifact.ssrClientBundle;
+    case "client-chunk":
+      return artifact.ssrClientChunks[asset.name] ?? null;
+    case "style":
+      return artifact.ssrCss;
+    case "style-chunk":
+      return artifact.ssrCssChunks[asset.name] ?? null;
+  }
+}
+
+function artifactAssetDescriptor(
+  manifest: ArtifactManifest,
+  asset: TanstackStartArtifactAsset,
+) {
+  switch (asset.kind) {
+    case "client":
+      return manifest.sources.ssrClientBundle;
+    case "client-chunk":
+      return manifest.sources.ssrClientChunks[asset.name] ?? null;
+    case "style":
+      return manifest.sources.ssrCss;
+    case "style-chunk":
+      return manifest.sources.ssrCssChunks[asset.name] ?? null;
+  }
+}
+
 function descriptorIsValid(value: unknown): value is ArtifactBlobDescriptor {
   if (value === null || typeof value !== "object") return false;
   const descriptor = value as ArtifactBlobDescriptor;
@@ -471,6 +561,17 @@ export function createTanstackStartArtifactStore({
       ? blobCacheMaxBytes
       : defaultBlobCacheMaxBytes,
   );
+  const manifestCache = new Map<string, ArtifactEnvelopePayload>();
+
+  const cacheManifest = (revision: string, payload: ArtifactEnvelopePayload) => {
+    manifestCache.delete(revision);
+    manifestCache.set(revision, payload);
+    while (manifestCache.size > defaultManifestCacheEntries) {
+      const oldest = manifestCache.keys().next().value as string | undefined;
+      if (!oldest) break;
+      manifestCache.delete(oldest);
+    }
+  };
 
   const loadBlob = async (descriptor: ArtifactBlobDescriptor) => {
     const cached = cache.get(descriptor.hash);
@@ -498,66 +599,87 @@ export function createTanstackStartArtifactStore({
     return source;
   };
 
-  return {
-    async get(revision) {
-      const key = objectKey(prefix, revision);
-      const serialized = await blobStore.get(key);
-      if (serialized === null) return null;
-      if (Buffer.byteLength(serialized) > maxBytes) {
+  const loadDescriptors = async (descriptors: ArtifactBlobDescriptor[]) => {
+    const uniqueDescriptors = new Map<string, ArtifactBlobDescriptor>();
+    for (const descriptor of descriptors) {
+      const existing = uniqueDescriptors.get(descriptor.hash);
+      if (existing && existing.bytes !== descriptor.bytes) {
         throw new Error(
-          "Stored TanStack artifact exceeds the configured size limit.",
+          "Stored TanStack artifact has inconsistent blob descriptors.",
         );
       }
+      uniqueDescriptors.set(descriptor.hash, descriptor);
+    }
+    return new Map(
+      await mapConcurrent(
+        [...uniqueDescriptors.values()],
+        concurrency,
+        async (descriptor) =>
+          [descriptor.hash, await loadBlob(descriptor)] as const,
+      ),
+    );
+  };
 
-      let envelope: ArtifactEnvelope;
-      try {
-        envelope = JSON.parse(serialized) as ArtifactEnvelope;
-      } catch {
-        throw new Error("Stored TanStack artifact is not valid JSON.");
-      }
-      const payload = {
-        artifact: envelope.artifact,
-        createdAt: envelope.createdAt,
-        expiresAt: envelope.expiresAt,
-        version: envelope.version,
-      } as ArtifactEnvelopePayload;
-      const expectedIntegrity = integrity(payload, signingKey);
-      if (!equalIntegrity(envelope.integrity, expectedIntegrity)) {
-        throw new Error(
-          "Stored TanStack artifact failed integrity validation.",
-        );
-      }
-      if (
-        !Number.isSafeInteger(payload.createdAt) ||
-        !Number.isSafeInteger(payload.expiresAt) ||
-        payload.createdAt > payload.expiresAt
-      ) {
-        throw new Error(
-          "Stored TanStack artifact is incompatible with this runtime.",
-        );
-      }
-      if (payload.expiresAt <= Date.now()) {
+  const loadManifest = async (revision: string) => {
+    const key = objectKey(prefix, revision);
+    const cached = manifestCache.get(revision);
+    if (cached) {
+      if (cached.expiresAt <= Date.now()) {
+        manifestCache.delete(revision);
         await blobStore.delete(key).catch(() => undefined);
         return null;
       }
+      cacheManifest(revision, cached);
+      return cached;
+    }
 
-      if (payload.version === 3) {
-        if (!artifactIsValid(payload.artifact, revision)) {
-          throw new Error(
-            "Stored TanStack artifact is incompatible with this runtime.",
-          );
-        }
-        return payload.artifact;
-      }
-      if (
-        payload.version !== 4 ||
-        !artifactManifestIsValid(payload.artifact, revision)
-      ) {
+    const serialized = await blobStore.get(key);
+    if (serialized === null) return null;
+    if (Buffer.byteLength(serialized) > maxBytes) {
+      throw new Error(
+        "Stored TanStack artifact exceeds the configured size limit.",
+      );
+    }
+
+    let envelope: ArtifactEnvelope;
+    try {
+      envelope = JSON.parse(serialized) as ArtifactEnvelope;
+    } catch {
+      throw new Error("Stored TanStack artifact is not valid JSON.");
+    }
+    const payload = {
+      artifact: envelope.artifact,
+      createdAt: envelope.createdAt,
+      expiresAt: envelope.expiresAt,
+      version: envelope.version,
+    } as ArtifactEnvelopePayload;
+    if (!equalIntegrity(envelope.integrity, integrity(payload, signingKey))) {
+      throw new Error("Stored TanStack artifact failed integrity validation.");
+    }
+    if (
+      !Number.isSafeInteger(payload.createdAt) ||
+      !Number.isSafeInteger(payload.expiresAt) ||
+      payload.createdAt > payload.expiresAt
+    ) {
+      throw new Error(
+        "Stored TanStack artifact is incompatible with this runtime.",
+      );
+    }
+    if (payload.expiresAt <= Date.now()) {
+      await blobStore.delete(key).catch(() => undefined);
+      return null;
+    }
+
+    if (payload.version === 3) {
+      if (!artifactIsValid(payload.artifact, revision)) {
         throw new Error(
           "Stored TanStack artifact is incompatible with this runtime.",
         );
       }
-
+    } else if (
+      payload.version === 4 &&
+      artifactManifestIsValid(payload.artifact, revision)
+    ) {
       const descriptors = artifactDescriptors(payload.artifact);
       const referencedBytes = descriptors.reduce(
         (total, descriptor) => total + descriptor.bytes,
@@ -568,22 +690,35 @@ export function createTanstackStartArtifactStore({
           "Stored TanStack artifact exceeds the configured size limit.",
         );
       }
-      const uniqueDescriptors = new Map<string, ArtifactBlobDescriptor>();
+      const descriptorBytes = new Map<string, number>();
       for (const descriptor of descriptors) {
-        const existing = uniqueDescriptors.get(descriptor.hash);
-        if (existing && existing.bytes !== descriptor.bytes) {
+        const existingBytes = descriptorBytes.get(descriptor.hash);
+        if (existingBytes !== undefined && existingBytes !== descriptor.bytes) {
           throw new Error(
             "Stored TanStack artifact has inconsistent blob descriptors.",
           );
         }
-        uniqueDescriptors.set(descriptor.hash, descriptor);
+        descriptorBytes.set(descriptor.hash, descriptor.bytes);
       }
-      const loaded = await mapConcurrent(
-        [...uniqueDescriptors.values()],
-        concurrency,
-        async (descriptor) => [descriptor.hash, await loadBlob(descriptor)] as const,
+    } else {
+      throw new Error(
+        "Stored TanStack artifact is incompatible with this runtime.",
       );
-      const artifact = reconstructArtifact(payload.artifact, new Map(loaded));
+    }
+
+    cacheManifest(revision, payload);
+    return payload;
+  };
+
+  return {
+    async get(revision) {
+      const payload = await loadManifest(revision);
+      if (!payload) return null;
+      if (payload.version === 3) return payload.artifact;
+      const artifact = reconstructArtifact(
+        payload.artifact,
+        await loadDescriptors(artifactDescriptors(payload.artifact)),
+      );
       if (
         !artifactIsValid(artifact, revision) ||
         Buffer.byteLength(JSON.stringify(artifact)) > maxBytes
@@ -593,6 +728,67 @@ export function createTanstackStartArtifactStore({
         );
       }
       return artifact;
+    },
+
+    async getAsset(revision, asset) {
+      const payload = await loadManifest(revision);
+      if (!payload) return null;
+      if (payload.version === 3) {
+        return {
+          artifact: artifactMetadata(payload.artifact),
+          body: artifactAssetBody(payload.artifact, asset),
+        };
+      }
+      const descriptor = artifactAssetDescriptor(payload.artifact, asset);
+      return {
+        artifact: artifactMetadata(payload.artifact),
+        body: descriptor ? await loadBlob(descriptor) : null,
+      };
+    },
+
+    async getMetadata(revision) {
+      const payload = await loadManifest(revision);
+      return payload ? artifactMetadata(payload.artifact) : null;
+    },
+
+    async getServer(revision) {
+      const payload = await loadManifest(revision);
+      if (!payload) return null;
+      if (payload.version === 3) {
+        return {
+          ...artifactMetadata(payload.artifact),
+          serverBundle: payload.artifact.serverBundle,
+          serverChunks: payload.artifact.serverChunks,
+        };
+      }
+      const blobs = await loadDescriptors([
+        payload.artifact.sources.serverBundle,
+        ...Object.values(payload.artifact.sources.serverChunks),
+      ]);
+      return {
+        ...artifactMetadata(payload.artifact),
+        serverBundle: blobs.get(payload.artifact.sources.serverBundle.hash)!,
+        serverChunks: Object.fromEntries(
+          Object.entries(payload.artifact.sources.serverChunks).map(
+            ([name, descriptor]) => [name, blobs.get(descriptor.hash)!],
+          ),
+        ),
+      };
+    },
+
+    async getSummary(revision) {
+      const payload = await loadManifest(revision);
+      if (!payload) return null;
+      if (payload.version === 3) {
+        return {
+          ...artifactMetadata(payload.artifact),
+          html: payload.artifact.html,
+        };
+      }
+      return {
+        ...artifactMetadata(payload.artifact),
+        html: await loadBlob(payload.artifact.sources.html),
+      };
     },
 
     async put(artifact) {
@@ -636,6 +832,7 @@ export function createTanstackStartArtifactStore({
         serialized,
         "application/json; charset=utf-8",
       );
+      cacheManifest(artifact.revision, payload);
     },
   };
 }
@@ -828,6 +1025,64 @@ function getStore() {
 
 export async function getDurableTanstackStartArtifact(revision: string) {
   return (await getStore()?.get(revision)) ?? null;
+}
+
+export async function getDurableTanstackStartArtifactAsset(
+  revision: string,
+  asset: TanstackStartArtifactAsset,
+) {
+  const store = getStore();
+  if (!store) return null;
+  if (store.getAsset) return store.getAsset(revision, asset);
+  const artifact = await store.get(revision);
+  return artifact
+    ? {
+        artifact: artifactMetadata(artifact),
+        body: artifactAssetBody(artifact, asset),
+      }
+    : null;
+}
+
+export async function getDurableTanstackStartArtifactMetadata(
+  revision: string,
+) {
+  const store = getStore();
+  if (!store) return null;
+  if (store.getMetadata) return store.getMetadata(revision);
+  const artifact = await store.get(revision);
+  return artifact ? artifactMetadata(artifact) : null;
+}
+
+export async function getDurableTanstackStartServerArtifact(revision: string) {
+  const store = getStore();
+  if (!store) return null;
+  if (store.getServer) return store.getServer(revision);
+  const artifact = await store.get(revision);
+  return artifact
+    ? {
+        ...artifactMetadata(artifact),
+        serverBundle: artifact.serverBundle,
+        serverChunks: artifact.serverChunks,
+      }
+    : null;
+}
+
+export async function getDurableTanstackStartArtifactSummary(
+  revision: string,
+) {
+  const store = getStore();
+  if (!store) return null;
+  if (store.getSummary) return store.getSummary(revision);
+  const artifact = await store.get(revision);
+  return artifact
+    ? { ...artifactMetadata(artifact), html: artifact.html }
+    : null;
+}
+
+export function getTanstackStartArtifactMetadata(
+  artifact: TanstackStartArtifact,
+) {
+  return artifactMetadata(artifact);
 }
 
 export async function putDurableTanstackStartArtifact(

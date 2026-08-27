@@ -232,7 +232,7 @@ globalThis.__tutoPreviewPromise = greet({ data: { name: ' Ada ' } })
       new RegExp(`&token=${preview.rpcToken}&id=[a-f0-9]{64}$`),
     );
     assert.doesNotMatch(await observedRequest!.text(), /"files"\s*:/);
-    assert.deepEqual(observedArtifactCaches, ["durable", "hot"]);
+    assert.deepEqual(observedArtifactCaches, ["durable", "durable"]);
     assert.equal(observedWorkerIds.length, 2);
     assert.ok(observedWorkerIds[0]);
     assert.equal(observedWorkerIds[1], observedWorkerIds[0]);

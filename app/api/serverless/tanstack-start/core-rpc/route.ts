@@ -1,4 +1,4 @@
-import { resolveArtifactRequest } from "../../../../../lib/serverless-tanstack-start/artifact-request";
+import { resolveArtifactServerRequest } from "../../../../../lib/serverless-tanstack-start/artifact-request";
 import type { NativeRpcRequest } from "../../../../../lib/serverless-tanstack-start/native-rpc-protocol";
 import { getNativeRpcWorkerPool } from "../../../../../lib/serverless-tanstack-start/native-rpc-worker-pool";
 
@@ -48,7 +48,7 @@ async function handleNativeRpc(request: Request) {
       );
     }
 
-    const resolution = await resolveArtifactRequest(request);
+    const resolution = await resolveArtifactServerRequest(request);
     if (!resolution.ok) {
       return new Response(resolution.message, {
         headers: corsHeaders,

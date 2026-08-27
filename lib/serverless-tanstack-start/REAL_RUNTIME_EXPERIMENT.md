@@ -172,20 +172,24 @@ bounded to eight concurrent object requests instead of creating an unbounded
 fan-out.
 
 The reader validates the manifest revision, kernel, expiry, aggregate size, and
-HMAC before requesting its blobs, then validates every blob's byte count and
-SHA-256 digest before reconstructing and promoting the artifact into the hot
-LRU. Existing signed v3 monolithic objects remain readable during rollout; new
-writes use v4. A missing or expired revision returns HTTP 410; an unavailable,
-incomplete, or corrupt durable store returns HTTP 503 instead of pretending the
-revision was evicted.
+HMAC before requesting source blobs. Request authorization uses only that signed
+metadata, so an invalid capability token cannot trigger source reads. After
+authorization, each consumer resolves only the fields it needs: the compiler
+loads HTML, the asset gateway loads one client or CSS descriptor, and the
+server-function and render gateways load the server entry plus server chunks.
+Every selected blob is still checked for byte count and SHA-256 digest before
+use. Existing signed v3 monolithic objects remain readable through an eager
+fallback during rollout; new writes use v4. A missing or expired revision
+returns HTTP 410; an unavailable, incomplete, or corrupt durable store returns
+HTTP 503 instead of pretending the revision was evicted.
 
-This format is not by itself a guaranteed first-hit latency improvement. A
-completely cold host still reconstructs the current eager artifact and may read
-several blobs in parallel. The immediate wins are physical deduplication,
-atomic publication, integrity at blob granularity, and zero repeated object
-reads for hashes already verified by that host. The next storage checkpoint is
-to let each artifact endpoint resolve only the HTML, client asset, or server
-runtime fields it actually consumes.
+A completely cold host now fetches the signed manifest and only the descriptors
+required by that request. The bounded manifest and verified-blob caches make
+repeated selections possible without additional object-store reads. The
+`x-tuto-artifact-cache: durable` diagnostic identifies the authoritative tier;
+it does not imply that the current call performed a physical durable-store
+request. Physical deduplication, manifest-last atomic publication, and integrity
+at blob granularity remain unchanged.
 
 Durable storage is disabled unless explicitly configured. For Cloudflare R2 or
 another S3-compatible service:

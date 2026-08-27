@@ -16,6 +16,7 @@ import {
   type ArtifactBlobStore,
   createFilesystemTanstackStartArtifactStore,
   createTanstackStartArtifactStore,
+  getTanstackStartArtifactMetadata,
   setTanstackStartArtifactStoreForTests,
 } from "../../lib/serverless-tanstack-start/artifact-store";
 import kernelManifest from "../../lib/serverless-tanstack-start/kernel-manifest.generated.json";
@@ -190,6 +191,20 @@ test("reads existing signed v3 monolithic artifacts during migration", async () 
 
   const store = createFilesystemTanstackStartArtifactStore({ root, signingKey });
   assert.deepEqual(await store.get(revision), artifact(revision));
+  assert.equal(
+    (
+      await store.getAsset!(revision, {
+        kind: "client-chunk",
+        name: "chunks/hello-ABC123.js",
+      })
+    )?.body,
+    artifact(revision).ssrClientChunks["chunks/hello-ABC123.js"],
+  );
+  assert.deepEqual(await store.getServer!(revision), {
+    ...getTanstackStartArtifactMetadata(artifact(revision)),
+    serverBundle: artifact(revision).serverBundle,
+    serverChunks: artifact(revision).serverChunks,
+  });
 });
 
 test("fetches only absent verified blobs after a cold manifest read", async () => {
@@ -211,10 +226,62 @@ test("fetches only absent verified blobs after a cold manifest read", async () =
 
   backend.reads.length = 0;
   assert.deepEqual(await reader.get(revision), artifact(revision));
+  assert.equal(backend.reads.length, 0);
+});
+
+test("selectively reads metadata, one asset, and server runtime blobs", async () => {
+  const revision = "5".repeat(64);
+  const backend = memoryBlobStore();
+  const writer = createTanstackStartArtifactStore({
+    blobStore: backend.store,
+    signingKey: "selective-key",
+  });
+  await writer.put(artifact(revision));
+  const reader = createTanstackStartArtifactStore({
+    blobStore: backend.store,
+    signingKey: "selective-key",
+  });
+
+  backend.reads.length = 0;
+  const metadata = await reader.getMetadata!(revision);
+  assert.equal(metadata?.rpcToken, artifact(revision).rpcToken);
   assert.deepEqual(
     backend.reads.map((key) => path.posix.basename(key)),
     [`${revision}.json`],
   );
+
+  backend.reads.length = 0;
+  const selected = await reader.getAsset!(revision, {
+    kind: "client-chunk",
+    name: "chunks/hello-ABC123.js",
+  });
+  assert.equal(
+    selected?.body,
+    artifact(revision).ssrClientChunks["chunks/hello-ABC123.js"],
+  );
+  assert.equal(backend.reads.length, 1);
+  assert.match(backend.reads[0]!, /\.blob$/);
+
+  backend.reads.length = 0;
+  await reader.getAsset!(revision, {
+    kind: "client-chunk",
+    name: "chunks/hello-ABC123.js",
+  });
+  assert.equal(backend.reads.length, 0);
+
+  backend.reads.length = 0;
+  const server = await reader.getServer!(revision);
+  assert.equal(server?.serverBundle, artifact(revision).serverBundle);
+  assert.deepEqual(server?.serverChunks, artifact(revision).serverChunks);
+  assert.equal(backend.reads.length, 2);
+  assert.ok(backend.reads.every((key) => key.endsWith(".blob")));
+
+  backend.reads.length = 0;
+  assert.equal(
+    (await reader.getSummary!(revision))?.html,
+    artifact(revision).html,
+  );
+  assert.equal(backend.reads.length, 1);
 });
 
 test("publishes the manifest only after every content blob", async () => {

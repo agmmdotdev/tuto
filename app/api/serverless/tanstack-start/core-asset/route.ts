@@ -1,30 +1,37 @@
-import { resolveArtifactRequest } from "../../../../../lib/serverless-tanstack-start/artifact-request";
+import { resolveArtifactAssetRequest } from "../../../../../lib/serverless-tanstack-start/artifact-request";
+import type { TanstackStartArtifactAsset } from "../../../../../lib/serverless-tanstack-start/artifact-store";
 
 export const runtime = "nodejs";
 
 export async function GET(request: Request) {
-  const resolution = await resolveArtifactRequest(request);
+  const kind = new URL(request.url).searchParams.get("kind");
+  const requestedChunk = new URL(request.url).searchParams
+    .get("name")
+    ?.replace(/^\/+/, "");
+  const asset: TanstackStartArtifactAsset | null =
+    kind === "client"
+      ? { kind: "client" }
+      : kind === "style"
+        ? requestedChunk
+          ? { kind: "style-chunk", name: requestedChunk }
+          : { kind: "style" }
+        : kind === "chunk" && requestedChunk
+          ? { kind: "client-chunk", name: requestedChunk }
+          : null;
+  if (!asset) {
+    return new Response("Unknown preview asset.", {
+      headers: { "cache-control": "no-store" },
+      status: 404,
+    });
+  }
+  const resolution = await resolveArtifactAssetRequest(request, asset);
   if (!resolution.ok) {
     return new Response(resolution.message, {
       headers: { "cache-control": "no-store" },
       status: resolution.status,
     });
   }
-
-  const kind = new URL(request.url).searchParams.get("kind");
-  const requestedChunk = new URL(request.url).searchParams
-    .get("name")
-    ?.replace(/^\/+/, "");
-  const body =
-    kind === "client"
-      ? resolution.artifact.ssrClientBundle
-      : kind === "style"
-        ? requestedChunk
-          ? (resolution.artifact.ssrCssChunks[requestedChunk] ?? null)
-          : resolution.artifact.ssrCss
-        : kind === "chunk" && requestedChunk
-          ? (resolution.artifact.ssrClientChunks[requestedChunk] ?? null)
-          : null;
+  const { body } = resolution;
   if (body === null) {
     return new Response("Unknown preview asset.", {
       headers: { "cache-control": "no-store" },

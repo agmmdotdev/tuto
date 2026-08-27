@@ -1,4 +1,4 @@
-import { resolveArtifactRequest } from "./artifact-request";
+import { resolveArtifactServerRequest } from "./artifact-request";
 import type { NativeRpcRequest } from "./native-rpc-protocol";
 import { getNativeRpcWorkerPool } from "./native-rpc-worker-pool";
 
@@ -83,7 +83,7 @@ export async function executeNativeArtifactRequest(
     });
   }
 
-  const resolution = await resolveArtifactRequest(request);
+  const resolution = await resolveArtifactServerRequest(request);
   if (!resolution.ok) {
     return new Response(resolution.message, {
       headers: { "cache-control": "no-store" },

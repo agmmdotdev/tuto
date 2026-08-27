@@ -10,8 +10,9 @@ import {
   type TanstackStartBuildMetrics,
 } from "./artifact-cache";
 import {
-  getDurableTanstackStartArtifact,
+  getDurableTanstackStartArtifactSummary,
   putDurableTanstackStartArtifact,
+  type TanstackStartArtifactSummary,
 } from "./artifact-store";
 
 export type ServerlessTanstackStartResult = {
@@ -25,10 +26,9 @@ export type ServerlessTanstackStartResult = {
 };
 
 type RunnerResult = TanstackStartArtifact;
-type BuildOutcome = {
-  origin: "build" | "durable";
-  result: RunnerResult;
-};
+type BuildOutcome =
+  | { origin: "build"; result: RunnerResult }
+  | { origin: "durable"; result: TanstackStartArtifactSummary };
 
 const runnerPath = resolve(
   process.cwd(),
@@ -63,9 +63,8 @@ async function loadOrBuild(files: WorkspaceFile[], revision: string) {
   let readWarning: ReturnType<typeof durableStoreWarning> | undefined;
 
   try {
-    const durable = await getDurableTanstackStartArtifact(revision);
+    const durable = await getDurableTanstackStartArtifactSummary(revision);
     if (durable) {
-      putTanstackStartArtifact(durable);
       return { origin: "durable", result: durable } satisfies BuildOutcome;
     }
   } catch (error) {
