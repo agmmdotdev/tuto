@@ -155,18 +155,37 @@ redirect hops; external redirects remain external. The official TanStack Router
 compiler removes `server`, `headers`, and `ssr` route options from the client
 revision, preventing server-handler code from leaking into the browser bundle.
 
-This remains a checkpoint rather than the complete production host. The server
-bundle and CSS are still revision-wide, and browser hydration/navigation
-coverage remains.
+This remains a checkpoint rather than the complete production host. Route and
+server-function ESM chunks plus route-scoped CSS are covered in Firefox, but RSC
+and an operating-system isolation boundary remain outside this tier.
 
 ### Cross-instance artifact storage
 
 The LRU is now a hot cache in front of a durable artifact store. Compilation
-writes successful artifacts to both tiers. An RPC request that misses the hot
-cache reads the signed artifact from durable storage, validates its revision,
-kernel, expiry, size, and HMAC, then promotes it back into the LRU. A missing or
-expired revision returns HTTP 410; an unavailable or corrupt durable store
-returns HTTP 503 instead of pretending the revision was evicted.
+writes successful artifacts to both tiers. Durable v4 artifacts consist of a
+small signed manifest and SHA-256-addressed source blobs. Writers upload every
+unique blob first and publish the manifest last, so a partial write can never
+make an incomplete revision visible. Different revisions share identical blob
+objects, and each host retains a bounded LRU of hash-verified blob contents; a
+manifest read therefore fetches only hashes absent from that host. Reads are
+bounded to eight concurrent object requests instead of creating an unbounded
+fan-out.
+
+The reader validates the manifest revision, kernel, expiry, aggregate size, and
+HMAC before requesting its blobs, then validates every blob's byte count and
+SHA-256 digest before reconstructing and promoting the artifact into the hot
+LRU. Existing signed v3 monolithic objects remain readable during rollout; new
+writes use v4. A missing or expired revision returns HTTP 410; an unavailable,
+incomplete, or corrupt durable store returns HTTP 503 instead of pretending the
+revision was evicted.
+
+This format is not by itself a guaranteed first-hit latency improvement. A
+completely cold host still reconstructs the current eager artifact and may read
+several blobs in parallel. The immediate wins are physical deduplication,
+atomic publication, integrity at blob granularity, and zero repeated object
+reads for hashes already verified by that host. The next storage checkpoint is
+to let each artifact endpoint resolve only the HTML, client asset, or server
+runtime fields it actually consumes.
 
 Durable storage is disabled unless explicitly configured. For Cloudflare R2 or
 another S3-compatible service:
@@ -192,11 +211,18 @@ For local cross-process verification, set
 `TUTO_TANSTACK_ARTIFACT_STORE_PREFIX`,
 `TUTO_TANSTACK_ARTIFACT_STORE_TTL_MS`,
 `TUTO_TANSTACK_ARTIFACT_STORE_MAX_BYTES`, and
-`TUTO_TANSTACK_ARTIFACT_FILESYSTEM_ROOT`.
+`TUTO_TANSTACK_ARTIFACT_FILESYSTEM_ROOT`. The verified source cache and object
+request fan-out can be tuned with
+`TUTO_TANSTACK_ARTIFACT_BLOB_CACHE_MAX_BYTES` and
+`TUTO_TANSTACK_ARTIFACT_BLOB_CONCURRENCY`.
 
-The default durable TTL is one hour. The envelope rejects expired objects, but
-S3/R2 should also have a lifecycle rule that deletes objects under the chosen
-prefix so unread expired objects do not accumulate.
+The default durable TTL is one hour. Expired manifests are deleted eagerly, but
+shared blobs are never deleted from the request path because another revision
+may still reference them. Every artifact write refreshes its blob objects, so
+S3/R2 should use a lifecycle rule under the chosen prefix with an age longer
+than the configured artifact TTL (plus an operational margin). Apply the same
+age policy to local filesystem storage with an external cleanup job if it must
+remain bounded.
 
 ## Shared framework kernels
 

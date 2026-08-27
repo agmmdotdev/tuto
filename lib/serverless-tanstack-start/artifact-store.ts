@@ -1,25 +1,69 @@
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { AwsClient } from "aws4fetch";
 import kernelManifest from "./kernel-manifest.generated.json";
 import type { TanstackStartArtifact } from "./artifact-cache";
 
-type ArtifactEnvelopePayload = {
+type LegacyArtifactEnvelopePayload = {
   artifact: TanstackStartArtifact;
   createdAt: number;
   expiresAt: number;
   version: 3;
 };
 
+type ArtifactBlobDescriptor = {
+  bytes: number;
+  hash: string;
+};
+
+type ArtifactSourceManifest = {
+  html: ArtifactBlobDescriptor;
+  serverBundle: ArtifactBlobDescriptor;
+  serverChunks: Record<string, ArtifactBlobDescriptor>;
+  ssrClientBundle: ArtifactBlobDescriptor;
+  ssrClientChunks: Record<string, ArtifactBlobDescriptor>;
+  ssrCss: ArtifactBlobDescriptor;
+  ssrCssChunks: Record<string, ArtifactBlobDescriptor>;
+};
+
+type ArtifactManifest = Omit<
+  TanstackStartArtifact,
+  | "html"
+  | "serverBundle"
+  | "serverChunks"
+  | "ssrClientBundle"
+  | "ssrClientChunks"
+  | "ssrCss"
+  | "ssrCssChunks"
+> & {
+  sources: ArtifactSourceManifest;
+};
+
+type ContentAddressedEnvelopePayload = {
+  artifact: ArtifactManifest;
+  createdAt: number;
+  expiresAt: number;
+  version: 4;
+};
+
+type ArtifactEnvelopePayload =
+  | ContentAddressedEnvelopePayload
+  | LegacyArtifactEnvelopePayload;
+
 type ArtifactEnvelope = ArtifactEnvelopePayload & {
   integrity: string;
 };
 
-type ArtifactBlobStore = {
+export type ArtifactBlobStore = {
   delete(key: string): Promise<void>;
   get(key: string): Promise<string | null>;
-  put(key: string, value: string): Promise<void>;
+  put(key: string, value: string, contentType?: string): Promise<void>;
 };
 
 export type TanstackStartArtifactStore = {
@@ -27,7 +71,9 @@ export type TanstackStartArtifactStore = {
   put(artifact: TanstackStartArtifact): Promise<void>;
 };
 
-type ValidatedStoreOptions = {
+export type TanstackStartArtifactStoreOptions = {
+  blobCacheMaxBytes?: number;
+  blobConcurrency?: number;
   blobStore: ArtifactBlobStore;
   maxBytes?: number;
   prefix?: string;
@@ -35,11 +81,17 @@ type ValidatedStoreOptions = {
   ttlMs?: number;
 };
 
-type FilesystemStoreOptions = Omit<ValidatedStoreOptions, "blobStore"> & {
+type FilesystemStoreOptions = Omit<
+  TanstackStartArtifactStoreOptions,
+  "blobStore"
+> & {
   root: string;
 };
 
-type S3StoreOptions = Omit<ValidatedStoreOptions, "blobStore"> & {
+type S3StoreOptions = Omit<
+  TanstackStartArtifactStoreOptions,
+  "blobStore"
+> & {
   accessKeyId: string;
   bucket: string;
   endpoint: string;
@@ -50,8 +102,10 @@ type S3StoreOptions = Omit<ValidatedStoreOptions, "blobStore"> & {
 
 const defaultTtlMs = 60 * 60 * 1000;
 const defaultMaxBytes = 16 * 1024 * 1024;
+const defaultBlobCacheMaxBytes = 32 * 1024 * 1024;
+const defaultBlobConcurrency = 8;
 const defaultPrefix = "tanstack-start/artifacts";
-const configuredStoreKey = Symbol.for("tuto.tanstack-start.durable-store.v1");
+const configuredStoreKey = Symbol.for("tuto.tanstack-start.durable-store.v2");
 let testStore: TanstackStartArtifactStore | null | undefined;
 
 function payloadJson(payload: ArtifactEnvelopePayload) {
@@ -64,10 +118,89 @@ function integrity(payload: ArtifactEnvelopePayload, signingKey: string) {
     .digest("hex");
 }
 
-function equalIntegrity(left: string, right: string) {
-  if (!/^[a-f0-9]{64}$/.test(left) || !/^[a-f0-9]{64}$/.test(right))
+function equalIntegrity(left: unknown, right: string) {
+  if (
+    typeof left !== "string" ||
+    !/^[a-f0-9]{64}$/.test(left) ||
+    !/^[a-f0-9]{64}$/.test(right)
+  )
     return false;
   return timingSafeEqual(Buffer.from(left, "hex"), Buffer.from(right, "hex"));
+}
+
+function sha256(source: string) {
+  return createHash("sha256").update(source).digest("hex");
+}
+
+function sourceDescriptor(source: string): ArtifactBlobDescriptor {
+  return {
+    bytes: Buffer.byteLength(source),
+    hash: sha256(source),
+  };
+}
+
+class ArtifactBlobCache {
+  private readonly entries = new Map<string, string>();
+  private readonly maxBytes: number;
+  private totalBytes = 0;
+
+  constructor(maxBytes: number) {
+    this.maxBytes = maxBytes;
+  }
+
+  get(hash: string) {
+    const source = this.entries.get(hash);
+    if (source === undefined) return undefined;
+    this.entries.delete(hash);
+    this.entries.set(hash, source);
+    return source;
+  }
+
+  set(hash: string, source: string) {
+    const bytes = Buffer.byteLength(source);
+    if (bytes > this.maxBytes) return;
+    const existing = this.entries.get(hash);
+    if (existing !== undefined) {
+      this.totalBytes -= Buffer.byteLength(existing);
+      this.entries.delete(hash);
+    }
+    this.entries.set(hash, source);
+    this.totalBytes += bytes;
+    while (this.totalBytes > this.maxBytes) {
+      const oldest = this.entries.entries().next().value as
+        | [string, string]
+        | undefined;
+      if (!oldest) break;
+      this.entries.delete(oldest[0]);
+      this.totalBytes -= Buffer.byteLength(oldest[1]);
+    }
+  }
+}
+
+async function mapConcurrent<T, R>(
+  values: T[],
+  concurrency: number,
+  operation: (value: T) => Promise<R>,
+) {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  let failed = false;
+  let failure: unknown;
+  const workers =
+    Array.from({ length: Math.min(values.length, concurrency) }, async () => {
+      while (!failed && nextIndex < values.length) {
+        const index = nextIndex++;
+        try {
+          results[index] = await operation(values[index]!);
+        } catch (error) {
+          failed = true;
+          failure = error;
+        }
+      }
+    });
+  await Promise.all(workers);
+  if (failed) throw failure;
+  return results;
 }
 
 function readPositiveInteger(name: string, fallback: number) {
@@ -98,33 +231,45 @@ function objectKey(prefix: string, revision: string) {
   return `${prefix}/${kernelManifest.id}/${revision}.json`;
 }
 
-function artifactIsValid(artifact: TanstackStartArtifact, revision: string) {
+function blobObjectKey(prefix: string, hash: string) {
+  if (!/^[a-f0-9]{64}$/.test(hash)) {
+    throw new Error("Invalid TanStack Start artifact blob hash.");
+  }
+  return `${prefix}/${kernelManifest.id}/blobs/${hash}.blob`;
+}
+
+function artifactIsValid(
+  artifact: unknown,
+  revision: string,
+): artifact is TanstackStartArtifact {
+  if (artifact === null || typeof artifact !== "object") return false;
+  const candidate = artifact as TanstackStartArtifact;
   const clientChunksAreValid =
-    artifact.ssrClientChunks !== null &&
-    typeof artifact.ssrClientChunks === "object" &&
-    Object.entries(artifact.ssrClientChunks).every(
+    candidate.ssrClientChunks !== null &&
+    typeof candidate.ssrClientChunks === "object" &&
+    Object.entries(candidate.ssrClientChunks).every(
       ([name, value]) =>
         /^chunks\/[A-Za-z0-9_-]+\.js$/.test(name) && typeof value === "string",
     );
   const cssChunksAreValid =
-    artifact.ssrCssChunks !== null &&
-    typeof artifact.ssrCssChunks === "object" &&
-    Object.entries(artifact.ssrCssChunks).every(
+    candidate.ssrCssChunks !== null &&
+    typeof candidate.ssrCssChunks === "object" &&
+    Object.entries(candidate.ssrCssChunks).every(
       ([name, value]) =>
         /^chunks\/[A-Za-z0-9_-]+\.css$/.test(name) &&
         typeof value === "string",
     );
   const serverChunksAreValid =
-    artifact.serverChunks !== null &&
-    typeof artifact.serverChunks === "object" &&
-    Object.entries(artifact.serverChunks).every(
+    candidate.serverChunks !== null &&
+    typeof candidate.serverChunks === "object" &&
+    Object.entries(candidate.serverChunks).every(
       ([name, value]) =>
         /^chunks\/[A-Za-z0-9_-]+\.js$/.test(name) && typeof value === "string",
     );
   const routeManifestIsValid =
-    artifact.routeManifest !== null &&
-    typeof artifact.routeManifest === "object" &&
-    Object.values(artifact.routeManifest).every(
+    candidate.routeManifest !== null &&
+    typeof candidate.routeManifest === "object" &&
+    Object.values(candidate.routeManifest).every(
       (entry) =>
         entry !== null &&
         typeof entry === "object" &&
@@ -136,33 +281,222 @@ function artifactIsValid(artifact: TanstackStartArtifact, revision: string) {
     );
 
   return (
-    artifact.success === true &&
-    artifact.revision === revision &&
-    artifact.kernelId === kernelManifest.id &&
-    typeof artifact.rpcToken === "string" &&
-    /^[A-Za-z0-9_-]{43}$/.test(artifact.rpcToken) &&
-    typeof artifact.html === "string" &&
-    typeof artifact.ssrClientBundle === "string" &&
+    candidate.success === true &&
+    candidate.revision === revision &&
+    candidate.kernelId === kernelManifest.id &&
+    typeof candidate.rpcToken === "string" &&
+    /^[A-Za-z0-9_-]{43}$/.test(candidate.rpcToken) &&
+    typeof candidate.html === "string" &&
+    typeof candidate.ssrClientBundle === "string" &&
     clientChunksAreValid &&
     cssChunksAreValid &&
     serverChunksAreValid &&
     routeManifestIsValid &&
-    typeof artifact.ssrCss === "string" &&
-    typeof artifact.serverBundle === "string" &&
-    Array.isArray(artifact.serverFnIds)
+    typeof candidate.ssrCss === "string" &&
+    typeof candidate.serverBundle === "string" &&
+    Array.isArray(candidate.serverFnIds) &&
+    candidate.serverFnIds.every((id) => typeof id === "string")
   );
 }
 
-function createValidatedStore({
+function descriptorIsValid(value: unknown): value is ArtifactBlobDescriptor {
+  if (value === null || typeof value !== "object") return false;
+  const descriptor = value as ArtifactBlobDescriptor;
+  return (
+    Number.isSafeInteger(descriptor.bytes) &&
+    descriptor.bytes >= 0 &&
+    typeof descriptor.hash === "string" &&
+    /^[a-f0-9]{64}$/.test(descriptor.hash)
+  );
+}
+
+function descriptorRecordIsValid(
+  value: unknown,
+  extension: "css" | "js",
+): value is Record<string, ArtifactBlobDescriptor> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    Object.entries(value).every(
+      ([name, descriptor]) =>
+        new RegExp(`^chunks/[A-Za-z0-9_-]+\\.${extension}$`).test(name) &&
+        descriptorIsValid(descriptor),
+    )
+  );
+}
+
+function createArtifactManifest(artifact: TanstackStartArtifact) {
+  const {
+    html,
+    serverBundle,
+    serverChunks,
+    ssrClientBundle,
+    ssrClientChunks,
+    ssrCss,
+    ssrCssChunks,
+    ...metadata
+  } = artifact;
+  const blobs = new Map<string, string>();
+  const describe = (source: string) => {
+    const descriptor = sourceDescriptor(source);
+    blobs.set(descriptor.hash, source);
+    return descriptor;
+  };
+  const describeRecord = (sources: Record<string, string>) =>
+    Object.fromEntries(
+      Object.entries(sources)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([name, source]) => [name, describe(source)]),
+    );
+
+  return {
+    blobs,
+    manifest: {
+      ...metadata,
+      sources: {
+        html: describe(html),
+        serverBundle: describe(serverBundle),
+        serverChunks: describeRecord(serverChunks),
+        ssrClientBundle: describe(ssrClientBundle),
+        ssrClientChunks: describeRecord(ssrClientChunks),
+        ssrCss: describe(ssrCss),
+        ssrCssChunks: describeRecord(ssrCssChunks),
+      },
+    } satisfies ArtifactManifest,
+  };
+}
+
+function artifactManifestIsValid(
+  value: unknown,
+  revision: string,
+): value is ArtifactManifest {
+  if (value === null || typeof value !== "object") return false;
+  const manifest = value as ArtifactManifest;
+  const sources = manifest.sources;
+  if (
+    sources === null ||
+    typeof sources !== "object" ||
+    !descriptorIsValid(sources.html) ||
+    !descriptorIsValid(sources.serverBundle) ||
+    !descriptorRecordIsValid(sources.serverChunks, "js") ||
+    !descriptorIsValid(sources.ssrClientBundle) ||
+    !descriptorRecordIsValid(sources.ssrClientChunks, "js") ||
+    !descriptorIsValid(sources.ssrCss) ||
+    !descriptorRecordIsValid(sources.ssrCssChunks, "css")
+  ) {
+    return false;
+  }
+
+  const metadata = Object.fromEntries(
+    Object.entries(manifest).filter(([name]) => name !== "sources"),
+  );
+  return artifactIsValid(
+    {
+      ...metadata,
+      html: "",
+      serverBundle: "",
+      serverChunks: Object.fromEntries(
+        Object.keys(sources.serverChunks).map((name) => [name, ""]),
+      ),
+      ssrClientBundle: "",
+      ssrClientChunks: Object.fromEntries(
+        Object.keys(sources.ssrClientChunks).map((name) => [name, ""]),
+      ),
+      ssrCss: "",
+      ssrCssChunks: Object.fromEntries(
+        Object.keys(sources.ssrCssChunks).map((name) => [name, ""]),
+      ),
+    },
+    revision,
+  );
+}
+
+function artifactDescriptors(manifest: ArtifactManifest) {
+  const sources = manifest.sources;
+  return [
+    sources.html,
+    sources.serverBundle,
+    ...Object.values(sources.serverChunks),
+    sources.ssrClientBundle,
+    ...Object.values(sources.ssrClientChunks),
+    sources.ssrCss,
+    ...Object.values(sources.ssrCssChunks),
+  ];
+}
+
+function reconstructArtifact(
+  manifest: ArtifactManifest,
+  blobs: Map<string, string>,
+) {
+  const { sources, ...metadata } = manifest;
+  const source = (descriptor: ArtifactBlobDescriptor) => blobs.get(descriptor.hash)!;
+  const sourceRecord = (record: Record<string, ArtifactBlobDescriptor>) =>
+    Object.fromEntries(
+      Object.entries(record).map(([name, descriptor]) => [
+        name,
+        source(descriptor),
+      ]),
+    );
+
+  return {
+    ...metadata,
+    html: source(sources.html),
+    serverBundle: source(sources.serverBundle),
+    serverChunks: sourceRecord(sources.serverChunks),
+    ssrClientBundle: source(sources.ssrClientBundle),
+    ssrClientChunks: sourceRecord(sources.ssrClientChunks),
+    ssrCss: source(sources.ssrCss),
+    ssrCssChunks: sourceRecord(sources.ssrCssChunks),
+  } satisfies TanstackStartArtifact;
+}
+
+export function createTanstackStartArtifactStore({
+  blobCacheMaxBytes = defaultBlobCacheMaxBytes,
+  blobConcurrency = defaultBlobConcurrency,
   blobStore,
   maxBytes = defaultMaxBytes,
   prefix: inputPrefix,
   signingKey,
   ttlMs = defaultTtlMs,
-}: ValidatedStoreOptions): TanstackStartArtifactStore {
+}: TanstackStartArtifactStoreOptions): TanstackStartArtifactStore {
   if (!signingKey)
     throw new Error("A TanStack artifact signing key is required.");
   const prefix = normalizePrefix(inputPrefix);
+  const concurrency =
+    Number.isSafeInteger(blobConcurrency) && blobConcurrency > 0
+      ? blobConcurrency
+      : defaultBlobConcurrency;
+  const cache = new ArtifactBlobCache(
+    Number.isSafeInteger(blobCacheMaxBytes) && blobCacheMaxBytes > 0
+      ? blobCacheMaxBytes
+      : defaultBlobCacheMaxBytes,
+  );
+
+  const loadBlob = async (descriptor: ArtifactBlobDescriptor) => {
+    const cached = cache.get(descriptor.hash);
+    if (cached !== undefined) {
+      if (Buffer.byteLength(cached) !== descriptor.bytes) {
+        throw new Error(
+          "Stored TanStack artifact has inconsistent blob descriptors.",
+        );
+      }
+      return cached;
+    }
+    const source = await blobStore.get(blobObjectKey(prefix, descriptor.hash));
+    if (source === null) {
+      throw new Error(`Stored TanStack artifact blob ${descriptor.hash} is missing.`);
+    }
+    if (
+      Buffer.byteLength(source) !== descriptor.bytes ||
+      sha256(source) !== descriptor.hash
+    ) {
+      throw new Error(
+        `Stored TanStack artifact blob ${descriptor.hash} failed integrity validation.`,
+      );
+    }
+    cache.set(descriptor.hash, source);
+    return source;
+  };
 
   return {
     async get(revision) {
@@ -181,12 +515,12 @@ function createValidatedStore({
       } catch {
         throw new Error("Stored TanStack artifact is not valid JSON.");
       }
-      const payload: ArtifactEnvelopePayload = {
+      const payload = {
         artifact: envelope.artifact,
         createdAt: envelope.createdAt,
         expiresAt: envelope.expiresAt,
         version: envelope.version,
-      };
+      } as ArtifactEnvelopePayload;
       const expectedIntegrity = integrity(payload, signingKey);
       if (!equalIntegrity(envelope.integrity, expectedIntegrity)) {
         throw new Error(
@@ -194,22 +528,71 @@ function createValidatedStore({
         );
       }
       if (
-        payload.version !== 3 ||
-        !artifactIsValid(payload.artifact, revision)
+        !Number.isSafeInteger(payload.createdAt) ||
+        !Number.isSafeInteger(payload.expiresAt) ||
+        payload.createdAt > payload.expiresAt
       ) {
         throw new Error(
           "Stored TanStack artifact is incompatible with this runtime.",
         );
       }
-      if (
-        !Number.isSafeInteger(payload.expiresAt) ||
-        payload.expiresAt <= Date.now()
-      ) {
+      if (payload.expiresAt <= Date.now()) {
         await blobStore.delete(key).catch(() => undefined);
         return null;
       }
 
-      return payload.artifact;
+      if (payload.version === 3) {
+        if (!artifactIsValid(payload.artifact, revision)) {
+          throw new Error(
+            "Stored TanStack artifact is incompatible with this runtime.",
+          );
+        }
+        return payload.artifact;
+      }
+      if (
+        payload.version !== 4 ||
+        !artifactManifestIsValid(payload.artifact, revision)
+      ) {
+        throw new Error(
+          "Stored TanStack artifact is incompatible with this runtime.",
+        );
+      }
+
+      const descriptors = artifactDescriptors(payload.artifact);
+      const referencedBytes = descriptors.reduce(
+        (total, descriptor) => total + descriptor.bytes,
+        0,
+      );
+      if (referencedBytes > maxBytes) {
+        throw new Error(
+          "Stored TanStack artifact exceeds the configured size limit.",
+        );
+      }
+      const uniqueDescriptors = new Map<string, ArtifactBlobDescriptor>();
+      for (const descriptor of descriptors) {
+        const existing = uniqueDescriptors.get(descriptor.hash);
+        if (existing && existing.bytes !== descriptor.bytes) {
+          throw new Error(
+            "Stored TanStack artifact has inconsistent blob descriptors.",
+          );
+        }
+        uniqueDescriptors.set(descriptor.hash, descriptor);
+      }
+      const loaded = await mapConcurrent(
+        [...uniqueDescriptors.values()],
+        concurrency,
+        async (descriptor) => [descriptor.hash, await loadBlob(descriptor)] as const,
+      );
+      const artifact = reconstructArtifact(payload.artifact, new Map(loaded));
+      if (
+        !artifactIsValid(artifact, revision) ||
+        Buffer.byteLength(JSON.stringify(artifact)) > maxBytes
+      ) {
+        throw new Error(
+          "Stored TanStack artifact is incompatible with this runtime.",
+        );
+      }
+      return artifact;
     },
 
     async put(artifact) {
@@ -218,11 +601,18 @@ function createValidatedStore({
           "Refusing to store an invalid TanStack Start artifact.",
         );
       }
-      const payload: ArtifactEnvelopePayload = {
-        artifact,
-        createdAt: Date.now(),
-        expiresAt: Date.now() + ttlMs,
-        version: 3,
+      if (Buffer.byteLength(JSON.stringify(artifact)) > maxBytes) {
+        throw new Error(
+          "TanStack artifact exceeds the configured durable size limit.",
+        );
+      }
+      const { blobs, manifest } = createArtifactManifest(artifact);
+      const createdAt = Date.now();
+      const payload: ContentAddressedEnvelopePayload = {
+        artifact: manifest,
+        createdAt,
+        expiresAt: createdAt + ttlMs,
+        version: 4,
       };
       const serialized = JSON.stringify({
         ...payload,
@@ -233,7 +623,19 @@ function createValidatedStore({
           "TanStack artifact exceeds the configured durable size limit.",
         );
       }
-      await blobStore.put(objectKey(prefix, artifact.revision), serialized);
+      await mapConcurrent([...blobs], concurrency, async ([hash, source]) => {
+        await blobStore.put(
+          blobObjectKey(prefix, hash),
+          source,
+          "text/plain; charset=utf-8",
+        );
+        cache.set(hash, source);
+      });
+      await blobStore.put(
+        objectKey(prefix, artifact.revision),
+        serialized,
+        "application/json; charset=utf-8",
+      );
     },
   };
 }
@@ -259,8 +661,12 @@ function createFilesystemBlobStore(root: string): ArtifactBlobStore {
       const target = resolveKey(key);
       const temporary = `${target}.${randomUUID()}.tmp`;
       await mkdir(path.dirname(target), { recursive: true });
-      await writeFile(temporary, value, "utf8");
-      await rename(temporary, target);
+      try {
+        await writeFile(temporary, value, "utf8");
+        await rename(temporary, target);
+      } finally {
+        await rm(temporary, { force: true });
+      }
     },
   };
 }
@@ -313,12 +719,12 @@ function createS3BlobStore({
       await assertResponse(response, "read");
       return response.text();
     },
-    async put(key, value) {
+    async put(key, value, contentType = "application/octet-stream") {
       const response = await client.fetch(urlFor(key), {
         body: value,
         headers: {
           "cache-control": "no-store",
-          "content-type": "application/json; charset=utf-8",
+          "content-type": contentType,
         },
         method: "PUT",
       });
@@ -330,14 +736,14 @@ function createS3BlobStore({
 export function createFilesystemTanstackStartArtifactStore(
   options: FilesystemStoreOptions,
 ) {
-  return createValidatedStore({
+  return createTanstackStartArtifactStore({
     ...options,
     blobStore: createFilesystemBlobStore(options.root),
   });
 }
 
 export function createS3TanstackStartArtifactStore(options: S3StoreOptions) {
-  return createValidatedStore({
+  return createTanstackStartArtifactStore({
     ...options,
     blobStore: createS3BlobStore(options),
   });
@@ -348,6 +754,14 @@ function configuredStore() {
   if (mode === "disabled") return null;
   const signingKey = process.env.TUTO_TANSTACK_ARTIFACT_SIGNING_KEY ?? "";
   const common = {
+    blobCacheMaxBytes: readPositiveInteger(
+      "TUTO_TANSTACK_ARTIFACT_BLOB_CACHE_MAX_BYTES",
+      defaultBlobCacheMaxBytes,
+    ),
+    blobConcurrency: readPositiveInteger(
+      "TUTO_TANSTACK_ARTIFACT_BLOB_CONCURRENCY",
+      defaultBlobConcurrency,
+    ),
     maxBytes: readPositiveInteger(
       "TUTO_TANSTACK_ARTIFACT_STORE_MAX_BYTES",
       defaultMaxBytes,
