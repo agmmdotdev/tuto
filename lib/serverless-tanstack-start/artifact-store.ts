@@ -103,6 +103,8 @@ function artifactIsValid(artifact: TanstackStartArtifact, revision: string) {
     artifact.success === true &&
     artifact.revision === revision &&
     artifact.kernelId === kernelManifest.id &&
+    typeof artifact.rpcToken === "string" &&
+    /^[A-Za-z0-9_-]{43}$/.test(artifact.rpcToken) &&
     typeof artifact.html === "string" &&
     typeof artifact.serverBundle === "string" &&
     Array.isArray(artifact.serverFnIds)

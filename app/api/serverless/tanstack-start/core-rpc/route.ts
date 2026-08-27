@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import {
   getTanstackStartArtifact,
   putTanstackStartArtifact,
@@ -9,20 +10,44 @@ import { getNativeRpcWorkerPool } from "../../../../../lib/serverless-tanstack-s
 export const runtime = "nodejs";
 
 const maxRequestBytes = 1_250_000;
-const corsHeaders = {
-  "access-control-allow-headers": "content-type,x-tsr-serverfn",
-  "access-control-allow-methods": "GET, POST, OPTIONS",
-  "access-control-allow-origin": "*",
-  "access-control-expose-headers":
-    "x-tuto-artifact-cache,x-tuto-worker-id,x-tuto-worker-request,x-tuto-worker-reused",
-  "cache-control": "no-store",
-};
+const diagnosticHeaders = [
+  "x-tuto-artifact-cache",
+  "x-tuto-worker-id",
+  "x-tuto-worker-request",
+  "x-tuto-worker-reused",
+];
+
+function corsHeadersFor(request: Request) {
+  const origin = request.headers.get("origin");
+  const requestedHeaders = request.headers.get(
+    "access-control-request-headers",
+  );
+
+  return {
+    ...(origin ? { "access-control-allow-credentials": "true" } : {}),
+    "access-control-allow-headers":
+      requestedHeaders ?? "content-type,x-tsr-serverfn",
+    "access-control-allow-methods": "GET, POST, OPTIONS",
+    "access-control-allow-origin": origin ?? "*",
+    "access-control-expose-headers": diagnosticHeaders.join(","),
+    "cache-control": "no-store",
+    vary: "Origin, Access-Control-Request-Headers",
+  };
+}
+
+function matchesRpcToken(actual: string | null, expected: string) {
+  if (!actual || !/^[A-Za-z0-9_-]{43}$/.test(actual)) return false;
+  return timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
+}
 
 async function handleNativeRpc(request: Request) {
+  const corsHeaders = corsHeadersFor(request);
+
   try {
     const url = new URL(request.url);
     const revision = url.searchParams.get("revision");
     const serverFnId = url.searchParams.get("id");
+    const rpcToken = url.searchParams.get("token");
 
     if (!revision || !/^[a-f0-9]{64}$/.test(revision) || !serverFnId) {
       return new Response(
@@ -58,6 +83,12 @@ async function handleNativeRpc(request: Request) {
         { headers: corsHeaders, status: 410 },
       );
     }
+    if (!matchesRpcToken(rpcToken, artifact.rpcToken)) {
+      return new Response("Invalid preview RPC capability.", {
+        headers: corsHeaders,
+        status: 403,
+      });
+    }
     if (!artifact.serverFnIds.includes(serverFnId)) {
       return new Response("Unknown server function for this revision.", {
         headers: corsHeaders,
@@ -76,10 +107,17 @@ async function handleNativeRpc(request: Request) {
       });
     }
     const body = requestBody?.toString("base64");
+    const nativeHeaders = new Headers(request.headers);
+    const forwardedOrigin = nativeHeaders.get("origin");
+    if (forwardedOrigin)
+      nativeHeaders.set("x-tuto-forwarded-origin", forwardedOrigin);
+    nativeHeaders.set("origin", url.origin);
+    nativeHeaders.set("sec-fetch-site", "same-origin");
     const nativeRequest: NativeRpcRequest = {
       ...(body ? { bodyBase64: body } : {}),
-      headers: [...request.headers.entries()],
+      headers: [...nativeHeaders.entries()],
       method: request.method,
+      serverFnId,
       url: request.url,
     };
     const execution = await getNativeRpcWorkerPool().execute(
@@ -92,8 +130,27 @@ async function handleNativeRpc(request: Request) {
     );
     const result = execution.result;
     const headers = new Headers(result.headers);
-    for (const [name, value] of Object.entries(corsHeaders))
+    const responseVary = headers.get("vary");
+    for (const [name, value] of Object.entries(corsHeaders)) {
+      if (name === "vary") continue;
       headers.set(name, value);
+    }
+    headers.set(
+      "vary",
+      [responseVary, corsHeaders.vary].filter(Boolean).join(", "),
+    );
+    headers.set(
+      "access-control-expose-headers",
+      [
+        ...diagnosticHeaders,
+        ...[...headers.keys()].filter(
+          (name) =>
+            name !== "set-cookie" && !name.startsWith("access-control-"),
+        ),
+      ]
+        .filter((name, index, names) => names.indexOf(name) === index)
+        .join(","),
+    );
     headers.set("x-tuto-artifact-cache", artifactCache);
     headers.set("x-tuto-worker-id", execution.workerId);
     headers.set("x-tuto-worker-request", String(execution.workerRequest));
@@ -118,6 +175,6 @@ async function handleNativeRpc(request: Request) {
 export const GET = handleNativeRpc;
 export const POST = handleNativeRpc;
 
-export function OPTIONS() {
-  return new Response(null, { headers: corsHeaders, status: 204 });
+export function OPTIONS(request: Request) {
+  return new Response(null, { headers: corsHeadersFor(request), status: 204 });
 }

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import nodePath from "node:path";
@@ -85,6 +85,7 @@ type ServerlessPreviewResult = {
   diagnostics: BuildDiagnostic[];
   durationMs: number;
   revision: string;
+  rpcToken: string;
   serverBundle: string;
   serverFnIds: string[];
 };
@@ -739,11 +740,9 @@ function normalizeBuildError(error: unknown): BuildDiagnostic[] {
 }
 
 async function buildNativeServerBundle({
-  revision,
   root,
   transform,
 }: {
-  revision: string;
   root: string;
   transform: StartServerFunctionsTransform;
 }) {
@@ -751,6 +750,7 @@ async function buildNativeServerBundle({
     return { code: "", frameworkInputs: 0 };
   }
   const serverFiles = new Map(transform.serverFiles);
+  const startModule = findWorkspaceFile(serverFiles, "src/start");
   const imports: string[] = [];
   const entries: string[] = [];
 
@@ -771,7 +771,12 @@ async function buildNativeServerBundle({
     entries.push(`${JSON.stringify(id)}: action${index},`);
   }
 
-  const resolverSource = `${imports.join("\n")}
+  const startInstanceSource = startModule
+    ? `import { startInstance } from ${JSON.stringify(startModule)};
+globalThis.${kernelManifest.server.startInstanceKey} = startInstance;`
+    : `delete globalThis.${kernelManifest.server.startInstanceKey};`;
+  const resolverSource = `${startInstanceSource}
+${imports.join("\n")}
 const actions = { ${entries.join("\n")} };
 globalThis.${kernelManifest.server.resolverKey} = async function getServerFnById(id) {
   const action = actions[id];
@@ -779,16 +784,15 @@ globalThis.${kernelManifest.server.resolverKey} = async function getServerFnById
   return action;
 }`;
   const entrySource = resolverSource;
-  const baseUrl = `/api/serverless/tanstack-start/core-rpc?revision=${encodeURIComponent(
-    revision,
-  )}&id=`;
   const result = await build({
     absWorkingDir: absoluteWorkingDirectory,
     bundle: true,
     charset: "utf8",
     define: {
       "process.env.NODE_ENV": '"production"',
-      "process.env.TSS_SERVER_FN_BASE": JSON.stringify(baseUrl),
+      "process.env.TSS_SERVER_FN_BASE": JSON.stringify(
+        kernelManifest.server.serverFnBase,
+      ),
     },
     entryPoints: ["__tuto_server_entry__"],
     format: "esm",
@@ -829,6 +833,10 @@ async function compilePreview(
   revision: string,
 ): Promise<ServerlessPreviewResult> {
   const startedAt = Date.now();
+  const rpcToken = randomBytes(32).toString("base64url");
+  const serverFnBase = `/api/serverless/tanstack-start/core-rpc?revision=${encodeURIComponent(
+    revision,
+  )}&token=${encodeURIComponent(rpcToken)}&id=`;
 
   try {
     const originalFileMap = sanitizeWorkspaceFiles(files);
@@ -847,20 +855,14 @@ async function compilePreview(
       absWorkingDir: absoluteWorkingDirectory,
       banner: {
         js: `globalThis.${kernelManifest.client.serverFnBaseKey}=${JSON.stringify(
-          `/api/serverless/tanstack-start/core-rpc?revision=${encodeURIComponent(
-            revision,
-          )}&id=`,
-        )};`,
+          serverFnBase,
+        )};globalThis.__TSS_START_OPTIONS__={...(globalThis.__TSS_START_OPTIONS__??{}),serverFns:{...(globalThis.__TSS_START_OPTIONS__?.serverFns??{}),fetch:(url,init)=>globalThis.fetch(url,{...init,credentials:"include"})}};`,
       },
       bundle: true,
       charset: "utf8",
       define: {
         "process.env.NODE_ENV": '"production"',
-        "process.env.TSS_SERVER_FN_BASE": JSON.stringify(
-          `/api/serverless/tanstack-start/core-rpc?revision=${encodeURIComponent(
-            revision,
-          )}&id=`,
-        ),
+        "process.env.TSS_SERVER_FN_BASE": JSON.stringify(serverFnBase),
       },
       entryPoints: [entryPath],
       format: "esm",
@@ -892,7 +894,6 @@ async function compilePreview(
       throw new Error("The TanStack core preview did not produce JavaScript.");
 
     const serverBuild = await buildNativeServerBundle({
-      revision,
       root,
       transform,
     });
@@ -924,6 +925,7 @@ async function compilePreview(
       durationMs,
       kernelId: kernelManifest.id,
       revision,
+      rpcToken,
       serverBundle,
       serverFnIds: Object.keys(serverFnsById),
     };
@@ -944,6 +946,7 @@ async function compilePreview(
       durationMs: Date.now() - startedAt,
       kernelId: kernelManifest.id,
       revision,
+      rpcToken,
       serverBundle: "",
       serverFnIds: [],
     };

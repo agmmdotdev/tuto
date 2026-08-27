@@ -27,6 +27,7 @@ function artifact(revision: string): TanstackStartArtifact {
     html: "<p>durable</p>",
     kernelId: kernelManifest.id,
     revision,
+    rpcToken: "t".repeat(43),
     serverBundle: "export const durable = true;",
     serverFnIds: ["server-fn"],
     success: true,

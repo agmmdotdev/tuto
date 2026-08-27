@@ -851,6 +851,7 @@ What is real here:
 - real route modules under \`src/routes\`
 - real nested layouts, loaders, params, search state, links, and native Start RPC serialization
 - real \`@tanstack/start-client-core\` and \`@tanstack/start-server-core\` execution
+- real \`src/start.ts\` request middleware, function middleware, request/response helpers, cookies, and sessions for server-function requests
 
 What is intentionally still experimental here:
 
@@ -944,6 +945,42 @@ async function bootstrap() {
 }
 
 void bootstrap();
+`,
+      },
+      {
+        path: "src/start.ts",
+        language: "ts",
+        description:
+          "Official TanStack Start request-host configuration for server-function requests.",
+        content: `import {
+  createCsrfMiddleware,
+  createMiddleware,
+  createStart,
+} from "@tanstack/react-start";
+import { setResponseHeader } from "@tanstack/react-start/server";
+
+const csrfMiddleware = createCsrfMiddleware({
+  filter: ({ handlerType }) => handlerType === "serverFn",
+});
+
+const previewRequestMiddleware = createMiddleware().server(
+  async ({ handlerType, next, request }) => {
+    setResponseHeader("x-tuto-start-middleware", "active");
+
+    return next({
+      context: {
+        previewRequest: {
+          handlerType,
+          method: request.method,
+        },
+      },
+    });
+  },
+);
+
+export const startInstance = createStart(() => ({
+  requestMiddleware: [csrfMiddleware, previewRequestMiddleware],
+}));
 `,
       },
       {

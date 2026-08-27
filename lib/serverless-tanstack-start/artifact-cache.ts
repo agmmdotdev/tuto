@@ -18,6 +18,7 @@ export type TanstackStartArtifact = {
   html: string;
   kernelId: string;
   revision: string;
+  rpcToken: string;
   serverBundle: string;
   serverFnIds: string[];
   success: boolean;

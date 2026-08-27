@@ -46,6 +46,9 @@ async function cleanup() {
   delete (globalThis as typeof globalThis & Record<string, unknown>)[
     kernelManifest.server.resolverKey
   ];
+  delete (globalThis as typeof globalThis & Record<string, unknown>)[
+    kernelManifest.server.startInstanceKey
+  ];
   if (runtimeDirectory) {
     await rm(runtimeDirectory, { force: true, recursive: true });
   }
@@ -95,14 +98,38 @@ async function initialize(
 
 function toRequest(payload: NativeRpcRequest) {
   const method = payload.method.toUpperCase();
+  const url = new URL(payload.url);
+  url.pathname = `${kernelManifest.server.serverFnBase}${encodeURIComponent(
+    payload.serverFnId,
+  )}`;
+  url.searchParams.delete("id");
+  url.searchParams.delete("revision");
+  url.searchParams.delete("token");
   const body = payload.bodyBase64
     ? Buffer.from(payload.bodyBase64, "base64")
     : undefined;
-  return new Request(payload.url, {
+  return new Request(url, {
     method,
     headers: payload.headers,
     body: method === "GET" || method === "HEAD" ? undefined : body,
   });
+}
+
+function responseHeaderEntries(headers: Headers) {
+  const entries = [...headers.entries()].filter(
+    ([name]) => name.toLowerCase() !== "set-cookie",
+  );
+  const setCookies = (
+    headers as Headers & { getSetCookie?: () => Array<string> }
+  ).getSetCookie?.();
+  const fallbackSetCookie = headers.get("set-cookie");
+
+  for (const cookie of setCookies ??
+    (fallbackSetCookie ? [fallbackSetCookie] : [])) {
+    entries.push(["set-cookie", cookie]);
+  }
+
+  return entries;
 }
 
 async function execute(
@@ -116,7 +143,7 @@ async function execute(
   }
   const result: NativeRpcResult = {
     bodyBase64: responseBuffer.toString("base64"),
-    headers: [...response.headers.entries()],
+    headers: responseHeaderEntries(response.headers),
     status: response.status,
     statusText: response.statusText,
   };

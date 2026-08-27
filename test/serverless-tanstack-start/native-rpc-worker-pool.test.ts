@@ -14,6 +14,7 @@ const pools: NativeRpcWorkerPool[] = [];
 const request: NativeRpcRequest = {
   headers: [],
   method: "POST",
+  serverFnId: "test-server-fn",
   url: "http://tuto.local/server-fn",
 };
 const result: NativeRpcResult = {

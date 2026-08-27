@@ -2,6 +2,7 @@ export type NativeRpcRequest = {
   bodyBase64?: string;
   headers: Array<[string, string]>;
   method: string;
+  serverFnId: string;
   url: string;
 };
 

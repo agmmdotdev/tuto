@@ -57,9 +57,11 @@ transform for both the client and server kernels.
 The proof is now the playground's default CSR path. A save hashes the canonical
 workspace snapshot, builds the browser and server artifacts once, and stores
 the result in a bounded LRU/TTL cache. The browser bundle uses the real Start
-client runtime with a base URL containing the revision. A call sends Start's
-native request body plus `revision` and `serverFnId`; it never sends source
-files.
+client runtime with a base URL containing the revision and a random per-artifact
+capability token. A call sends Start's native request body plus `revision`,
+capability, and `serverFnId`; it never sends source files. The gateway validates
+that capability before dispatch and normalizes the opaque preview origin into a
+trusted same-origin internal request for Start's CSRF middleware.
 
 The API route resolves the revision from the hot or durable artifact tier and
 dispatches the native request to a bounded pool of child processes. Each child
@@ -68,6 +70,16 @@ server kernel and that revision's compiled server artifact once, then handles
 sequential native Start requests. A worker is killed before its slot can be
 used by another revision. Student server code is never imported by the Next.js
 host process.
+
+The worker runs the public `createStartHandler` request host from
+`@tanstack/react-start/server`. An optional student `src/start.ts` can export a
+`startInstance` from the official `createStart` API. Request middleware, global
+function middleware, request context, request/response helpers, cookies, and
+encrypted cookie sessions therefore use upstream Start/H3 behavior for native
+server-function requests. The transport preserves repeated `Set-Cookie` headers
+and performs credentialed browser fetches. Cookies used from the sandbox still
+need browser-compatible cross-site attributes (normally `SameSite=None; Secure`)
+and remain subject to the browser's third-party-cookie policy.
 
 Current cache defaults are 24 artifacts, 32 MiB total, and a sliding 10-minute
 TTL. They can be tuned with `TUTO_TANSTACK_ARTIFACT_CACHE_MAX_ENTRIES`,
@@ -146,30 +158,31 @@ Run `yarn measure:tanstack-start-kernels` to rebuild and measure the boundary. A
 local two-edit measurement produced these uncompressed minified sizes:
 
 - shared client kernel: 352,198 bytes
-- shared server kernel: 63,637 bytes
-- first client/server revision: 2,763 / 3,725 bytes
-- edited client/server revision: 2,761 / 3,725 bytes
-- measured compile durations: 233 ms and 267 ms
+- shared server kernel: 366,259 bytes
+- first client/server revision: 3,027 / 3,777 bytes
+- edited client/server revision: 3,025 / 3,777 bytes
+- measured compile durations: 306 ms and 294 ms
 
 Those timings are local diagnostics, not a production latency claim. The
-important result is structural: each edit emitted about 6.5 KiB instead of
-rebundling roughly 416 KiB of shared framework code.
+important result is structural: each edit emitted about 6.8 KiB instead of
+rebundling roughly 718 KiB of shared framework code. The larger shared server
+kernel now contains Start's public request host and its H3 request/session graph.
 
 ## Remaining architecture work
 
-1. replace the minimal response-status adapter with Start's complete request
-   host when cookies, sessions, request middleware, and request APIs enter the
-   supported CSR scope.
+1. add the full Start router/SSR host, route manifest, streaming HTML, and server
+   routes. The current request host intentionally returns 501 for router
+   requests because this remains the CSR server-function tier.
 2. move execution behind a hardened sandbox such as an isolated container or
    microVM before treating arbitrary untrusted student code as safe for a
    multi-tenant production service. The current child-process boundary protects
    the Next.js host module graph and makes worker lifecycle enforceable; it is
    not an operating-system security boundary.
 
-The response-status adapter currently reaches the upstream
-`server-functions-handler` implementation because TanStack does not expose that
-handler as a public package subpath. This private import is isolated to the host
-adapter; student code and compiler output use the official React Start exports.
+The standalone proof script above still uses its original minimal host adapter
+to isolate the compiler experiment. The integrated playground no longer relies
+on that private handler path; its request host and student-facing APIs come from
+the official React Start package exports.
 
 This first experiment deliberately does not claim SSR, streaming HTML, server
 routes, or RSC support. Those remain the full-runtime tier.

@@ -19,6 +19,8 @@ const clientServerFnBaseKey = "__TUTO_TANSTACK_START_SERVER_FN_BASE__";
 const serverGlobalKey = "__TUTO_TANSTACK_START_SERVER_KERNEL__";
 const serverHandlerKey = "__TUTO_TANSTACK_START_NATIVE_HANDLER__";
 const serverResolverKey = "__TUTO_TANSTACK_START_SERVER_FN_RESOLVER__";
+const serverStartInstanceKey = "__TUTO_TANSTACK_START_INSTANCE__";
+const serverFnInternalBase = "/__tuto_server_fn/";
 
 const clientModules = [
   "@tanstack/react-start",
@@ -32,6 +34,7 @@ const clientModules = [
 ];
 const serverModules = [
   "@tanstack/react-start",
+  "@tanstack/react-start/server",
   "@tanstack/react-start/server-rpc",
 ];
 
@@ -115,32 +118,73 @@ function createStartEnvironmentPlugin(env) {
   };
 }
 
-function createServerHostPlugin(serverFunctionsHandlerPath) {
+function createServerEntriesPlugin() {
   return {
-    name: "tuto-start-server-kernel-host",
+    name: "tuto-start-server-kernel-entries",
     setup(buildApi) {
       buildApi.onResolve(
-        { filter: /^\.\/request-response(?:\.js)?$/ },
-        (args) => {
-          const importer = path.resolve(
-            path.dirname(args.importer),
-            "server-functions-handler.js",
-          );
-          return importer === serverFunctionsHandlerPath
-            ? {
-                path: "tuto-request-response-host",
-                namespace: "tuto-server-kernel-host",
-              }
-            : null;
+        {
+          filter:
+            /^#tanstack-(?:router-entry|start-entry|start-plugin-adapters)$/,
         },
-      );
-      buildApi.onLoad(
-        { filter: /.*/, namespace: "tuto-server-kernel-host" },
-        () => ({
-          contents:
-            "const response = { status: 200, statusText: '' }; export function getResponse() { return response; }",
-          loader: "js",
+        (args) => ({
+          path: args.path,
+          namespace: "tuto-server-kernel-entry",
         }),
+      );
+      buildApi.onResolve({ filter: /^tanstack-start-manifest:v$/ }, () => ({
+        path: "tanstack-start-manifest:v",
+        namespace: "tuto-server-kernel-entry",
+      }));
+      buildApi.onLoad(
+        { filter: /.*/, namespace: "tuto-server-kernel-entry" },
+        (args) => {
+          if (args.path === "#tanstack-router-entry") {
+            return {
+              contents: `
+export async function getRouter() {
+  throw new Error('Router access is unavailable in the CSR server-function tier.');
+}
+`,
+              loader: "js",
+            };
+          }
+          if (args.path === "#tanstack-start-plugin-adapters") {
+            return {
+              contents:
+                "export const hasPluginAdapters = false; export const pluginSerializationAdapters = [];",
+              loader: "js",
+            };
+          }
+          if (args.path === "tanstack-start-manifest:v") {
+            return {
+              contents:
+                "export function tsrStartManifest() { return { routes: {} }; }",
+              loader: "js",
+            };
+          }
+          return {
+            contents: `
+import { createCsrfMiddleware } from '@tanstack/react-start';
+
+const defaultCsrfMiddleware = createCsrfMiddleware({
+  filter: (ctx) => ctx.handlerType === 'serverFn',
+});
+
+export const startInstance = {
+  async getOptions() {
+    const instance = globalThis.${serverStartInstanceKey};
+    if (instance && typeof instance.getOptions === 'function') {
+      return await instance.getOptions();
+    }
+    return { requestMiddleware: [defaultCsrfMiddleware] };
+  },
+};
+`,
+            loader: "js",
+            resolveDir: process.cwd(),
+          };
+        },
       );
     },
   };
@@ -228,45 +272,26 @@ export async function buildTanstackStartKernels() {
     moduleExports(clientModules),
     moduleExports(serverModules),
   ]);
-  const startServerCoreRoot = path.dirname(
-    require.resolve("@tanstack/start-server-core/package.json"),
-  );
-  const serverFunctionsHandlerPath = path.join(
-    startServerCoreRoot,
-    "dist",
-    "esm",
-    "server-functions-handler.js",
-  );
   const clientEntry = `${moduleImports(clientModules)}
 globalThis.${clientGlobalKey} = Object.freeze({
   id: ${JSON.stringify(id)},
   modules: Object.freeze({ ${moduleMap(clientModules)} }),
 });`;
   const serverEntry = `${moduleImports(serverModules)}
-import { runWithStartContext } from '@tanstack/start-storage-context';
-import { handleServerAction } from ${JSON.stringify(serverFunctionsHandlerPath)};
+import { createStartHandler } from '@tanstack/react-start/server';
 
 const modules = Object.freeze({ ${moduleMap(serverModules)} });
 globalThis.${serverGlobalKey} = Object.freeze({
   id: ${JSON.stringify(id)},
   modules,
 });
-globalThis.${serverHandlerKey} = async (request, requestOptions = {}) => {
-  const serverFnId = new URL(request.url).searchParams.get('id');
-  if (!serverFnId) return new Response('Missing server function id.', { status: 400 });
-  return runWithStartContext({
-    getRouter: async () => { throw new Error('Router access is unavailable in the CSR tier.'); },
-    request,
-    startOptions: {},
-    contextAfterGlobalMiddlewares: {},
-    executedRequestMiddlewares: new Set(),
-    handlerType: 'serverFn',
-  }, () => handleServerAction({
-    request,
-    context: requestOptions.context || {},
-    serverFnId,
-  }));
-};`;
+const startHandler = createStartHandler(async () =>
+  new Response('Router requests are unavailable in the CSR server-function tier.', {
+    status: 501,
+  }),
+);
+globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
+  startHandler(request, requestOptions);`;
 
   const [clientBuild, serverBuild] = await Promise.all([
     build({
@@ -295,12 +320,14 @@ globalThis.${serverHandlerKey} = async (request, requestOptions = {}) => {
     }),
     build({
       absWorkingDir: process.cwd(),
+      banner: {
+        js: "import { createRequire as __tutoCreateRequire } from 'node:module'; const require = __tutoCreateRequire(import.meta.url);",
+      },
       bundle: true,
       charset: "utf8",
       define: {
         "process.env.NODE_ENV": '"production"',
-        "process.env.TSS_SERVER_FN_BASE":
-          '"/api/serverless/tanstack-start/core-rpc"',
+        "process.env.TSS_SERVER_FN_BASE": JSON.stringify(serverFnInternalBase),
       },
       format: "esm",
       legalComments: "none",
@@ -310,7 +337,7 @@ globalThis.${serverHandlerKey} = async (request, requestOptions = {}) => {
       platform: "node",
       plugins: [
         createServerResolverPlugin(),
-        createServerHostPlugin(serverFunctionsHandlerPath),
+        createServerEntriesPlugin(),
         createStartEnvironmentPlugin("server"),
       ],
       stdin: {
@@ -345,6 +372,8 @@ globalThis.${serverHandlerKey} = async (request, requestOptions = {}) => {
       handlerKey: serverHandlerKey,
       modules: serverModules,
       resolverKey: serverResolverKey,
+      serverFnBase: serverFnInternalBase,
+      startInstanceKey: serverStartInstanceKey,
     },
   };
 

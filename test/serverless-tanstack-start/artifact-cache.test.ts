@@ -24,6 +24,7 @@ function artifact(revision: string): TanstackStartArtifact {
     html: `<p>${revision}</p>`,
     kernelId: "test-kernel",
     revision,
+    rpcToken: "t".repeat(43),
     serverBundle: `globalThis.revision=${JSON.stringify(revision)}`,
     serverFnIds: [revision],
     success: true,
