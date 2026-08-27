@@ -85,8 +85,10 @@ type ServerlessPreviewResult = {
   diagnostics: BuildDiagnostic[];
   durationMs: number;
   revision: string;
+  routeManifest: Record<string, { preloads: string[] }>;
   rpcToken: string;
   ssrClientBundle: string;
+  ssrClientChunks: Record<string, string>;
   ssrCss: string;
   serverBundle: string;
   serverFnIds: string[];
@@ -611,7 +613,16 @@ function createServerWorkspacePlugin({
   };
 }
 
-function resolveWorkspaceModule(files: WorkspaceFileMap, args: OnResolveArgs) {
+function resolveWorkspaceModule(
+  files: WorkspaceFileMap,
+  args: OnResolveArgs,
+  root?: string,
+) {
+  const rootedModule = root ? toWorkspaceModuleId(root, args.path) : null;
+  if (rootedModule && files.has(rootedModule)) {
+    return { path: rootedModule, namespace: "workspace" };
+  }
+
   if (args.kind === "entry-point") {
     const entryMatch = findWorkspaceFile(files, args.path);
     if (entryMatch) return { path: entryMatch, namespace: "workspace" };
@@ -628,12 +639,12 @@ function resolveWorkspaceModule(files: WorkspaceFileMap, args: OnResolveArgs) {
   return null;
 }
 
-function createWorkspacePlugin(files: WorkspaceFileMap): Plugin {
+function createWorkspacePlugin(files: WorkspaceFileMap, root?: string): Plugin {
   return {
     name: "tuto-tanstack-start-core-preview-workspace",
     setup(buildApi: PluginBuild) {
       buildApi.onResolve({ filter: /.*/ }, (args: OnResolveArgs) =>
-        resolveWorkspaceModule(files, args),
+        resolveWorkspaceModule(files, args, root),
       );
 
       buildApi.onLoad(
@@ -759,11 +770,13 @@ function normalizeBuildError(error: unknown): BuildDiagnostic[] {
 async function buildNativeServerBundle({
   clientAssetUrl,
   cssAssetUrl,
+  routeManifest,
   root,
   transform,
 }: {
   clientAssetUrl: string;
   cssAssetUrl?: string;
+  routeManifest: Record<string, { preloads: string[] }>;
   root: string;
   transform: StartServerFunctionsTransform;
 }) {
@@ -810,6 +823,7 @@ globalThis.${kernelManifest.server.manifestKey} = ${JSON.stringify({
               { attrs: { src: clientAssetUrl, type: "module" } },
             ],
           },
+          ...routeManifest,
         },
       })};`
     : `delete globalThis.${kernelManifest.server.routerKey};
@@ -863,20 +877,141 @@ globalThis.${kernelManifest.server.resolverKey} = async function getServerFnById
   };
 }
 
+function relativeOutputName(filePath: string) {
+  const normalized = filePath.replaceAll("\\", "/");
+  const outMarker = "/out/";
+  const markerIndex = normalized.lastIndexOf(outMarker);
+
+  return markerIndex === -1
+    ? path.basename(normalized)
+    : normalized.slice(markerIndex + outMarker.length);
+}
+
+function routeChunkUrl(chunkAssetBase: string, outputName: string) {
+  return `${chunkAssetBase}${encodeURIComponent(outputName)}`;
+}
+
+function buildClientRouteManifest({
+  chunks,
+  chunkAssetBase,
+  metafile,
+  routeIds,
+}: {
+  chunks: Record<string, string>;
+  chunkAssetBase: string;
+  metafile: NonNullable<Awaited<ReturnType<typeof build>>["metafile"]>;
+  routeIds: Record<string, string>;
+}) {
+  const manifest: Record<string, { preloads: string[] }> = {};
+  const outputByName = new Map(
+    Object.entries(metafile.outputs).map(([outputPath, output]) => [
+      relativeOutputName(outputPath),
+      output,
+    ]),
+  );
+  const chunkImportPattern = new RegExp(
+    `${chunkAssetBase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\/?([^"'\\s;]+)`,
+    "g",
+  );
+
+  function resolveImportedOutputName(currentName: string, importPath: string) {
+    if (importPath.startsWith(chunkAssetBase)) {
+      return decodeURIComponent(
+        importPath.slice(chunkAssetBase.length),
+      ).replace(/^\/+/, "");
+    }
+    const relativeName = path.normalize(
+      path.join(path.dirname(currentName), importPath),
+    );
+    if (outputByName.has(relativeName)) return relativeName;
+    const directName = importPath.replace(/^\.\//, "").replace(/^\/+/, "");
+    return outputByName.has(directName) ? directName : null;
+  }
+
+  function collectPreloads(
+    outputName: string,
+    seen = new Set<string>(),
+  ): string[] {
+    if (seen.has(outputName)) return [];
+    seen.add(outputName);
+    const output = outputByName.get(outputName);
+    if (!output) return [];
+    const emittedImports = [
+      ...(chunks[outputName] ?? "").matchAll(chunkImportPattern),
+    ]
+      .map((match) => decodeURIComponent(match[1] ?? ""))
+      .filter((name) => outputByName.has(name));
+
+    return [
+      routeChunkUrl(chunkAssetBase, outputName),
+      ...emittedImports.flatMap((name) => collectPreloads(name, seen)),
+      ...output.imports.flatMap((entry) => {
+        if (
+          entry.kind === "dynamic-import" ||
+          (entry.external && !entry.path.startsWith(chunkAssetBase))
+        )
+          return [];
+        const importedName = resolveImportedOutputName(outputName, entry.path);
+        return importedName ? collectPreloads(importedName, seen) : [];
+      }),
+    ];
+  }
+
+  for (const [outputPath, output] of Object.entries(metafile.outputs)) {
+    if (
+      !outputPath.endsWith(".js") ||
+      relativeOutputName(outputPath) === "entry.js"
+    )
+      continue;
+    const routePath = Object.keys(routeIds).find((workspacePath) =>
+      Object.keys(output.inputs).some((inputPath) =>
+        inputPath.includes(`${workspacePath}?tsr-split=`),
+      ),
+    );
+    if (!routePath) continue;
+    const routeId = routeIds[routePath];
+    if (!routeId) continue;
+    const entry = (manifest[routeId] ??= { preloads: [] });
+    for (const preload of collectPreloads(relativeOutputName(outputPath))) {
+      if (!entry.preloads.includes(preload)) entry.preloads.push(preload);
+    }
+  }
+
+  return manifest;
+}
+
 async function buildSsrClientBundle({
+  chunkAssetBase,
   files,
+  root,
   serverRouteBase,
   serverFnBase,
+  routeIds,
+  routeSplits,
 }: {
+  chunkAssetBase: string;
   files: WorkspaceFileMap;
+  root: string;
   serverRouteBase: string;
   serverFnBase: string;
+  routeIds: Record<string, string>;
+  routeSplits: WorkspaceFileMap;
 }) {
   const routerModule = findWorkspaceFile(files, "src/router");
-  if (!routerModule) return { code: "", css: "", frameworkInputs: 0 };
+  if (!routerModule)
+    return {
+      chunks: {},
+      code: "",
+      css: "",
+      frameworkInputs: 0,
+      routeManifest: {},
+    };
   const startModule = findWorkspaceFile(files, "src/start");
   const entryPath = "__tuto_ssr_client_entry__.tsx";
   const entryFiles = new Map(files);
+  for (const [splitId, splitCode] of routeSplits) {
+    entryFiles.set(splitId, splitCode);
+  }
   entryFiles.set(
     entryPath,
     `import React, { StrictMode, startTransition } from 'react';
@@ -929,6 +1064,7 @@ startTransition(() => {
       "process.env.TSS_SERVER_FN_BASE": JSON.stringify(serverFnBase),
     },
     entryPoints: [entryPath],
+    entryNames: "entry",
     format: "esm",
     jsx: "automatic",
     jsxImportSource: "react",
@@ -936,24 +1072,44 @@ startTransition(() => {
     logLevel: "silent",
     outdir: "/out",
     platform: "browser",
+    publicPath: chunkAssetBase,
     plugins: [
       createKernelExternalPlugin("client"),
-      createWorkspacePlugin(entryFiles),
+      createWorkspacePlugin(entryFiles, root),
     ],
     target: ["es2022"],
     treeShaking: true,
+    metafile: true,
+    chunkNames: "chunks/[name]-[hash]",
+    splitting: true,
     write: false,
   });
-  const jsOutput = result.outputFiles.find((file) => file.path.endsWith(".js"));
+  const jsOutput = result.outputFiles.find((file) =>
+    file.path.replaceAll("\\", "/").endsWith("/entry.js"),
+  );
   if (!jsOutput)
     throw new Error("The Start SSR client did not produce JavaScript.");
   const cssOutput = result.outputFiles.find((file) =>
     file.path.endsWith(".css"),
   );
+  const chunks = Object.fromEntries(
+    result.outputFiles
+      .filter(
+        (file) => file.path.endsWith(".js") && file.path !== jsOutput.path,
+      )
+      .map((file) => [relativeOutputName(file.path), file.text]),
+  );
   return {
+    chunks,
     code: jsOutput.text,
     css: cssOutput?.text ?? "",
     frameworkInputs: 0,
+    routeManifest: buildClientRouteManifest({
+      chunks,
+      chunkAssetBase,
+      metafile: result.metafile,
+      routeIds,
+    }),
   };
 }
 
@@ -972,6 +1128,7 @@ async function compilePreview(
   const serverRouteBase = `/api/serverless/tanstack-start/core-route?revision=${encodeURIComponent(
     revision,
   )}&token=${encodeURIComponent(rpcToken)}&path=`;
+  const chunkAssetBase = `${assetBase}chunk&name=`;
 
   try {
     const originalFileMap = sanitizeWorkspaceFiles(files);
@@ -984,6 +1141,10 @@ async function compilePreview(
       root,
     });
     const transformed = transform.clientFiles;
+    const transformedWithRouteSplits = new Map(transformed);
+    for (const [splitId, splitCode] of transform.clientRouteSplits) {
+      transformedWithRouteSplits.set(splitId, splitCode);
+    }
     const serverFnsById = transform.serverFnsById;
     const { entryPath, html } = extractEntryPoint(transformed);
     const result = await build({
@@ -1011,7 +1172,7 @@ async function compilePreview(
       platform: "browser",
       plugins: [
         createKernelExternalPlugin("client"),
-        createWorkspacePlugin(transformed),
+        createWorkspacePlugin(transformedWithRouteSplits, root),
       ],
       target: ["es2022"],
       treeShaking: true,
@@ -1028,13 +1189,18 @@ async function compilePreview(
       throw new Error("The TanStack core preview did not produce JavaScript.");
 
     const ssrClientBuild = await buildSsrClientBundle({
+      chunkAssetBase,
       files: transformed,
+      root,
+      routeIds: transform.clientRouteIds,
+      routeSplits: transform.clientRouteSplits,
       serverRouteBase,
       serverFnBase,
     });
     const serverBuild = await buildNativeServerBundle({
       clientAssetUrl: `${assetBase}client`,
       ...(ssrClientBuild.css ? { cssAssetUrl: `${assetBase}style` } : {}),
+      routeManifest: ssrClientBuild.routeManifest,
       root,
       transform,
     });
@@ -1043,7 +1209,12 @@ async function compilePreview(
     const buildMetrics = {
       clientFrameworkInputs: 0,
       clientRevisionBytes:
-        jsOutput.contents.byteLength + Buffer.byteLength(ssrClientBuild.code),
+        jsOutput.contents.byteLength +
+        Buffer.byteLength(ssrClientBuild.code) +
+        Object.values(ssrClientBuild.chunks).reduce(
+          (bytes, chunk) => bytes + Buffer.byteLength(chunk),
+          0,
+        ),
       serverFrameworkInputs: serverBuild.frameworkInputs,
       serverRevisionBytes: Buffer.byteLength(serverBundle),
       sharedClientKernelBytes: kernelManifest.client.bytes,
@@ -1069,8 +1240,10 @@ async function compilePreview(
       durationMs,
       kernelId: kernelManifest.id,
       revision,
+      routeManifest: ssrClientBuild.routeManifest,
       rpcToken,
       ssrClientBundle: ssrClientBuild.code,
+      ssrClientChunks: ssrClientBuild.chunks,
       ssrCss: ssrClientBuild.css,
       serverBundle,
       serverFnIds: Object.keys(serverFnsById),
@@ -1092,8 +1265,10 @@ async function compilePreview(
       durationMs: Date.now() - startedAt,
       kernelId: kernelManifest.id,
       revision,
+      routeManifest: {},
       rpcToken,
       ssrClientBundle: "",
+      ssrClientChunks: {},
       ssrCss: "",
       serverBundle: "",
       serverFnIds: [],

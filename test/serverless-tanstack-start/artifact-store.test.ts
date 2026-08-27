@@ -27,8 +27,14 @@ function artifact(revision: string): TanstackStartArtifact {
     html: "<p>durable</p>",
     kernelId: kernelManifest.id,
     revision,
+    routeManifest: {
+      "/hello": { preloads: ["/api/start/chunks/hello"] },
+    },
     rpcToken: "t".repeat(43),
     ssrClientBundle: "",
+    ssrClientChunks: {
+      "chunks/hello-ABC123.js": "export const hello = true;",
+    },
     ssrCss: "",
     serverBundle: "export const durable = true;",
     serverFnIds: ["server-fn"],

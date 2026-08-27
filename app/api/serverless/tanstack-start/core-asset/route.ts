@@ -12,12 +12,17 @@ export async function GET(request: Request) {
   }
 
   const kind = new URL(request.url).searchParams.get("kind");
+  const requestedChunk = new URL(request.url).searchParams
+    .get("name")
+    ?.replace(/^\/+/, "");
   const body =
     kind === "client"
       ? resolution.artifact.ssrClientBundle
       : kind === "style"
         ? resolution.artifact.ssrCss
-        : null;
+        : kind === "chunk" && requestedChunk
+          ? (resolution.artifact.ssrClientChunks[requestedChunk] ?? null)
+          : null;
   if (body === null) {
     return new Response("Unknown preview asset.", {
       headers: { "cache-control": "no-store" },
@@ -36,7 +41,7 @@ export async function GET(request: Request) {
       "access-control-allow-origin": "*",
       "cache-control": "private, no-store",
       "content-type":
-        kind === "client"
+        kind === "client" || kind === "chunk"
           ? "text/javascript; charset=utf-8"
           : "text/css; charset=utf-8",
       "x-content-type-options": "nosniff",

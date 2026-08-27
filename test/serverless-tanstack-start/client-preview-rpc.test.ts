@@ -45,8 +45,10 @@ type PreviewCompileResult = {
   html: string;
   kernelId: string;
   revision: string;
+  routeManifest: Record<string, { preloads: string[] }>;
   rpcToken: string;
   ssrClientBundle: string;
+  ssrClientChunks: Record<string, string>;
   ssrCss: string;
   serverBundle: string;
   serverFnIds: string[];
@@ -152,8 +154,10 @@ globalThis.__tutoPreviewPromise = greet({ data: { name: ' Ada ' } })
     html: preview.html,
     kernelId: preview.kernelId,
     revision: preview.revision,
+    routeManifest: preview.routeManifest,
     rpcToken: preview.rpcToken,
     ssrClientBundle: preview.ssrClientBundle,
+    ssrClientChunks: preview.ssrClientChunks,
     ssrCss: preview.ssrCss,
     serverBundle: preview.serverBundle,
     serverFnIds: preview.serverFnIds,
@@ -336,8 +340,10 @@ globalThis.__tutoPreviewPromise = inspectRequest()
     html: preview.html,
     kernelId: preview.kernelId,
     revision: preview.revision,
+    routeManifest: preview.routeManifest,
     rpcToken: preview.rpcToken,
     ssrClientBundle: preview.ssrClientBundle,
+    ssrClientChunks: preview.ssrClientChunks,
     ssrCss: preview.ssrCss,
     serverBundle: preview.serverBundle,
     serverFnIds: preview.serverFnIds,
@@ -471,6 +477,22 @@ export const Route = createFileRoute('/api/hello')({
 });`,
     },
     {
+      path: "src/routes/hello.tsx",
+      language: "tsx",
+      content: `import React from 'react';
+import { createFileRoute } from '@tanstack/react-router';
+
+export const Route = createFileRoute('/hello')({
+  loader: async () => ({ message: 'loader rendered on the server' }),
+  component: HelloRoute,
+});
+
+function HelloRoute() {
+  const data = Route.useLoaderData();
+  return <h1 data-ssr="true">{data.message}</h1>;
+}`,
+    },
+    {
       path: "src/router.tsx",
       language: "tsx",
       content: `import React from 'react';
@@ -478,10 +500,10 @@ import {
   Outlet,
   Scripts,
   createRootRoute,
-  createRoute,
   createRouter,
 } from '@tanstack/react-router';
 import { Route as apiRouteImport } from './routes/api.hello';
+import { Route as helloRouteImport } from './routes/hello';
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -492,11 +514,10 @@ const rootRoute = createRootRoute({
   ),
 });
 
-const helloRoute = createRoute({
+const helloRoute = helloRouteImport.update({
   getParentRoute: () => rootRoute,
+  id: '/hello',
   path: '/hello',
-  loader: async () => ({ message: 'loader rendered on the server' }),
-  component: HelloRoute,
 });
 
 const apiRoute = apiRouteImport.update({
@@ -504,11 +525,6 @@ const apiRoute = apiRouteImport.update({
   path: '/api/hello',
   getParentRoute: () => rootRoute,
 });
-
-function HelloRoute() {
-  const data = helloRoute.useLoaderData();
-  return <h1 data-ssr="true">{data.message}</h1>;
-}
 
 const routeTree = rootRoute.addChildren([helloRoute, apiRoute]);
 
@@ -523,6 +539,15 @@ export function getRouter() {
   assert.deepEqual(preview.serverFnIds, []);
   assert.ok(preview.serverBundle.length > 0);
   assert.ok(preview.ssrClientBundle.length > 0);
+  assert.ok(Object.keys(preview.ssrClientChunks).length > 0);
+  assert.ok(
+    preview.routeManifest["/hello"]?.preloads.length,
+    JSON.stringify({
+      chunks: Object.keys(preview.ssrClientChunks),
+      manifest: preview.routeManifest,
+    }),
+  );
+  assert.ok(preview.routeManifest["/hello"].preloads.length > 1);
   putTanstackStartArtifact({
     buildMetrics: preview.buildMetrics,
     diagnostics: [],
@@ -530,8 +555,10 @@ export function getRouter() {
     html: preview.html,
     kernelId: preview.kernelId,
     revision: preview.revision,
+    routeManifest: preview.routeManifest,
     rpcToken: preview.rpcToken,
     ssrClientBundle: preview.ssrClientBundle,
+    ssrClientChunks: preview.ssrClientChunks,
     ssrCss: preview.ssrCss,
     serverBundle: preview.serverBundle,
     serverFnIds: preview.serverFnIds,
@@ -554,6 +581,7 @@ export function getRouter() {
     assert.match(html, /loader rendered on the server/);
     assert.match(html, /tanstack-start\/kernel\/client/);
     assert.match(html, /tanstack-start\/core-asset/);
+    assert.match(html, /kind=chunk/);
     assert.match(html, /tuto-serverless-preview-log/);
 
     const routeResponse = await handleNativeRoutePost(
@@ -587,7 +615,26 @@ export function getRouter() {
     );
     assert.ok((await clientAsset.text()).length > 100);
     assert.match(preview.ssrClientBundle, /tanstack-start\/core-route/);
+    assert.doesNotMatch(preview.ssrClientBundle, /data-ssr/);
     assert.doesNotMatch(preview.ssrClientBundle, /server-route-secret-marker/);
+
+    const routePreload = preview.routeManifest["/hello"]?.preloads[0];
+    assert.ok(routePreload);
+    const routeChunk = await getNativeAsset(
+      new Request(new URL(routePreload, "http://tuto.local")),
+    );
+    assert.equal(routeChunk.status, 200);
+    const routeChunkSource = await routeChunk.text();
+    assert.match(routeChunkSource, /data-ssr/);
+    assert.match(routeChunkSource, /kind=chunk/);
+    for (const dependencyPreload of preview.routeManifest[
+      "/hello"
+    ].preloads.slice(1)) {
+      const dependencyChunk = await getNativeAsset(
+        new Request(new URL(dependencyPreload, "http://tuto.local")),
+      );
+      assert.equal(dependencyChunk.status, 200);
+    }
   } finally {
     clearTanstackStartArtifactCache();
     clearNativeRpcWorkerPoolForTests();
@@ -617,8 +664,10 @@ test("the complete Start starter template compiles and renders through SSR", asy
     html: preview.html,
     kernelId: preview.kernelId,
     revision: preview.revision,
+    routeManifest: preview.routeManifest,
     rpcToken: preview.rpcToken,
     ssrClientBundle: preview.ssrClientBundle,
+    ssrClientChunks: preview.ssrClientChunks,
     ssrCss: preview.ssrCss,
     serverBundle: preview.serverBundle,
     serverFnIds: preview.serverFnIds,
@@ -660,8 +709,10 @@ test("native RPC rejects missing and incorrect capability tokens", async () => {
     html: "",
     kernelId: kernelManifest.id,
     revision,
+    routeManifest: {},
     rpcToken,
     ssrClientBundle: "",
+    ssrClientChunks: {},
     ssrCss: "",
     serverBundle: "",
     serverFnIds: [serverFnId],

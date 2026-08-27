@@ -9,7 +9,7 @@ type ArtifactEnvelopePayload = {
   artifact: TanstackStartArtifact;
   createdAt: number;
   expiresAt: number;
-  version: 1;
+  version: 2;
 };
 
 type ArtifactEnvelope = ArtifactEnvelopePayload & {
@@ -99,6 +99,24 @@ function objectKey(prefix: string, revision: string) {
 }
 
 function artifactIsValid(artifact: TanstackStartArtifact, revision: string) {
+  const clientChunksAreValid =
+    artifact.ssrClientChunks !== null &&
+    typeof artifact.ssrClientChunks === "object" &&
+    Object.entries(artifact.ssrClientChunks).every(
+      ([name, value]) =>
+        /^chunks\/[A-Za-z0-9_-]+\.js$/.test(name) && typeof value === "string",
+    );
+  const routeManifestIsValid =
+    artifact.routeManifest !== null &&
+    typeof artifact.routeManifest === "object" &&
+    Object.values(artifact.routeManifest).every(
+      (entry) =>
+        entry !== null &&
+        typeof entry === "object" &&
+        Array.isArray(entry.preloads) &&
+        entry.preloads.every((preload) => typeof preload === "string"),
+    );
+
   return (
     artifact.success === true &&
     artifact.revision === revision &&
@@ -107,6 +125,8 @@ function artifactIsValid(artifact: TanstackStartArtifact, revision: string) {
     /^[A-Za-z0-9_-]{43}$/.test(artifact.rpcToken) &&
     typeof artifact.html === "string" &&
     typeof artifact.ssrClientBundle === "string" &&
+    clientChunksAreValid &&
+    routeManifestIsValid &&
     typeof artifact.ssrCss === "string" &&
     typeof artifact.serverBundle === "string" &&
     Array.isArray(artifact.serverFnIds)
@@ -154,7 +174,7 @@ function createValidatedStore({
         );
       }
       if (
-        payload.version !== 1 ||
+        payload.version !== 2 ||
         !artifactIsValid(payload.artifact, revision)
       ) {
         throw new Error(
@@ -182,7 +202,7 @@ function createValidatedStore({
         artifact,
         createdAt: Date.now(),
         expiresAt: Date.now() + ttlMs,
-        version: 1,
+        version: 2,
       };
       const serialized = JSON.stringify({
         ...payload,

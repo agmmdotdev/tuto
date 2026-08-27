@@ -18,8 +18,10 @@ export type TanstackStartArtifact = {
   html: string;
   kernelId: string;
   revision: string;
+  routeManifest: Record<string, { preloads: string[] }>;
   rpcToken: string;
   ssrClientBundle: string;
+  ssrClientChunks: Record<string, string>;
   ssrCss: string;
   serverBundle: string;
   serverFnIds: string[];
@@ -37,7 +39,7 @@ type CacheState = {
   totalBytes: number;
 };
 
-const globalCacheKey = Symbol.for("tuto.tanstack-start.artifact-cache.v1");
+const globalCacheKey = Symbol.for("tuto.tanstack-start.artifact-cache.v2");
 const defaultMaxEntries = 24;
 const defaultMaxBytes = 32 * 1024 * 1024;
 const defaultTtlMs = 10 * 60 * 1000;
@@ -82,7 +84,11 @@ function artifactBytes(artifact: TanstackStartArtifact) {
     Buffer.byteLength(artifact.html) +
     Buffer.byteLength(artifact.serverBundle) +
     Buffer.byteLength(artifact.ssrClientBundle) +
-    Buffer.byteLength(artifact.ssrCss)
+    Buffer.byteLength(artifact.ssrCss) +
+    Object.values(artifact.ssrClientChunks).reduce(
+      (bytes, chunk) => bytes + Buffer.byteLength(chunk),
+      0,
+    )
   );
 }
 

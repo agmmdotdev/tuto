@@ -853,6 +853,7 @@ What is real here:
 - real \`@tanstack/start-client-core\` and \`@tanstack/start-server-core\` execution
 - real \`src/start.ts\` request middleware, function middleware, request/response helpers, cookies, and sessions for server-function requests
 - real router SSR, loader execution, hydration, and compiled CSS through the official Start handler
+- route-level client component chunks and matched-route preloads from the official Router compiler
 
 What is intentionally still experimental here:
 
@@ -862,10 +863,10 @@ What is intentionally still experimental here:
 - browser-side server function calls send only the native Start request plus revision and function id
 - server bundles execute in bounded, revision-pinned child workers, not in the Next.js host process
 
-This is the streaming SSR tier, not the complete production host: the route
-manifest and hydration bundle are still revision-wide. Without durable storage,
-a missing hot artifact asks you to rebuild; configured durable storage restores
-it across app processes.`,
+This is the streaming SSR tier, not the complete production host: server code
+and CSS are still revision-wide, and browser navigation coverage remains.
+Without durable storage, a missing hot artifact asks you to rebuild; configured
+durable storage restores it across app processes.`,
       },
       {
         path: "index.html",

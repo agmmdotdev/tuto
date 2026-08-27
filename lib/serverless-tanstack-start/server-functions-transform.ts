@@ -11,21 +11,51 @@ type StartCompilerInternals = {
   detectKindsInCode: typeof detectKindsInCodeType;
 };
 type RouterCompilerInternals = {
+  compileCodeSplitSharedRoute(options: {
+    code: string;
+    filename: string;
+    sharedBindings: Set<string>;
+  }): { code: string };
   compileCodeSplitReferenceRoute(options: {
     addHmr: boolean;
     code: string;
-    codeSplitGroupings: [];
+    codeSplitGroupings: Array<Array<RouteSplitTarget>>;
     compilerPlugins: [];
     deleteNodes: Set<string>;
     filename: string;
     id: string;
+    sharedBindings?: Set<string>;
     targetFramework: "react";
   }): { code: string } | null;
+  compileCodeSplitVirtualRoute(options: {
+    code: string;
+    compilerPlugins: [];
+    filename: string;
+    sharedBindings?: Set<string>;
+    splitTargets: Array<RouteSplitTarget>;
+  }): { code: string };
+  computeSharedBindings(options: {
+    code: string;
+    codeSplitGroupings: Array<Array<RouteSplitTarget>>;
+    filename: string;
+  }): Set<string>;
+  detectCodeSplitGroupingsFromRoute(options: {
+    code: string;
+    filename: string;
+  }): { groupings?: Array<Array<RouteSplitTarget>> };
 };
+type RouteSplitTarget =
+  | "component"
+  | "errorComponent"
+  | "notFoundComponent"
+  | "pendingComponent"
+  | "loader";
 type StartCompilerEnv = Parameters<typeof detectKindsInCodeType>[1];
 
 export type StartServerFunctionsTransform = {
   clientFiles: WorkspaceFileMap;
+  clientRouteIds: Record<string, string>;
+  clientRouteSplits: WorkspaceFileMap;
   resolverModule: string;
   serverFiles: WorkspaceFileMap;
   serverFnsById: Record<string, ServerFn>;
@@ -33,6 +63,11 @@ export type StartServerFunctionsTransform = {
 };
 
 const sourceModulePattern = /\.[cm]?[tj]sx?$/;
+const defaultRouteSplitGroupings: Array<Array<RouteSplitTarget>> = [
+  ["component"],
+  ["errorComponent"],
+  ["notFoundComponent"],
+];
 
 export async function importStartCompilerInternals(): Promise<StartCompilerInternals> {
   const packageRoot = path.dirname(
@@ -71,33 +106,84 @@ async function importRouterCompilerInternals(): Promise<RouterCompilerInternals>
   ) as Promise<RouterCompilerInternals>;
 }
 
-async function stripClientServerRouteOptions(
-  files: WorkspaceFileMap,
-  root: string,
-) {
-  const { compileCodeSplitReferenceRoute } =
-    await importRouterCompilerInternals();
+function routeIdFromCode(code: string) {
+  return code.match(/\bcreateFileRoute\s*\(\s*(["'`])([^"'`]+)\1\s*\)/)?.[2];
+}
 
-  for (const [workspacePath, code] of files) {
+function routeSplitModuleId(
+  workspacePath: string,
+  grouping: Array<RouteSplitTarget>,
+) {
+  return `${workspacePath}?tsr-split=${grouping.slice().sort().join("---")}`;
+}
+
+async function compileClientRoutes(files: WorkspaceFileMap, root: string) {
+  const {
+    compileCodeSplitReferenceRoute,
+    compileCodeSplitSharedRoute,
+    compileCodeSplitVirtualRoute,
+    computeSharedBindings,
+    detectCodeSplitGroupingsFromRoute,
+  } = await importRouterCompilerInternals();
+  const clientRouteIds: Record<string, string> = {};
+  const clientRouteSplits: WorkspaceFileMap = new Map();
+
+  for (const [workspacePath, code] of [...files]) {
     if (
       !/^src\/routes\/.+\.[cm]?[tj]sx?$/.test(workspacePath) ||
       (!code.includes("createFileRoute") && !code.includes("createRootRoute"))
     ) {
       continue;
     }
+    const routeId = routeIdFromCode(code);
+    if (routeId) clientRouteIds[workspacePath] = routeId;
     const id = toAbsoluteModuleId(root, workspacePath);
+    const codeSplitGroupings =
+      detectCodeSplitGroupingsFromRoute({ code, filename: id }).groupings ??
+      defaultRouteSplitGroupings;
+    const sharedBindings = computeSharedBindings({
+      code,
+      codeSplitGroupings,
+      filename: id,
+    });
     const result = compileCodeSplitReferenceRoute({
       addHmr: false,
       code,
-      codeSplitGroupings: [],
+      codeSplitGroupings,
       compilerPlugins: [],
       deleteNodes: new Set(["headers", "server", "ssr"]),
       filename: id,
       id,
+      ...(sharedBindings.size > 0 ? { sharedBindings } : {}),
       targetFramework: "react",
     });
-    if (result?.code) files.set(workspacePath, result.code);
+    if (!result?.code) continue;
+    files.set(workspacePath, result.code);
+
+    for (const grouping of codeSplitGroupings) {
+      const splitId = routeSplitModuleId(workspacePath, grouping);
+      if (!result.code.includes(splitId)) continue;
+      const splitResult = compileCodeSplitVirtualRoute({
+        code,
+        compilerPlugins: [],
+        filename: toAbsoluteModuleId(root, splitId),
+        ...(sharedBindings.size > 0 ? { sharedBindings } : {}),
+        splitTargets: grouping,
+      });
+      clientRouteSplits.set(splitId, splitResult.code);
+    }
+    if (sharedBindings.size > 0) {
+      const sharedId = `${workspacePath}?tsr-shared=1`;
+      const sharedResult = compileCodeSplitSharedRoute({
+        code,
+        filename: toAbsoluteModuleId(root, sharedId),
+        sharedBindings,
+      });
+      clientRouteSplits.set(sharedId, sharedResult.code);
+    }
   }
+
+  return { clientRouteIds, clientRouteSplits };
 }
 
 export function toAbsoluteModuleId(root: string, workspacePath: string) {
@@ -309,10 +395,15 @@ export async function transformStartServerFunctions(
     }
   }
 
-  await stripClientServerRouteOptions(clientFiles, root);
+  const { clientRouteIds, clientRouteSplits } = await compileClientRoutes(
+    clientFiles,
+    root,
+  );
 
   return {
     clientFiles,
+    clientRouteIds,
+    clientRouteSplits,
     serverFiles,
     serverSplits,
     serverFnsById,
