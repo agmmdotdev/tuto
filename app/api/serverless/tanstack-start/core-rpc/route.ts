@@ -1,117 +1,123 @@
-import { spawn } from "node:child_process";
-import { resolve } from "node:path";
-import { NextResponse } from "next/server";
-import { WorkspaceFile } from "@/lib/ide/types";
+import {
+  getTanstackStartArtifact,
+  putTanstackStartArtifact,
+} from "../../../../../lib/serverless-tanstack-start/artifact-cache";
+import { getDurableTanstackStartArtifact } from "../../../../../lib/serverless-tanstack-start/artifact-store";
+import type { NativeRpcRequest } from "../../../../../lib/serverless-tanstack-start/native-rpc-protocol";
+import { getNativeRpcWorkerPool } from "../../../../../lib/serverless-tanstack-start/native-rpc-worker-pool";
 
 export const runtime = "nodejs";
 
-const runnerPath = resolve(
-  process.cwd(),
-  "lib",
-  "serverless-tanstack-start",
-  "core-rpc-runner.generated.cjs",
-);
-const resultStartMarker = "__TUTO_TANSTACK_START_CORE_RPC_RESULT_START__";
-const resultEndMarker = "__TUTO_TANSTACK_START_CORE_RPC_RESULT_END__";
+const maxRequestBytes = 1_250_000;
 const corsHeaders = {
-  "access-control-allow-headers": "content-type",
-  "access-control-allow-methods": "POST, OPTIONS",
+  "access-control-allow-headers": "content-type,x-tsr-serverfn",
+  "access-control-allow-methods": "GET, POST, OPTIONS",
   "access-control-allow-origin": "*",
+  "access-control-expose-headers":
+    "x-tuto-artifact-cache,x-tuto-worker-id,x-tuto-worker-request,x-tuto-worker-reused",
   "cache-control": "no-store",
 };
 
-function runCoreRpc(payload: {
-  id?: string;
-  payload?: unknown;
-  files?: WorkspaceFile[];
-}) {
-  return new Promise<{
-    success: boolean;
-    result?: unknown;
-    context?: unknown;
-    error?: string;
-  }>((resolveResult, rejectResult) => {
-    const child = spawn(process.execPath, [runnerPath], {
-      cwd: process.cwd(),
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.once("error", rejectResult);
-    child.once("exit", (code) => {
-      if (code !== 0) {
-        rejectResult(
-          new Error(stderr.trim() || `TanStack core RPC exited with code ${code ?? -1}.`),
-        );
-        return;
-      }
-
-      try {
-        const startIndex = stdout.lastIndexOf(resultStartMarker);
-        const endIndex = stdout.lastIndexOf(resultEndMarker);
-
-        if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
-          throw new Error(stderr.trim() || "Unable to locate TanStack core RPC result.");
-        }
-
-        const jsonPayload = stdout
-          .slice(startIndex + resultStartMarker.length, endIndex)
-          .trim();
-        resolveResult(JSON.parse(jsonPayload));
-      } catch (error) {
-        rejectResult(
-          error instanceof Error
-            ? error
-            : new Error("Unable to parse TanStack core RPC output."),
-        );
-      }
-    });
-
-    child.stdin.write(JSON.stringify(payload));
-    child.stdin.end();
-  });
-}
-
-export async function POST(request: Request) {
+async function handleNativeRpc(request: Request) {
   try {
-    const payload = (await request.json()) as {
-      id?: string;
-      payload?: unknown;
-      files?: WorkspaceFile[];
-    };
-    const result = await runCoreRpc(payload);
+    const url = new URL(request.url);
+    const revision = url.searchParams.get("revision");
+    const serverFnId = url.searchParams.get("id");
 
-    return NextResponse.json(result, {
-      headers: corsHeaders,
-      status: result.success ? 200 : 422,
+    if (!revision || !/^[a-f0-9]{64}$/.test(revision) || !serverFnId) {
+      return new Response(
+        "Both revision and server function id are required.",
+        {
+          headers: corsHeaders,
+          status: 400,
+        },
+      );
+    }
+
+    let artifact = getTanstackStartArtifact(revision);
+    let artifactCache = "hot";
+    if (!artifact) {
+      try {
+        artifact = await getDurableTanstackStartArtifact(revision);
+      } catch (error) {
+        return new Response(
+          error instanceof Error
+            ? `Shared artifact storage is unavailable: ${error.message}`
+            : "Shared artifact storage is unavailable.",
+          { headers: corsHeaders, status: 503 },
+        );
+      }
+      if (artifact) {
+        artifactCache = "durable";
+        putTanstackStartArtifact(artifact);
+      }
+    }
+    if (!artifact) {
+      return new Response(
+        "This compiled revision is no longer available. Save or rebuild the preview and retry.",
+        { headers: corsHeaders, status: 410 },
+      );
+    }
+    if (!artifact.serverFnIds.includes(serverFnId)) {
+      return new Response("Unknown server function for this revision.", {
+        headers: corsHeaders,
+        status: 404,
+      });
+    }
+
+    const requestBody =
+      request.method === "GET" || request.method === "HEAD"
+        ? undefined
+        : Buffer.from(await request.arrayBuffer());
+    if (requestBody && requestBody.byteLength > maxRequestBytes) {
+      return new Response("Server function request is too large.", {
+        headers: corsHeaders,
+        status: 413,
+      });
+    }
+    const body = requestBody?.toString("base64");
+    const nativeRequest: NativeRpcRequest = {
+      ...(body ? { bodyBase64: body } : {}),
+      headers: [...request.headers.entries()],
+      method: request.method,
+      url: request.url,
+    };
+    const execution = await getNativeRpcWorkerPool().execute(
+      {
+        kernelId: artifact.kernelId,
+        revision: artifact.revision,
+        serverBundle: artifact.serverBundle,
+      },
+      nativeRequest,
+    );
+    const result = execution.result;
+    const headers = new Headers(result.headers);
+    for (const [name, value] of Object.entries(corsHeaders))
+      headers.set(name, value);
+    headers.set("x-tuto-artifact-cache", artifactCache);
+    headers.set("x-tuto-worker-id", execution.workerId);
+    headers.set("x-tuto-worker-request", String(execution.workerRequest));
+    headers.set("x-tuto-worker-reused", String(execution.workerReused));
+    headers.delete("content-length");
+
+    return new Response(Buffer.from(result.bodyBase64, "base64"), {
+      headers,
+      status: result.status,
+      statusText: result.statusText,
     });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unable to execute TanStack server function.";
-
-    return NextResponse.json(
-      {
-        success: false,
-        error: message,
-      },
-      {
-        headers: corsHeaders,
-        status: 400,
-      },
+    return new Response(
+      error instanceof Error
+        ? error.message
+        : "Unable to execute TanStack server function.",
+      { headers: corsHeaders, status: 500 },
     );
   }
 }
 
+export const GET = handleNativeRpc;
+export const POST = handleNativeRpc;
+
 export function OPTIONS() {
-  return new Response(null, {
-    headers: corsHeaders,
-    status: 204,
-  });
+  return new Response(null, { headers: corsHeaders, status: 204 });
 }

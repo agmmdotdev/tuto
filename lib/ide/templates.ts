@@ -105,7 +105,8 @@ module.exports = function startServer({ port, host }) {
       {
         path: "preview.html",
         language: "html",
-        description: "The main preview document served by the workspace server.",
+        description:
+          "The main preview document served by the workspace server.",
         content: `<!doctype html>
 <html lang="en">
   <head>
@@ -243,7 +244,8 @@ p {
       {
         path: "README.md",
         language: "md",
-        description: "A stateless playground that compiles from the current browser snapshot.",
+        description:
+          "A stateless playground that compiles from the current browser snapshot.",
         content: `# Serverless React Playground
 
 This workspace is stateless by design.
@@ -467,7 +469,8 @@ p {
       {
         path: "README.md",
         language: "md",
-        description: "A stateless App Router-like playground built on the shared esbuild compiler.",
+        description:
+          "A stateless App Router-like playground built on the shared esbuild compiler.",
         content: `# Serverless Next.js Playground
 
 This workspace is a stateless, Next-flavored playground.
@@ -520,7 +523,8 @@ export default function RootLayout({
       {
         path: "app/page.tsx",
         language: "tsx",
-        description: "The main App Router page for the stateless Next-style app.",
+        description:
+          "The main App Router page for the stateless Next-style app.",
         content: `import { ArrowRight, Orbit, PanelsTopLeft } from "lucide-react";
 import { motion } from "motion/react";
 import Image from "next/image";
@@ -833,7 +837,8 @@ p {
       {
         path: "README.md",
         language: "md",
-        description: "A TanStack Start-style playground that stays stateless and Vercel-safe.",
+        description:
+          "A TanStack Start-style playground that stays stateless and Vercel-safe.",
         content: `# Serverless TanStack Start Playground
 
 This route is the lightweight TanStack Start compiler-core experiment.
@@ -844,15 +849,20 @@ What is real here:
 - real \`@tanstack/react-router\`
 - an esbuild browser preview bundle
 - real route modules under \`src/routes\`
-- real nested layouts, loaders, params, search state, links, and server function RPC stubs
+- real nested layouts, loaders, params, search state, links, and native Start RPC serialization
+- real \`@tanstack/start-client-core\` and \`@tanstack/start-server-core\` execution
 
 What is intentionally still experimental here:
 
 - no long-lived Vite dev server
 - no Vite build inside the serverless function
-- each browser-side server function call posts the saved snapshot to a stateless RPC route
+- saved snapshots compile to content-addressed artifacts with a bounded hot cache and optional signed durable storage
+- browser-side server function calls send only the native Start request plus revision and function id
+- server bundles execute in bounded, revision-pinned child workers, not in the Next.js host process
 
-This is less complete than full Start SSR, but it avoids bundling Vite into the hosted compile route.`,
+This is the CSR tier, not full Start SSR. Without durable storage, a missing hot
+artifact asks you to rebuild; configured durable storage restores it across app
+processes.`,
       },
       {
         path: "index.html",
@@ -967,7 +977,8 @@ declare module "@tanstack/react-router" {
       {
         path: "src/routeTree.gen.ts",
         language: "ts",
-        description: "A fixed generated route tree for the stateless file-route playground.",
+        description:
+          "A fixed generated route tree for the stateless file-route playground.",
         content: `/* eslint-disable */
 
 // @ts-nocheck
@@ -1149,13 +1160,13 @@ export const posts: DemoPost[] = [
     summary:
       "The compromise is deliberate: this route favors real client routing over pretending server code is safe to execute inside shared production Functions.",
     notes: [
-      "This page is safe to host on Vercel because it never boots user server code.",
+      "Server functions run from a bounded compiled artifact in a revision-pinned child worker, outside the Next.js host process.",
       "The route files are still real modules you can edit like a Start project.",
       "A future trusted verifier can reuse the same source shape for SSR checks.",
     ],
     metrics: [
       { label: "Host", value: "Vercel-native" },
-      { label: "Server code", value: "Disabled" },
+      { label: "Server code", value: "Isolated child" },
       { label: "Authoring", value: "Start-like" },
     ],
   },
@@ -1316,8 +1327,8 @@ const highlights = [
     body: "The route modules mirror a file-based Start setup, and src/routeTree.gen.ts keeps the familiar generated contract.",
   },
   {
-    title: "Vercel-safe",
-    body: "Nothing writes to disk or executes user server code, so the preview stays stateless and safe for shared Functions.",
+    title: "Revision RPC",
+    body: "A save creates one content-addressed client/server artifact. Calls use Start's native wire protocol and never resend the workspace.",
   },
 ];
 
@@ -1396,7 +1407,8 @@ function HomeRoute() {
       {
         path: "src/routes/posts.tsx",
         language: "tsx",
-        description: "A nested layout route that loads post data and renders child routes.",
+        description:
+          "A nested layout route that loads post data and renders child routes.",
         content: `import { Link, Outlet, createFileRoute } from "@tanstack/react-router";
 import { loadPosts } from "../lib/posts";
 
@@ -1590,7 +1602,8 @@ function PostDetailRoute() {
       {
         path: "src/routes/server-functions.tsx",
         language: "tsx",
-        description: "Manual lab for the Start compiler-core server function path.",
+        description:
+          "Manual lab for native Start server-function compilation and transport.",
         content: `import { useState, type FormEvent } from "react";
 import { createMiddleware, createServerFn } from "@tanstack/react-start";
 import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
@@ -1779,12 +1792,13 @@ function ServerFunctionsRoute() {
             Server functions
           </span>
           <h2 className="max-w-4xl text-4xl font-semibold leading-[0.96] tracking-[-0.04em] text-stone-950 sm:text-5xl">
-            Start compiler output calling the stateless RPC route.
+            Native Start RPC against one compiled revision.
           </h2>
           <p className="max-w-3xl text-[17px] leading-7 text-stone-600">
-            These calls are transformed by the Start compiler core, sent through
-            the playground RPC endpoint, and executed from the current saved
-            workspace snapshot.
+            These calls use Start's client runtime and wire format. The endpoint
+            resolves the saved revision to a cached server bundle and executes
+            it in a warm revision-pinned child worker—no workspace files travel
+            on calls.
           </p>
         </div>
 
@@ -1875,7 +1889,8 @@ function ServerFunctionsRoute() {
       {
         path: "README.md",
         language: "md",
-        description: "A minimal App Router subset for the lightweight Next Lite compiler.",
+        description:
+          "A minimal App Router subset for the lightweight Next Lite compiler.",
         content: `# Serverless Next Lite Playground
 
 This template targets the current Next Lite slice:
@@ -1900,7 +1915,8 @@ This route intentionally avoids CSS imports, next/link, next/navigation, client 
       {
         path: "package.json",
         language: "json",
-        description: "Project manifest for the lightweight Next Lite playground.",
+        description:
+          "Project manifest for the lightweight Next Lite playground.",
         content: `{
   "name": "serverless-next-lite-playground",
   "private": true
@@ -1910,7 +1926,8 @@ This route intentionally avoids CSS imports, next/link, next/navigation, client 
       {
         path: "tsconfig.json",
         language: "json",
-        description: "TypeScript configuration for the lightweight App Router subset.",
+        description:
+          "TypeScript configuration for the lightweight App Router subset.",
         content: `{
   "compilerOptions": {
     "target": "ES2022",
@@ -1973,7 +1990,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       {
         path: "app/page.tsx",
         language: "tsx",
-        description: "Root page rendered by the lightweight Next Lite compiler.",
+        description:
+          "Root page rendered by the lightweight Next Lite compiler.",
         content: `import type { CSSProperties } from "react";
 
 const panelStyle: CSSProperties = {
@@ -2013,7 +2031,8 @@ export default function Page() {
       {
         path: "app/api/health/route.ts",
         language: "ts",
-        description: "Route handler using the lightweight next/server response shim.",
+        description:
+          "Route handler using the lightweight next/server response shim.",
         content: `import { NextResponse } from "next/server";
 
 export function GET(request: Request) {
@@ -2088,7 +2107,8 @@ export default function PostDetailLayout({ children }: { children: ReactNode }) 
       {
         path: "app/posts/[postId]/page.tsx",
         language: "tsx",
-        description: "Dynamic page route rendered with params and searchParams.",
+        description:
+          "Dynamic page route rendered with params and searchParams.",
         content: `import type { CSSProperties } from "react";
 
 type PageProps = {
@@ -2132,7 +2152,8 @@ export default function PostPage({ params, searchParams }: PageProps) {
       {
         path: "README.md",
         language: "md",
-        description: "A stateless real-Next runtime experiment using a short-lived temp workspace.",
+        description:
+          "A stateless real-Next runtime experiment using a short-lived temp workspace.",
         content: `# Serverless Next Runtime Playground
 
 This route is an experiment in running a real Next app without keeping a long-lived session runtime alive.
@@ -2393,7 +2414,8 @@ p {
       {
         path: "README.md",
         language: "md",
-        description: "A stateless Express playground that compiles and serves one request at a time.",
+        description:
+          "A stateless Express playground that compiles and serves one request at a time.",
         content: `# Serverless Express Playground
 
 This workspace is stateless by design.
@@ -2408,7 +2430,8 @@ Each preview request sends the current browser snapshot to the server, compiles 
       {
         path: "package.json",
         language: "json",
-        description: "Informational manifest for the stateless Express playground.",
+        description:
+          "Informational manifest for the stateless Express playground.",
         content: `{
   "name": "serverless-express-playground",
   "private": true,
@@ -2422,7 +2445,8 @@ Each preview request sends the current browser snapshot to the server, compiles 
       {
         path: "src/server.ts",
         language: "ts",
-        description: "Express app entry exported for the stateless request runner.",
+        description:
+          "Express app entry exported for the stateless request runner.",
         content: `import express from "express";
 
 const app = express();

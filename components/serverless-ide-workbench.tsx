@@ -128,7 +128,7 @@ const modeConfig: Record<
     defaultFilePath: "src/routes/index.tsx",
     title: "TanStack Start Runtime Playground",
     explorerCopy:
-      "This route uses TanStack Start's compiler core without booting Vite. It rewrites createServerFn calls into RPC stubs, bundles the client preview with esbuild, and executes server functions through a stateless API route.",
+      "This route uses TanStack Start's real compiler and client/server runtimes without booting Vite. Saves create a content-addressed revision; server functions execute from its cached bundle in an isolated child process.",
     previewLabel: "Real TanStack Start preview from the last saved snapshot",
     statusMode: "serverless-tanstack-start",
     footerHint: "Ctrl+S saves and rebuilds the Start runtime preview",
@@ -140,7 +140,9 @@ const modeConfig: Record<
 function buildFileTree(files: WorkspaceFile[]) {
   const roots: FileTreeNode[] = [];
 
-  for (const file of [...files].sort((left, right) => left.path.localeCompare(right.path))) {
+  for (const file of [...files].sort((left, right) =>
+    left.path.localeCompare(right.path),
+  )) {
     const parts = file.path.split("/");
     let nodes = roots;
     let currentPath = "";
@@ -209,7 +211,11 @@ function collectLucideImports(files: WorkspaceFile[]) {
           continue;
         }
 
-        if (isTypeOnly || importedName === "LucideIcon" || importedName === "LucideProps") {
+        if (
+          isTypeOnly ||
+          importedName === "LucideIcon" ||
+          importedName === "LucideProps"
+        ) {
           typeImportedNames.add(importedName);
           continue;
         }
@@ -269,14 +275,20 @@ declare module "@tanstack/router-core" {
   ];
 }
 
-function mergeDrafts(files: WorkspaceFile[], draftsByPath: Record<string, string>) {
+function mergeDrafts(
+  files: WorkspaceFile[],
+  draftsByPath: Record<string, string>,
+) {
   return files.map((file) => ({
     ...file,
     content: draftsByPath[file.path] ?? file.content,
   }));
 }
 
-function materializeModeFiles(mode: ServerlessWorkbenchMode, files: WorkspaceFile[]) {
+function materializeModeFiles(
+  mode: ServerlessWorkbenchMode,
+  files: WorkspaceFile[],
+) {
   return mode === "tanstackstart" ? materializeTanstackRouteTree(files) : files;
 }
 
@@ -305,7 +317,10 @@ function prepareModeFiles(
   files: WorkspaceFile[],
   initialFiles: WorkspaceFile[],
 ) {
-  return materializeModeFiles(mode, restoreMissingTemplateFiles(mode, files, initialFiles));
+  return materializeModeFiles(
+    mode,
+    restoreMissingTemplateFiles(mode, files, initialFiles),
+  );
 }
 
 export function ServerlessIdeWorkbench({
@@ -320,10 +335,14 @@ export function ServerlessIdeWorkbench({
     prepareModeFiles(mode, initialFiles, initialFiles),
   );
   const [draftsByPath, setDraftsByPath] = useState<Record<string, string>>({});
-  const [selectedFilePath, setSelectedFilePath] = useState(config.defaultFilePath);
+  const [selectedFilePath, setSelectedFilePath] = useState(
+    config.defaultFilePath,
+  );
   const [buildState, setBuildState] = useState<BuildState>("idle");
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
-  const [buildDiagnostics, setBuildDiagnostics] = useState<BuildDiagnostic[]>([]);
+  const [buildDiagnostics, setBuildDiagnostics] = useState<BuildDiagnostic[]>(
+    [],
+  );
   const [clientLogs, setClientLogs] = useState<ClientLogEntry[]>([]);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [buildVersion, setBuildVersion] = useState(0);
@@ -373,7 +392,10 @@ export function ServerlessIdeWorkbench({
     );
   }, [config.storageKey, draftsByPath, files]);
 
-  const savedFiles = useMemo(() => materializeModeFiles(mode, files), [files, mode]);
+  const savedFiles = useMemo(
+    () => materializeModeFiles(mode, files),
+    [files, mode],
+  );
   const workingFiles = useMemo(
     () => materializeModeFiles(mode, mergeDrafts(savedFiles, draftsByPath)),
     [draftsByPath, mode, savedFiles],
@@ -382,29 +404,29 @@ export function ServerlessIdeWorkbench({
     return workingFiles.find((file) => file.path === selectedFilePath) ?? null;
   }, [selectedFilePath, workingFiles]);
   const fileTree = useMemo(() => buildFileTree(workingFiles), [workingFiles]);
-  const extraTypeLibraries = useMemo(
-    () => {
-      const libraries = buildLucideTypeLibrary(workingFiles);
+  const extraTypeLibraries = useMemo(() => {
+    const libraries = buildLucideTypeLibrary(workingFiles);
 
-      if (mode === "nextjs") {
-        return [...libraries, ...nextTypeLibraries];
-      }
+    if (mode === "nextjs") {
+      return [...libraries, ...nextTypeLibraries];
+    }
 
-      if (mode === "tanstackstart") {
-        return [...libraries, ...buildTanstackTypeLibraries()];
-      }
+    if (mode === "tanstackstart") {
+      return [...libraries, ...buildTanstackTypeLibraries()];
+    }
 
-      return libraries;
-    },
-    [mode, workingFiles],
-  );
+    return libraries;
+  }, [mode, workingFiles]);
   const currentValue = selectedFile
-    ? draftsByPath[selectedFile.path] ?? selectedFile.content
+    ? (draftsByPath[selectedFile.path] ?? selectedFile.content)
     : "";
   const dirtyFileCount = useMemo(
     () =>
-      savedFiles.filter((file) => draftsByPath[file.path] !== undefined && draftsByPath[file.path] !== file.content)
-        .length,
+      savedFiles.filter(
+        (file) =>
+          draftsByPath[file.path] !== undefined &&
+          draftsByPath[file.path] !== file.content,
+      ).length,
     [draftsByPath, savedFiles],
   );
   const isCurrentFileDirty = selectedFile
@@ -444,7 +466,9 @@ export function ServerlessIdeWorkbench({
 
     setFiles((current) =>
       current.map((file) =>
-        file.path === selectedFile.path ? { ...file, content: nextContent } : file,
+        file.path === selectedFile.path
+          ? { ...file, content: nextContent }
+          : file,
       ),
     );
     setDraftsByPath((current) => {
@@ -492,7 +516,9 @@ export function ServerlessIdeWorkbench({
         };
 
         if (!response.ok && !payload.html) {
-          throw new Error(payload.error ?? "Unable to build stateless preview.");
+          throw new Error(
+            payload.error ?? "Unable to build stateless preview.",
+          );
         }
 
         startTransition(() => {
@@ -503,7 +529,9 @@ export function ServerlessIdeWorkbench({
         });
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : "Unable to build stateless preview.";
+          error instanceof Error
+            ? error.message
+            : "Unable to build stateless preview.";
 
         setRequestError(message);
         setBuildDiagnostics([
@@ -534,7 +562,10 @@ export function ServerlessIdeWorkbench({
           }
         | undefined;
 
-      if (payload?.source !== "tuto-serverless-preview-log" || !payload.message) {
+      if (
+        payload?.source !== "tuto-serverless-preview-log" ||
+        !payload.message
+      ) {
         return;
       }
 
@@ -587,11 +618,11 @@ export function ServerlessIdeWorkbench({
     <main className="flex h-screen flex-col overflow-hidden bg-[#1e1e1e] text-[#cccccc]">
       <header className="flex h-10 items-center justify-between border-b border-[#2a2d2e] bg-[#181818] px-3 text-xs">
         <div className="flex min-w-0 items-center gap-3">
-            <span className="font-semibold tracking-wide text-[#9cdcfe]">TUTO</span>
-            <span className="text-[#858585]">SERVERLESS</span>
-            <span className="truncate text-[#cccccc]">
-              {config.title}
-            </span>
+          <span className="font-semibold tracking-wide text-[#9cdcfe]">
+            TUTO
+          </span>
+          <span className="text-[#858585]">SERVERLESS</span>
+          <span className="truncate text-[#cccccc]">{config.title}</span>
         </div>
         <div className="flex items-center gap-2 text-[#858585]">
           <span className="rounded border border-[#3c3c3c] bg-[#252526] px-3 py-1 text-[#cccccc]">
@@ -632,9 +663,7 @@ export function ServerlessIdeWorkbench({
             <p className="text-[11px] uppercase tracking-[0.12em] text-[#858585]">
               Explorer
             </p>
-            <p className="mt-2 text-sm text-[#cccccc]">
-              {config.explorerCopy}
-            </p>
+            <p className="mt-2 text-sm text-[#cccccc]">{config.explorerCopy}</p>
           </div>
 
           <div className="grid grid-cols-2 gap-px border-b border-[#2a2d2e] bg-[#2a2d2e] text-[11px]">
@@ -694,7 +723,9 @@ export function ServerlessIdeWorkbench({
                   sessionId={config.sessionId}
                   typeLibrariesUrl="/api/serverless/types"
                   value={currentValue}
-                  workspaceFiles={mode === "tanstackstart" ? workingFiles : undefined}
+                  workspaceFiles={
+                    mode === "tanstackstart" ? workingFiles : undefined
+                  }
                 />
               ) : (
                 <div className="flex h-full items-center justify-center text-sm text-[#858585]">
@@ -751,7 +782,8 @@ export function ServerlessIdeWorkbench({
                       </span>
                       <span
                         className={
-                          (entry.source === "build" && entry.level === "error") ||
+                          (entry.source === "build" &&
+                            entry.level === "error") ||
                           (entry.source === "client" && entry.kind === "stderr")
                             ? "rounded bg-[#4b1f24] px-2 py-1 text-[#f48771]"
                             : entry.source === "build" && entry.level === "warn"
@@ -765,7 +797,9 @@ export function ServerlessIdeWorkbench({
                         {entry.source === "build" && entry.filePath ? (
                           <p className="mb-1 text-[#858585]">
                             {entry.filePath}
-                            {entry.line ? `:${entry.line}:${entry.column ?? 1}` : ""}
+                            {entry.line
+                              ? `:${entry.line}:${entry.column ?? 1}`
+                              : ""}
                           </p>
                         ) : null}
                         <p className="break-words text-[#d4d4d4]">
