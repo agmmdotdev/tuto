@@ -164,7 +164,7 @@ redirect hops; external redirects remain external. The official TanStack Router
 compiler removes `server`, `headers`, and `ssr` route options from the client
 revision, preventing server-handler code from leaking into the browser bundle.
 
-### RSC provider and initial-SSR checkpoint
+### RSC provider, Composite Components, and initial-SSR checkpoint
 
 An optional `src/rsc.tsx` default export now runs in a separate revision RSC
 artifact compiled with the `react-server` condition. The artifact imports the
@@ -191,11 +191,22 @@ it during hydration. The Firefox fixture proves that initial HTML contains the
 server component and that its lazy `"use client"` counter is interactive without
 a browser-initiated Flight request.
 
+Loader-owned Composite Components now use the same provider and replay-stream
+path. During the shared RSC-kernel build, framework-owned `"use client"`
+boundaries such as TanStack's `ClientSlot` are collected into a client-reference
+manifest and bundled into both the shared browser and SSR kernels. Revision
+loaders merge that immutable framework map with workspace client references.
+This is the client-reference manifest role normally performed by the official
+bundler adapter; no replacement Composite API or runtime component is used.
+The Firefox fixture proves named and nested composite selections, a slot
+argument, a children slot, initial HTML output, hydration, and interactive
+client state.
+
 This remains a checkpoint rather than complete TanStack Start RSC parity. The
-low-level endpoint and loader-owned `renderServerComponent` path are covered;
-Composite Components, RSC server actions, client-reference preload metadata,
-and RSC CSS dependency collection are not. An operating-system isolation
-boundary also remains outside this tier.
+low-level endpoint plus loader-owned `renderServerComponent` and
+`createCompositeComponent` paths are covered; RSC server actions,
+client-reference preload metadata, and RSC CSS dependency collection are not.
+An operating-system isolation boundary also remains outside this tier.
 
 ### Cross-instance artifact storage
 
@@ -288,12 +299,12 @@ they no longer traverse or emit those framework graphs.
 Run `yarn measure:tanstack-start-kernels` to rebuild and measure the boundary. A
 local two-edit measurement produced these uncompressed minified sizes:
 
-- shared client kernel: 370,841 bytes
-- shared SSR server kernel: 496,166 bytes
+- shared client kernel: 371,460 bytes
+- shared SSR server kernel: 496,785 bytes
 - shared RSC kernel: 101,933 bytes
-- first client/server revision: 3,027 / 3,887 bytes
-- edited client/server revision: 3,025 / 3,887 bytes
-- measured compile durations: 205 ms and 216 ms
+- first client/server revision: 3,027 / 4,815 bytes
+- edited client/server revision: 3,025 / 4,815 bytes
+- measured compile durations: 315 ms and 384 ms
 
 Those timings are local diagnostics, not a production latency claim. The
 important result is structural: revision edits do not rebundle the shared
@@ -303,8 +314,8 @@ isolated in the RSC kernel.
 
 ## Remaining architecture work
 
-1. extend the RSC checkpoint with Composite Components, server actions,
-   client-reference preload metadata, and CSS dependency collection.
+1. extend the RSC checkpoint with server actions, client-reference preload
+   metadata, and CSS dependency collection.
 2. move execution and the shared runtime directory behind a hardened sandbox
    such as an isolated container or
    microVM before treating arbitrary untrusted student code as safe for a
@@ -323,5 +334,6 @@ route-scoped CSS loading during browser navigation, the covered server-route
 HTTP path, and the documented opt-in Flight/client-boundary slice. It does not
 yet claim complete TanStack Start RSC parity. The covered loader-owned
 `renderServerComponent` path now includes initial SSR and hydration; Composite
-Components, server actions, RSC asset dependency collection, and an
-operating-system security boundary remain work for the full-runtime tier.
+Components now include nested selections, slots, initial SSR, and hydration.
+Server actions, RSC asset dependency collection, and an operating-system
+security boundary remain work for the full-runtime tier.

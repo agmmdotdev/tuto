@@ -15,7 +15,12 @@ const files: WorkspaceFile[] = [
   {
     content: `import { Suspense, useState } from 'react';
 import { createMiddleware, createServerFn } from '@tanstack/react-start';
-import { createFromFetch, renderServerComponent } from '@tanstack/react-start/rsc';
+import {
+  CompositeComponent,
+  createCompositeComponent,
+  createFromFetch,
+  renderServerComponent,
+} from '@tanstack/react-start/rsc';
 import { Link, createFileRoute } from '@tanstack/react-router';
 import { InitialRsc } from '../initial-rsc';
 
@@ -32,6 +37,20 @@ const greet = createServerFn({ method: 'POST' })
   }));
 
 const getInitialRsc = createServerFn({ method: 'GET' }).handler(async () => ({
+  CompositeSrc: await createCompositeComponent((props) => ({
+    Card: (
+      <article data-testid="composite-card">
+        <h2>Composite shell rendered in SSR</h2>
+        <div>{props.title('Title passed through Flight')}</div>
+        <div>{props.children}</div>
+      </article>
+    ),
+    Footer: (
+      <footer data-testid="composite-footer">
+        Nested composite selection rendered
+      </footer>
+    ),
+  })),
   InitialRsc: await renderServerComponent(<InitialRsc />),
 }));
 
@@ -41,7 +60,8 @@ export const Route = createFileRoute('/')({
 });
 
 function HomeRoute() {
-  const { InitialRsc } = Route.useLoaderData();
+  const { CompositeSrc, InitialRsc } = Route.useLoaderData();
+  const [compositeCount, setCompositeCount] = useState(0);
   const [count, setCount] = useState(0);
   const [serverResult, setServerResult] = useState('idle');
   const [requestResult, setRequestResult] = useState('idle');
@@ -55,6 +75,20 @@ function HomeRoute() {
         Hydration count: {count}
       </button>
       <section data-testid="initial-rsc-result">{InitialRsc}</section>
+      <CompositeComponent
+        src={CompositeSrc.Card}
+        title={(title) => (
+          <button
+            data-testid="composite-title-slot"
+            onClick={() => setCompositeCount((value) => value + 1)}
+          >
+            {title}: {compositeCount}
+          </button>
+        )}
+      >
+        <p data-testid="composite-children-slot">Children supplied by the client route</p>
+      </CompositeComponent>
+      <CompositeComponent src={CompositeSrc.Footer} />
       <button
         data-testid="server-fn"
         onClick={async () => setServerResult(JSON.stringify(await greet({ data: { name: 'Ada' } })))}
@@ -318,7 +352,11 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
 
   const renderResponse = await page.goto(new URL(renderPath, baseURL).href);
   expect(renderResponse?.status()).toBe(200);
-  expect(await renderResponse?.text()).toContain("Initial Flight rendered in SSR");
+  const initialHtml = await renderResponse!.text();
+  expect(initialHtml).toContain("Initial Flight rendered in SSR");
+  expect(initialHtml).toContain('<article data-testid="composite-card">');
+  expect(initialHtml).toContain('<button data-testid="composite-title-slot">');
+  expect(initialHtml).toContain("Children supplied by the client route");
   await expect(page.getByRole("heading", { name: "Browser runtime fixture" })).toBeVisible();
   await expect(page.getByTestId("initial-rsc-root")).toBeVisible();
   await expect(page.getByTestId("initial-rsc-message")).toHaveText(
@@ -330,6 +368,20 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   await page.getByTestId("initial-rsc-counter").click();
   await expect(page.getByTestId("initial-rsc-counter")).toHaveText(
     "Initial RSC count: 6",
+  );
+  await expect(page.getByTestId("composite-card")).toBeVisible();
+  await expect(page.getByTestId("composite-title-slot")).toHaveText(
+    "Title passed through Flight: 0",
+  );
+  await expect(page.getByTestId("composite-children-slot")).toHaveText(
+    "Children supplied by the client route",
+  );
+  await expect(page.getByTestId("composite-footer")).toHaveText(
+    "Nested composite selection rendered",
+  );
+  await page.getByTestId("composite-title-slot").click();
+  await expect(page.getByTestId("composite-title-slot")).toHaveText(
+    "Title passed through Flight: 1",
   );
 
   await page.getByTestId("hydrate").click();

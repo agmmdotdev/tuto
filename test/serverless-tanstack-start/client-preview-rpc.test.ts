@@ -211,6 +211,20 @@ globalThis.__tutoPreviewPromise = greet({ data: { name: ' Ada ' } })
         await kernelResponse.text(),
       ).toString("base64")}`
     );
+    const clientKernel = (
+      globalThis as typeof globalThis &
+        Record<
+          string,
+          { modules?: Record<string, Record<string, unknown>> } | undefined
+        >
+    )[kernelManifest.client.globalKey];
+    const frameworkRscClientReferences = Object.values(
+      kernelManifest.rsc.clientReferences,
+    );
+    assert.ok(frameworkRscClientReferences.length > 0);
+    for (const moduleKey of frameworkRscClientReferences) {
+      assert.ok(clientKernel?.modules?.[moduleKey]);
+    }
     await import(
       `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`
     );

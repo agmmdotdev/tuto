@@ -327,7 +327,7 @@ ${storageContextExports
   };
 }
 
-function createRscDirectivePlugin() {
+function createRscDirectivePlugin(clientReferences) {
   return {
     name: "tuto-start-rsc-use-client",
     setup(buildApi) {
@@ -345,6 +345,7 @@ function createRscDirectivePlugin() {
             .update(args.path)
             .digest("hex")
             .slice(0, 20)}`;
+          clientReferences.set(reference, args.path);
           const transformed = transformDirectiveProxyExport(ast, {
             code: source,
             directive: "use client",
@@ -572,6 +573,35 @@ function moduleMap(specifiers) {
     .join(",\n");
 }
 
+function frameworkRscClientReferenceEntries(clientReferences) {
+  return [...clientReferences.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([reference, filePath], index) => ({
+      filePath,
+      importName: `frameworkRscClientReference${index}`,
+      moduleKey: `#tanstack-rsc-client-reference/${reference}`,
+      reference,
+    }));
+}
+
+function frameworkRscClientReferenceImports(entries) {
+  return entries
+    .map(
+      ({ filePath, importName }) =>
+        `import * as ${importName} from ${JSON.stringify(filePath)};`,
+    )
+    .join("\n");
+}
+
+function frameworkRscClientReferenceModuleMap(entries) {
+  return entries
+    .map(
+      ({ importName, moduleKey }) =>
+        `${JSON.stringify(moduleKey)}: ${importName}`,
+    )
+    .join(",\n");
+}
+
 function packageVersion(packageName) {
   return require(`${packageName}/package.json`).version;
 }
@@ -604,22 +634,6 @@ export async function buildTanstackStartKernels() {
     moduleExports(clientModules),
     moduleExports(serverModules),
   ]);
-  const clientEntry = `${moduleImports(clientModules)}
-globalThis.${clientGlobalKey} = Object.freeze({
-  id: ${JSON.stringify(id)},
-  modules: Object.freeze({ ${moduleMap(clientModules)} }),
-});`;
-  const serverEntry = `${moduleImports(serverModules)}
-import { createStartHandler, defaultStreamHandler } from '@tanstack/react-start/server';
-
-const modules = Object.freeze({ ${moduleMap(serverModules)} });
-globalThis.${serverGlobalKey} = Object.freeze({
-  id: ${JSON.stringify(id)},
-  modules,
-});
-const startHandler = createStartHandler(defaultStreamHandler);
-globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
-  startHandler(request, requestOptions);`;
   const rscEntry = `
 import {
   createClientOnlyFn,
@@ -655,7 +669,72 @@ globalThis.${rscGlobalKey} = Object.freeze({
   }),
 });`;
 
-  const [clientBuild, rscBuild, serverBuild] = await Promise.all([
+  const frameworkRscClientReferences = new Map();
+  const rscBuild = await build({
+    absWorkingDir: process.cwd(),
+    bundle: true,
+    charset: "utf8",
+    conditions: ["react-server", "module", "import", "default"],
+    define: {
+      "import.meta.env.DEV": "false",
+      "import.meta.env.__vite_rsc_build__": "true",
+      "process.env.NODE_ENV": '"production"',
+    },
+    format: "esm",
+    legalComments: "none",
+    logLevel: "silent",
+    minify: true,
+    outfile: rscKernelPath,
+    platform: "node",
+    plugins: [
+      createRscEntriesPlugin(
+        serverExports["@tanstack/start-storage-context"],
+      ),
+      createRscDirectivePlugin(frameworkRscClientReferences),
+      createRscWebpackRuntimePlugin(),
+    ],
+    stdin: {
+      contents: rscEntry,
+      loader: "js",
+      resolveDir: process.cwd(),
+      sourcefile: "tuto-tanstack-start-rsc-kernel.js",
+    },
+    target: ["node22"],
+    write: false,
+  });
+  const frameworkRscEntries = frameworkRscClientReferenceEntries(
+    frameworkRscClientReferences,
+  );
+  const frameworkRscImports =
+    frameworkRscClientReferenceImports(frameworkRscEntries);
+  const frameworkRscModuleMap =
+    frameworkRscClientReferenceModuleMap(frameworkRscEntries);
+  const clientEntry = `${moduleImports(clientModules)}
+${frameworkRscImports}
+globalThis.${clientGlobalKey} = Object.freeze({
+  id: ${JSON.stringify(id)},
+  modules: Object.freeze({
+    ${moduleMap(clientModules)},
+    ${frameworkRscModuleMap}
+  }),
+});`;
+  const serverEntry = `${moduleImports(serverModules)}
+${frameworkRscImports}
+import { createStartHandler, defaultStreamHandler } from '@tanstack/react-start/server';
+
+const modules = Object.freeze({
+  ${moduleMap(serverModules)},
+  ${frameworkRscModuleMap}
+});
+globalThis.${serverGlobalKey} = Object.freeze({
+  id: ${JSON.stringify(id)},
+  modules,
+});
+const startHandler = createStartHandler(defaultStreamHandler);
+globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
+  startHandler(request, requestOptions);`;
+
+  const [clientBuild, serverBuild] = await Promise.all([
     build({
       absWorkingDir: process.cwd(),
       bundle: true,
@@ -684,38 +763,6 @@ globalThis.${rscGlobalKey} = Object.freeze({
         sourcefile: "tuto-tanstack-start-client-kernel.js",
       },
       target: ["es2022"],
-      write: false,
-    }),
-    build({
-      absWorkingDir: process.cwd(),
-      bundle: true,
-      charset: "utf8",
-      conditions: ["react-server", "module", "import", "default"],
-      define: {
-        "import.meta.env.DEV": "false",
-        "import.meta.env.__vite_rsc_build__": "true",
-        "process.env.NODE_ENV": '"production"',
-      },
-      format: "esm",
-      legalComments: "none",
-      logLevel: "silent",
-      minify: true,
-      outfile: rscKernelPath,
-      platform: "node",
-      plugins: [
-        createRscEntriesPlugin(
-          serverExports["@tanstack/start-storage-context"],
-        ),
-        createRscDirectivePlugin(),
-        createRscWebpackRuntimePlugin(),
-      ],
-      stdin: {
-        contents: rscEntry,
-        loader: "js",
-        resolveDir: process.cwd(),
-        sourcefile: "tuto-tanstack-start-rsc-kernel.js",
-      },
-      target: ["node22"],
       write: false,
     }),
     build({
@@ -803,6 +850,12 @@ globalThis.${rscGlobalKey} = Object.freeze({
     packages,
     rsc: {
       bytes: Buffer.byteLength(rscCode),
+      clientReferences: Object.fromEntries(
+        frameworkRscEntries.map(({ moduleKey, reference }) => [
+          reference,
+          moduleKey,
+        ]),
+      ),
       exports: rscExports,
       file: path.basename(rscKernelPath),
       globalKey: rscGlobalKey,

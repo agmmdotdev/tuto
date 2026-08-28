@@ -976,10 +976,18 @@ ${Object.entries(rscClientReferences)
   )
   .join("\n")}
 };
+const frameworkRscSsrReferences = ${JSON.stringify(
+    kernelManifest.rsc.clientReferences,
+  )};
 globalThis.${kernelManifest.server.rscLoaderKey} = async function loadRscSsrClientReference(id) {
   const load = rscSsrReferences[id];
-  if (!load) throw new Error('Unknown RSC SSR client reference: ' + id);
-  return load();
+  if (load) return load();
+  const moduleKey = frameworkRscSsrReferences[id];
+  const frameworkModule = moduleKey
+    ? globalThis.${kernelManifest.server.globalKey}?.modules?.[moduleKey]
+    : undefined;
+  if (frameworkModule) return frameworkModule;
+  throw new Error('Unknown RSC SSR client reference: ' + id);
 };
 if (typeof globalThis.${kernelManifest.server.resolverKey} !== 'function') {
   globalThis.${kernelManifest.server.resolverKey} = async function getServerFnById(id) {
@@ -1412,10 +1420,18 @@ ${Object.entries(rscClientReferences)
   )
   .join("\n")}
 };
+const frameworkRscClientReferences = ${JSON.stringify(
+    kernelManifest.rsc.clientReferences,
+  )};
 globalThis.${kernelManifest.client.rscLoaderKey} = async function loadRscClientReference(id) {
   const load = rscClientReferences[id];
-  if (!load) throw new Error('Unknown RSC client reference: ' + id);
-  return load();
+  if (load) return load();
+  const moduleKey = frameworkRscClientReferences[id];
+  const frameworkModule = moduleKey
+    ? globalThis.${kernelManifest.client.globalKey}?.modules?.[moduleKey]
+    : undefined;
+  if (frameworkModule) return frameworkModule;
+  throw new Error('Unknown RSC client reference: ' + id);
 };
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
