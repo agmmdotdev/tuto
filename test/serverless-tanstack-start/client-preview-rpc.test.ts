@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -922,6 +923,77 @@ test("native RPC distinguishes durable-store outages from eviction", async () =>
     assert.equal(response.status, 503);
     assert.match(await response.text(), /object store offline/i);
   } finally {
+    setTanstackStartArtifactStoreForTests(undefined);
+  }
+});
+
+test("native RPC reports a lazy durable source failure as unavailable", async () => {
+  const revision = "1".repeat(64);
+  const serverFnId = "2".repeat(64);
+  const rpcToken = "s".repeat(43);
+  const serverSource = "export const unreachable = true;";
+  const metadata = {
+    buildMetrics: {
+      clientFrameworkInputs: 0,
+      clientRevisionBytes: 0,
+      serverFrameworkInputs: 0,
+      serverRevisionBytes: 0,
+      sharedClientKernelBytes: 0,
+      sharedServerKernelBytes: 0,
+    },
+    diagnostics: [],
+    durationMs: 1,
+    kernelId: kernelManifest.id,
+    revision,
+    routeManifest: {},
+    rpcToken,
+    serverFnIds: [serverFnId],
+    success: true,
+  };
+  clearTanstackStartArtifactCache();
+  clearNativeRpcWorkerPoolForTests();
+  setTanstackStartArtifactStoreForTests({
+    async get() {
+      throw new Error("full artifact should not be read");
+    },
+    async getMetadata() {
+      return metadata;
+    },
+    async getServerRuntime() {
+      return {
+        ...metadata,
+        runtime: {
+          kernelId: metadata.kernelId,
+          revision,
+          serverBundle: "",
+          serverChunks: {},
+          serverSources: {
+            chunks: {},
+            entry: {
+              bytes: Buffer.byteLength(serverSource),
+              hash: createHash("sha256").update(serverSource).digest("hex"),
+              async stream() {
+                throw new Error("object stream offline");
+              },
+            },
+          },
+        },
+      };
+    },
+    async put() {},
+  });
+
+  try {
+    const response = await handleNativeRpc(
+      new Request(
+        `http://tuto.local/api/serverless/tanstack-start/core-rpc?revision=${revision}&token=${rpcToken}&id=${serverFnId}`,
+        { method: "POST" },
+      ),
+    );
+    assert.equal(response.status, 503);
+    assert.match(await response.text(), /shared artifact storage is unavailable/i);
+  } finally {
+    clearNativeRpcWorkerPoolForTests();
     setTanstackStartArtifactStoreForTests(undefined);
   }
 });

@@ -1,7 +1,10 @@
 import { resolveArtifactServerRequest } from "./artifact-request";
 import type { NativeRpcRequest } from "./native-rpc-protocol";
 import { getNativeRpcWorkerPool } from "./native-rpc-worker-pool";
-import { serverRuntimeHasEntry } from "./server-runtime-store";
+import {
+  ServerRuntimeSourceError,
+  serverRuntimeHasEntry,
+} from "./server-runtime-store";
 
 const maxRequestBytes = 1_250_000;
 
@@ -130,11 +133,17 @@ export async function executeNativeArtifactRequest(
       nativeRequest,
     );
   } catch (error) {
+    const unavailable = error instanceof ServerRuntimeSourceError;
     return new Response(
       error instanceof Error
-        ? `Preview request failed: ${error.message}`
+        ? unavailable
+          ? `Shared artifact storage is unavailable: ${error.message}`
+          : `Preview request failed: ${error.message}`
         : "Preview request failed.",
-      { headers: { "cache-control": "no-store" }, status: 500 },
+      {
+        headers: { "cache-control": "no-store" },
+        status: unavailable ? 503 : 500,
+      },
     );
   }
   const headers = new Headers(execution.response.headers);

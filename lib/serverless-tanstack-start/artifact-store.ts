@@ -4,7 +4,15 @@ import {
   randomUUID,
   timingSafeEqual,
 } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import {
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { AwsClient } from "aws4fetch";
 import kernelManifest from "./kernel-manifest.generated.json";
@@ -104,6 +112,7 @@ type ArtifactEnvelope = ArtifactEnvelopePayload & {
 export type ArtifactBlobStore = {
   delete(key: string): Promise<void>;
   get(key: string): Promise<string | null>;
+  getStream?(key: string): Promise<AsyncIterable<Uint8Array> | null>;
   put(key: string, value: string, contentType?: string): Promise<void>;
 };
 
@@ -628,12 +637,42 @@ export function createTanstackStartArtifactStore({
     return source;
   };
 
+  const loadBlobStream = async (descriptor: ArtifactBlobDescriptor) => {
+    const cached = cache.get(descriptor.hash);
+    if (cached !== undefined) {
+      if (Buffer.byteLength(cached) !== descriptor.bytes) {
+        throw new Error(
+          "Stored TanStack artifact has inconsistent blob descriptors.",
+        );
+      }
+      return (async function* () {
+        yield Buffer.from(cached);
+      })();
+    }
+    if (blobStore.getStream) {
+      const stream = await blobStore.getStream(
+        blobObjectKey(prefix, descriptor.hash),
+      );
+      if (stream === null) {
+        throw new Error(
+          `Stored TanStack artifact blob ${descriptor.hash} is missing.`,
+        );
+      }
+      return stream;
+    }
+    const source = await loadBlob(descriptor, false);
+    return (async function* () {
+      yield Buffer.from(source);
+    })();
+  };
+
   const deferredSource = (
     descriptor: ArtifactBlobDescriptor,
   ): ServerRuntimeSource => ({
     bytes: descriptor.bytes,
     hash: descriptor.hash,
     load: () => loadBlob(descriptor, false),
+    stream: () => loadBlobStream(descriptor),
   });
 
   const loadDescriptors = async (descriptors: ArtifactBlobDescriptor[]) => {
@@ -919,6 +958,17 @@ function createFilesystemBlobStore(root: string): ArtifactBlobStore {
         throw error;
       }
     },
+    async getStream(key) {
+      const target = resolveKey(key);
+      try {
+        const targetStat = await stat(target);
+        if (!targetStat.isFile()) return null;
+        return createReadStream(target) as AsyncIterable<Uint8Array>;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
+      }
+    },
     async put(key, value) {
       const target = resolveKey(key);
       const temporary = `${target}.${randomUUID()}.tmp`;
@@ -980,6 +1030,30 @@ function createS3BlobStore({
       if (response.status === 404) return null;
       await assertResponse(response, "read");
       return response.text();
+    },
+    async getStream(key) {
+      const response = await client.fetch(urlFor(key), { method: "GET" });
+      if (response.status === 404) return null;
+      await assertResponse(response, "read");
+      const body = response.body;
+      return (async function* () {
+        if (!body) return;
+        const reader = body.getReader();
+        let completed = false;
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+              completed = true;
+              return;
+            }
+            if (value) yield value;
+          }
+        } finally {
+          if (!completed) await reader.cancel().catch(() => undefined);
+          reader.releaseLock();
+        }
+      })();
     },
     async put(key, value, contentType = "application/octet-stream") {
       const response = await client.fetch(urlFor(key), {

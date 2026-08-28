@@ -1,6 +1,7 @@
 import { resolveArtifactServerRequest } from "../../../../../lib/serverless-tanstack-start/artifact-request";
 import type { NativeRpcRequest } from "../../../../../lib/serverless-tanstack-start/native-rpc-protocol";
 import { getNativeRpcWorkerPool } from "../../../../../lib/serverless-tanstack-start/native-rpc-worker-pool";
+import { ServerRuntimeSourceError } from "../../../../../lib/serverless-tanstack-start/server-runtime-store";
 
 export const runtime = "nodejs";
 
@@ -126,11 +127,14 @@ async function handleNativeRpc(request: Request) {
       statusText: result.statusText,
     });
   } catch (error) {
+    const unavailable = error instanceof ServerRuntimeSourceError;
     return new Response(
       error instanceof Error
-        ? error.message
+        ? unavailable
+          ? `Shared artifact storage is unavailable: ${error.message}`
+          : error.message
         : "Unable to execute TanStack server function.",
-      { headers: corsHeaders, status: 500 },
+      { headers: corsHeaders, status: unavailable ? 503 : 500 },
     );
   }
 }

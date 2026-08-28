@@ -20,6 +20,7 @@ import {
   setTanstackStartArtifactStoreForTests,
 } from "../../lib/serverless-tanstack-start/artifact-store";
 import kernelManifest from "../../lib/serverless-tanstack-start/kernel-manifest.generated.json";
+import { ServerRuntimeStore } from "../../lib/serverless-tanstack-start/server-runtime-store";
 
 const temporaryRoots: string[] = [];
 
@@ -84,6 +85,7 @@ function manifestPath(root: string, revision: string) {
 function memoryBlobStore() {
   const objects = new Map<string, string>();
   const reads: string[] = [];
+  const streamReads: string[] = [];
   const writes: string[] = [];
   const store: ArtifactBlobStore = {
     async delete(key) {
@@ -93,12 +95,23 @@ function memoryBlobStore() {
       reads.push(key);
       return objects.get(key) ?? null;
     },
+    async getStream(key) {
+      streamReads.push(key);
+      const source = objects.get(key);
+      if (source === undefined) return null;
+      return (async function* () {
+        const bytes = Buffer.from(source);
+        const midpoint = Math.ceil(bytes.byteLength / 2);
+        yield bytes.subarray(0, midpoint);
+        yield bytes.subarray(midpoint);
+      })();
+    },
     async put(key, value) {
       writes.push(key);
       objects.set(key, value);
     },
   };
-  return { objects, reads, store, writes };
+  return { objects, reads, store, streamReads, writes };
 }
 
 afterEach(async () => {
@@ -316,7 +329,7 @@ test("hands server descriptors to the runtime without eager blob reads", async (
 
   backend.reads.length = 0;
   assert.equal(
-    await selected.runtime.serverSources.entry.load(),
+    await selected.runtime.serverSources.entry.load!(),
     artifact(revision).serverBundle,
   );
   assert.equal(backend.reads.length, 1);
@@ -324,8 +337,51 @@ test("hands server descriptors to the runtime without eager blob reads", async (
   const [[chunkName, chunk]] = Object.entries(
     selected.runtime.serverSources.chunks,
   );
-  assert.equal(await chunk.load(), artifact(revision).serverChunks[chunkName]);
+  assert.equal(await chunk.load!(), artifact(revision).serverChunks[chunkName]);
   assert.equal(backend.reads.length, 2);
+});
+
+test("streams server blobs into the runtime CAS without string reads", async () => {
+  const revision = "9".repeat(64);
+  const backend = memoryBlobStore();
+  const writer = createTanstackStartArtifactStore({
+    blobStore: backend.store,
+    signingKey: "streaming-handoff-key",
+  });
+  await writer.put(artifact(revision));
+  const reader = createTanstackStartArtifactStore({
+    blobStore: backend.store,
+    signingKey: "streaming-handoff-key",
+  });
+  const runtimeRoot = await temporaryRoot();
+  const runtimeStore = new ServerRuntimeStore({ root: runtimeRoot });
+  const selected = await reader.getServerRuntime!(revision);
+  assert.ok(selected);
+
+  backend.reads.length = 0;
+  backend.streamReads.length = 0;
+  const first = await runtimeStore.acquire(selected.runtime);
+  assert.equal(await readFile(first.entryPath, "utf8"), artifact(revision).serverBundle);
+  assert.equal(backend.reads.length, 0);
+  assert.equal(backend.streamReads.length, 2);
+  assert.ok(backend.streamReads.every((key) => key.endsWith(".blob")));
+  await first.release();
+
+  const coldReader = createTanstackStartArtifactStore({
+    blobStore: backend.store,
+    signingKey: "streaming-handoff-key",
+  });
+  const repeated = await coldReader.getServerRuntime!(revision);
+  assert.ok(repeated);
+  backend.reads.length = 0;
+  backend.streamReads.length = 0;
+  const second = await new ServerRuntimeStore({ root: runtimeRoot }).acquire(
+    repeated.runtime,
+  );
+  assert.equal(second.entryPath, first.entryPath);
+  assert.equal(backend.reads.length, 0);
+  assert.equal(backend.streamReads.length, 0);
+  await second.release();
 });
 
 test("publishes the manifest only after every content blob", async () => {

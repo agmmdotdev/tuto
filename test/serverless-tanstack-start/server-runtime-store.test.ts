@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, test } from "vitest";
 import {
+  ServerRuntimeSourceError,
   ServerRuntimeStore,
   type ServerRuntimeArtifact,
 } from "../../lib/serverless-tanstack-start/server-runtime-store";
@@ -154,6 +162,24 @@ test("rejects a deferred source that does not match its descriptor", async () =>
     new ServerRuntimeStore({ root }).acquire(sourceArtifact),
     /runtime source .* failed integrity validation/i,
   );
+});
+
+test("removes partial runtime files when a source stream fails", async () => {
+  const root = await temporaryRoot();
+  const sourceArtifact = deferredArtifact("8", () => undefined);
+  sourceArtifact.serverSources!.entry.stream = async () =>
+    (async function* () {
+      yield Buffer.from("partial source");
+      throw new Error("stream interrupted");
+    })();
+
+  await assert.rejects(
+    new ServerRuntimeStore({ root }).acquire(sourceArtifact),
+    (error) =>
+      error instanceof ServerRuntimeSourceError &&
+      /could not be read/i.test(error.message),
+  );
+  assert.deepEqual(await readdir(path.join(root, "tmp")), []);
 });
 
 test("separates runtime output changes for the same workspace revision", async () => {

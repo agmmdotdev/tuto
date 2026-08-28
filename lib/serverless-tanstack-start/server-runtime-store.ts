@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   link,
   mkdir,
+  open,
   readFile,
   readdir,
   rename,
@@ -25,8 +26,16 @@ export type ServerRuntimeArtifact = {
 };
 
 export type ServerRuntimeSource = RuntimeFile & {
-  load(): Promise<string>;
+  load?(): Promise<string>;
+  stream?(): Promise<AsyncIterable<Uint8Array>>;
 };
+
+export class ServerRuntimeSourceError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ServerRuntimeSourceError";
+  }
+}
 
 type RuntimeFile = {
   bytes: number;
@@ -99,11 +108,27 @@ function sourceDescriptor(source: ServerRuntimeSource): RuntimeFile {
   if (
     !Number.isSafeInteger(source.bytes) ||
     source.bytes < 0 ||
-    !/^[a-f0-9]{64}$/.test(source.hash)
+    !/^[a-f0-9]{64}$/.test(source.hash) ||
+    (typeof source.load !== "function" && typeof source.stream !== "function")
   ) {
     throw new Error("Invalid TanStack Start runtime source descriptor.");
   }
   return { bytes: source.bytes, hash: source.hash };
+}
+
+async function* sourceChunks(source: ServerRuntimeSource) {
+  try {
+    if (source.stream) {
+      yield* await source.stream();
+    } else {
+      yield Buffer.from(await source.load!());
+    }
+  } catch (error) {
+    throw new ServerRuntimeSourceError(
+      `Runtime source ${source.hash} could not be read.`,
+      { cause: error },
+    );
+  }
 }
 
 function errorCode(error: unknown) {
@@ -274,23 +299,53 @@ export class ServerRuntimeStore {
       this.temporaryRoot,
       `${descriptor.hash}-${process.pid}-${randomUUID()}.tmp`,
     );
-    const deferred = typeof source !== "string";
-    const contents = deferred ? await source.load() : source;
-    if (
-      deferred &&
-      (Buffer.byteLength(contents) !== descriptor.bytes ||
-        sha256(contents) !== descriptor.hash)
-    ) {
-      throw new Error(
-        `Runtime source ${descriptor.hash} failed integrity validation.`,
-      );
-    }
-    await writeFile(temporaryPath, contents, {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 0o444,
-    });
     try {
+      if (typeof source === "string") {
+        await writeFile(temporaryPath, source, {
+          encoding: "utf8",
+          flag: "wx",
+          mode: 0o444,
+        });
+      } else {
+        const temporary = await open(temporaryPath, "wx", 0o444);
+        const hash = createHash("sha256");
+        let bytes = 0;
+        try {
+          for await (const chunk of sourceChunks(source)) {
+            if (!(chunk instanceof Uint8Array)) {
+              throw new ServerRuntimeSourceError(
+                `Runtime source ${descriptor.hash} returned an invalid chunk.`,
+              );
+            }
+            bytes += chunk.byteLength;
+            if (bytes > descriptor.bytes) {
+              throw new ServerRuntimeSourceError(
+                `Runtime source ${descriptor.hash} failed size validation.`,
+              );
+            }
+            hash.update(chunk);
+            let offset = 0;
+            while (offset < chunk.byteLength) {
+              const { bytesWritten } = await temporary.write(
+                chunk,
+                offset,
+                chunk.byteLength - offset,
+              );
+              if (bytesWritten === 0) {
+                throw new Error("Unable to write TanStack runtime source.");
+              }
+              offset += bytesWritten;
+            }
+          }
+        } finally {
+          await temporary.close();
+        }
+        if (bytes !== descriptor.bytes || hash.digest("hex") !== descriptor.hash) {
+          throw new ServerRuntimeSourceError(
+            `Runtime source ${descriptor.hash} failed integrity validation.`,
+          );
+        }
+      }
       await link(temporaryPath, destination);
     } catch (error) {
       if (errorCode(error) !== "EEXIST") throw error;
@@ -363,6 +418,7 @@ export class ServerRuntimeStore {
       this.revisionsRoot,
       `.${id}-${process.pid}-${randomUUID()}.tmp`,
     );
+    let published = false;
     await mkdir(path.join(stagingPath, "chunks"), { recursive: true });
     try {
       await link(entryBlob, path.join(stagingPath, "entry.mjs"));
@@ -378,6 +434,7 @@ export class ServerRuntimeStore {
       );
       try {
         await rename(stagingPath, revisionPath);
+        published = true;
       } catch (error) {
         if (!new Set(["EEXIST", "ENOTEMPTY"]).has(errorCode(error) ?? "")) {
           throw error;
@@ -389,6 +446,10 @@ export class ServerRuntimeStore {
       throw error;
     }
 
+    if (published) {
+      this.verifiedRevisions.add(id);
+      return path.join(revisionPath, "entry.mjs");
+    }
     return this.validateRevision(revisionPath, manifest, id);
   }
 
