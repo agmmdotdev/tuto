@@ -914,12 +914,14 @@ function normalizeBuildError(error: unknown): BuildDiagnostic[] {
 async function buildNativeServerBundle({
   clientAssetUrl,
   cssAssetUrl,
+  rscClientReferences,
   routeManifest,
   root,
   transform,
 }: {
   clientAssetUrl: string;
   cssAssetUrl?: string;
+  rscClientReferences: Record<string, string>;
   routeManifest: Record<string, RouteManifestEntry>;
   root: string;
   transform: StartServerFunctionsTransform;
@@ -930,24 +932,8 @@ async function buildNativeServerBundle({
   if (Object.keys(transform.serverFnsById).length === 0 && !routerModule) {
     return { chunks: {}, code: "", frameworkInputs: 0 };
   }
-  const entries: string[] = [];
-
   for (const [splitId, splitSource] of transform.serverRouteSplits) {
     serverFiles.set(splitId, splitSource);
-  }
-
-  for (const [id, serverFn] of Object.entries(transform.serverFnsById)) {
-    const splitModuleId = toWorkspaceModuleId(root, serverFn.extractedFilename);
-    const splitSource = transform.serverSplits.get(splitModuleId);
-    if (!splitSource) {
-      throw new Error(`Missing server split for function ${id}.`);
-    }
-    serverFiles.set(splitModuleId, splitSource);
-    entries.push(
-      `${JSON.stringify(id)}: () => import(${JSON.stringify(
-        splitModuleId,
-      )}).then((module) => module[${JSON.stringify(serverFn.functionName)}]),`,
-    );
   }
 
   const { __root__: rootRouteManifest, ...childRouteManifest } = routeManifest;
@@ -982,11 +968,23 @@ globalThis.${kernelManifest.server.manifestKey} = ${JSON.stringify({
 delete globalThis.${kernelManifest.server.manifestKey};`;
   const resolverSource = `${startInstanceSource}
 ${routerSource}
-const actions = { ${entries.join("\n")} };
-globalThis.${kernelManifest.server.resolverKey} = async function getServerFnById(id) {
-  const loadAction = actions[id];
-  if (!loadAction) throw new Error('Unknown server function: ' + id);
-  return loadAction();
+const rscSsrReferences = {
+${Object.entries(rscClientReferences)
+  .map(
+    ([reference, filePath]) =>
+      `  ${JSON.stringify(reference)}: () => import(${JSON.stringify(filePath)}),`,
+  )
+  .join("\n")}
+};
+globalThis.${kernelManifest.server.rscLoaderKey} = async function loadRscSsrClientReference(id) {
+  const load = rscSsrReferences[id];
+  if (!load) throw new Error('Unknown RSC SSR client reference: ' + id);
+  return load();
+};
+if (typeof globalThis.${kernelManifest.server.resolverKey} !== 'function') {
+  globalThis.${kernelManifest.server.resolverKey} = async function getServerFnById(id) {
+    throw new Error('Unknown server function: ' + id);
+  };
 }`;
   const entrySource = resolverSource;
   const result = await build({
@@ -1043,21 +1041,42 @@ globalThis.${kernelManifest.server.resolverKey} = async function getServerFnById
 
 async function buildRscServerBundle({
   clientReferences,
-  files,
   root,
+  transform,
 }: {
   clientReferences: Record<string, string>;
-  files: WorkspaceFileMap;
   root: string;
+  transform: StartServerFunctionsTransform;
 }) {
+  const files = new Map(transform.serverFiles);
   const rscModule = findWorkspaceFile(files, "src/rsc");
-  if (!rscModule) return { chunks: {}, code: "" };
+  const entries: string[] = [];
+  for (const [id, serverFn] of Object.entries(transform.serverFnsById)) {
+    const splitModuleId = toWorkspaceModuleId(root, serverFn.extractedFilename);
+    const splitSource = transform.serverSplits.get(splitModuleId);
+    if (!splitSource) {
+      throw new Error(`Missing RSC provider split for function ${id}.`);
+    }
+    files.set(splitModuleId, splitSource);
+    entries.push(
+      `${JSON.stringify(id)}: () => import(${JSON.stringify(
+        splitModuleId,
+      )}).then((module) => module[${JSON.stringify(serverFn.functionName)}]),`,
+    );
+  }
+  if (!rscModule && entries.length === 0) return { chunks: {}, code: "" };
 
   const entrySource = `
 import React from 'react';
-import RscRoot from ${JSON.stringify(rscModule)};
-import { renderToReadableStream } from '@tanstack/react-start/rsc';
-
+${rscModule ? `import RscRoot from ${JSON.stringify(rscModule)};` : ""}
+${rscModule ? "import { renderToReadableStream } from '@tanstack/react-start/rsc';" : ""}
+const actions = { ${entries.join("\n")} };
+globalThis.${kernelManifest.server.resolverKey} = async function getServerFnById(id) {
+  const loadAction = actions[id];
+  if (!loadAction) throw new Error('Unknown server function: ' + id);
+  return loadAction();
+};
+${rscModule ? `
 globalThis.${kernelManifest.rsc.handlerKey} = async function handleRsc(request) {
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return new Response('Method not allowed.', {
@@ -1076,6 +1095,7 @@ globalThis.${kernelManifest.rsc.handlerKey} = async function handleRsc(request) 
     },
   });
 };
+` : ""}
 `;
   const result = await build({
     absWorkingDir: absoluteWorkingDirectory,
@@ -1596,14 +1616,15 @@ async function compilePreview(
     const serverBuild = await buildNativeServerBundle({
       clientAssetUrl: `${assetBase}client`,
       ...(ssrClientBuild.css ? { cssAssetUrl: `${assetBase}style` } : {}),
+      rscClientReferences,
       routeManifest: ssrClientBuild.routeManifest,
       root,
       transform,
     });
     const rscBuild = await buildRscServerBundle({
       clientReferences: rscClientReferences,
-      files: transform.serverFiles,
       root,
+      transform,
     });
     const serverBundle = rscBuild.code
       ? `import ${JSON.stringify("./chunks/rsc-entry.js")};\n${serverBuild.code}`

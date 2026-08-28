@@ -70,6 +70,9 @@ async function cleanup() {
   delete (globalThis as typeof globalThis & Record<string, unknown>)[
     kernelManifest.server.manifestKey
   ];
+  delete (globalThis as typeof globalThis & Record<string, unknown>)[
+    kernelManifest.server.rscLoaderKey
+  ];
 }
 
 async function initialize(

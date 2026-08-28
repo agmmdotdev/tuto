@@ -25,6 +25,7 @@ const clientServerFnBaseKey = "__TUTO_TANSTACK_START_SERVER_FN_BASE__";
 const clientRouterKey = "__TUTO_TANSTACK_START_CLIENT_ROUTER_FACTORY__";
 const clientStartInstanceKey = "__TUTO_TANSTACK_START_CLIENT_INSTANCE__";
 const clientRscLoaderKey = "__TUTO_TANSTACK_START_RSC_CLIENT_LOADER__";
+const serverRscLoaderKey = "__TUTO_TANSTACK_START_RSC_SSR_LOADER__";
 const serverGlobalKey = "__TUTO_TANSTACK_START_SERVER_KERNEL__";
 const serverHandlerKey = "__TUTO_TANSTACK_START_NATIVE_HANDLER__";
 const serverResolverKey = "__TUTO_TANSTACK_START_SERVER_FN_RESOLVER__";
@@ -49,7 +50,10 @@ const clientModules = [
   "react-dom/client",
 ];
 const rscModules = [
+  "@tanstack/react-start",
   "@tanstack/react-start/rsc",
+  "@tanstack/react-start/server-rpc",
+  "@tanstack/start-storage-context",
   "@vitejs/plugin-rsc/react/rsc",
   "react",
   "react/jsx-runtime",
@@ -61,6 +65,8 @@ const serverModules = [
   "@tanstack/react-start/rsc",
   "@tanstack/react-start/server",
   "@tanstack/react-start/server-rpc",
+  "@tanstack/react-start/ssr-rpc",
+  "@tanstack/start-storage-context",
   "react",
   "react/jsx-runtime",
   "react-dom/server",
@@ -190,9 +196,13 @@ export async function getRouter() {
           }
           if (args.path === "#tanstack-start-plugin-adapters") {
             return {
-              contents:
-                "export const hasPluginAdapters = false; export const pluginSerializationAdapters = [];",
+              contents: `
+import { rscSerializationAdapter } from '@tanstack/react-start/rsc/serialization/client';
+export const hasPluginAdapters = true;
+export const pluginSerializationAdapters = rscSerializationAdapter();
+`,
               loader: "js",
+              resolveDir: process.cwd(),
             };
           }
           return {
@@ -255,10 +265,17 @@ export { createFromFetch, createFromReadableStream };
   };
 }
 
-function createRscEntriesPlugin() {
+function createRscEntriesPlugin(storageContextExports) {
   return {
     name: "tuto-start-rsc-kernel-entries",
     setup(buildApi) {
+      buildApi.onResolve(
+        { filter: /^@tanstack\/start-storage-context$/ },
+        () => ({
+          path: "@tanstack/start-storage-context",
+          namespace: "tuto-rsc-storage-context",
+        }),
+      );
       buildApi.onResolve(
         { filter: /^virtual:tanstack-rsc-runtime$/ },
         () => ({
@@ -289,6 +306,21 @@ function createRscEntriesPlugin() {
             "export { createFromReadableStream } from '@vitejs/plugin-rsc/react/rsc'; export function createFromFetch() { throw new Error('createFromFetch is unavailable in the RSC environment.'); }",
           loader: "js",
           resolveDir: process.cwd(),
+        }),
+      );
+      buildApi.onLoad(
+        { filter: /.*/, namespace: "tuto-rsc-storage-context" },
+        () => ({
+          contents: `
+const storageContext = globalThis.${serverGlobalKey}?.modules?.['@tanstack/start-storage-context'];
+if (!storageContext) {
+  throw new Error('The shared Start storage context is not initialized.');
+}
+${storageContextExports
+  .map((name) => `export const ${name} = storageContext[${JSON.stringify(name)}];`)
+  .join("\n")}
+`,
+          loader: "js",
         }),
       );
     },
@@ -403,9 +435,13 @@ export async function getRouter() {
           }
           if (args.path === "#tanstack-start-plugin-adapters") {
             return {
-              contents:
-                "export const hasPluginAdapters = false; export const pluginSerializationAdapters = [];",
+              contents: `
+import { rscSerializationAdapter } from '@tanstack/react-start/rsc/serialization/server';
+export const hasPluginAdapters = true;
+export const pluginSerializationAdapters = rscSerializationAdapter();
+`,
               loader: "js",
+              resolveDir: process.cwd(),
             };
           }
           if (args.path === "tanstack-start-manifest:v") {
@@ -446,11 +482,27 @@ export const startInstance = {
         () => ({
           contents: `
 import { createFromReadableStream, setRequireModule } from '@vitejs/plugin-rsc/react/ssr';
+let onClientReference;
 setRequireModule({
-  load(id) {
-    throw new Error('RSC client reference ' + id + ' is unavailable during Start SSR.');
+  async load(id) {
+    const load = globalThis.${serverRscLoaderKey};
+    if (typeof load !== 'function') {
+      throw new Error('The RSC SSR client-reference loader is not registered.');
+    }
+    const module = await load(id);
+    const deps = { css: [], js: [] };
+    onClientReference?.({ id, deps, runtime: 'tuto' });
+    return new Proxy(module, {
+      get(target, property, receiver) {
+        onClientReference?.({ id, deps, runtime: 'tuto' });
+        return Reflect.get(target, property, receiver);
+      },
+    });
   },
 });
+export function setOnClientReference(callback) {
+  onClientReference = callback;
+}
 export { createFromReadableStream };
 export function createFromFetch() {
   throw new Error('createFromFetch is unavailable during Start SSR.');
@@ -569,7 +621,16 @@ const startHandler = createStartHandler(defaultStreamHandler);
 globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
   startHandler(request, requestOptions);`;
   const rscEntry = `
-import { renderToReadableStream } from '@tanstack/react-start/rsc';
+import {
+  createClientOnlyFn,
+  createIsomorphicFn,
+  createMiddleware,
+  createServerFn,
+  createServerOnlyFn,
+} from '@tanstack/react-start';
+import * as rscStart from '@tanstack/react-start/rsc';
+import * as rscServerRpc from '@tanstack/react-start/server-rpc';
+import * as rscStorageContext from '@tanstack/start-storage-context';
 import * as rscRuntime from '@vitejs/plugin-rsc/react/rsc';
 import * as rscReact from 'react';
 import * as rscJsxRuntime from 'react/jsx-runtime';
@@ -577,7 +638,16 @@ import * as rscJsxDevRuntime from 'react/jsx-dev-runtime';
 globalThis.${rscGlobalKey} = Object.freeze({
   id: ${JSON.stringify(id)},
   modules: Object.freeze({
-    '@tanstack/react-start/rsc': Object.freeze({ renderToReadableStream }),
+    '@tanstack/react-start': Object.freeze({
+      createClientOnlyFn,
+      createIsomorphicFn,
+      createMiddleware,
+      createServerFn,
+      createServerOnlyFn,
+    }),
+    '@tanstack/react-start/rsc': rscStart,
+    '@tanstack/react-start/server-rpc': rscServerRpc,
+    '@tanstack/start-storage-context': rscStorageContext,
     '@vitejs/plugin-rsc/react/rsc': rscRuntime,
     'react': rscReact,
     'react/jsx-runtime': rscJsxRuntime,
@@ -633,7 +703,9 @@ globalThis.${rscGlobalKey} = Object.freeze({
       outfile: rscKernelPath,
       platform: "node",
       plugins: [
-        createRscEntriesPlugin(),
+        createRscEntriesPlugin(
+          serverExports["@tanstack/start-storage-context"],
+        ),
         createRscDirectivePlugin(),
         createRscWebpackRuntimePlugin(),
       ],
@@ -682,9 +754,23 @@ globalThis.${rscGlobalKey} = Object.freeze({
   const clientCode = clientBuild.outputFiles[0].text;
   const rscCode = rscBuild.outputFiles[0].text;
   const serverCode = serverBuild.outputFiles[0].text;
-  await import(
-    `data:text/javascript;base64,${Buffer.from(rscCode).toString("base64")}#${id}`
-  );
+  const previousServerKernel = globalThis[serverGlobalKey];
+  globalThis[serverGlobalKey] = {
+    modules: {
+      "@tanstack/start-storage-context": await import(
+        "@tanstack/start-storage-context"
+      ),
+    },
+  };
+  try {
+    await import(
+      `data:text/javascript;base64,${Buffer.from(rscCode).toString("base64")}#${id}`
+    );
+  } catch (error) {
+    throw new Error(
+      `Unable to inspect the generated RSC kernel: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const rscKernel = globalThis[rscGlobalKey];
   const rscExports = Object.fromEntries(
     rscModules.map((specifier) => [
@@ -693,6 +779,8 @@ globalThis.${rscGlobalKey} = Object.freeze({
     ]),
   );
   delete globalThis[rscGlobalKey];
+  if (previousServerKernel === undefined) delete globalThis[serverGlobalKey];
+  else globalThis[serverGlobalKey] = previousServerKernel;
   if (clientCode.includes("process.env.")) {
     throw new Error(
       "The TanStack Start client kernel contains an unresolved process.env reference.",
@@ -733,6 +821,7 @@ globalThis.${rscGlobalKey} = Object.freeze({
       routerKey: serverRouterKey,
       manifestKey: serverManifestKey,
       serverFnBase: serverFnInternalBase,
+      rscLoaderKey: serverRscLoaderKey,
       startInstanceKey: serverStartInstanceKey,
     },
   };

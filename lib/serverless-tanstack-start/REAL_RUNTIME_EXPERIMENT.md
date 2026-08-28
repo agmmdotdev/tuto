@@ -164,7 +164,7 @@ redirect hops; external redirects remain external. The official TanStack Router
 compiler removes `server`, `headers`, and `ssr` route options from the client
 revision, preventing server-handler code from leaking into the browser bundle.
 
-### RSC Flight checkpoint
+### RSC provider and initial-SSR checkpoint
 
 An optional `src/rsc.tsx` default export now runs in a separate revision RSC
 artifact compiled with the `react-server` condition. The artifact imports the
@@ -180,11 +180,22 @@ decode it with `createFromFetch` from `@tanstack/react-start/rsc`. The Firefox
 fixture proves an async server component, a lazy client-reference chunk, and
 interactive state after the boundary loads.
 
-This is the first real Flight slice, not complete TanStack Start RSC parity. It
-does not yet pre-decode RSC into the initial SSR document, register the RSC
-serialization adapters for loaders/server-function results, implement RSC
-server actions, or collect RSC CSS dependencies. Those are separate follow-up
-layers. An operating-system isolation boundary also remains outside this tier.
+Server-function provider splits now live in the `react-server` revision instead
+of the SSR revision. The SSR caller reaches them through Start's official
+`createSsrRpc` resolver, while the client and SSR kernels install the official
+RSC serialization adapters. Consequently, the documented
+`createServerFn(...).handler(() => renderServerComponent(...))` pattern works in
+a route loader: SSR decodes the Flight stream into the initial HTML, serializes
+the replayable stream into Start hydration data, and the browser adapter reuses
+it during hydration. The Firefox fixture proves that initial HTML contains the
+server component and that its lazy `"use client"` counter is interactive without
+a browser-initiated Flight request.
+
+This remains a checkpoint rather than complete TanStack Start RSC parity. The
+low-level endpoint and loader-owned `renderServerComponent` path are covered;
+Composite Components, RSC server actions, client-reference preload metadata,
+and RSC CSS dependency collection are not. An operating-system isolation
+boundary also remains outside this tier.
 
 ### Cross-instance artifact storage
 
@@ -277,9 +288,9 @@ they no longer traverse or emit those framework graphs.
 Run `yarn measure:tanstack-start-kernels` to rebuild and measure the boundary. A
 local two-edit measurement produced these uncompressed minified sizes:
 
-- shared client kernel: 366,167 bytes
-- shared SSR server kernel: 489,690 bytes
-- shared RSC kernel: 91,592 bytes
+- shared client kernel: 370,841 bytes
+- shared SSR server kernel: 496,166 bytes
+- shared RSC kernel: 101,933 bytes
 - first client/server revision: 3,027 / 3,887 bytes
 - edited client/server revision: 3,025 / 3,887 bytes
 - measured compile durations: 205 ms and 216 ms
@@ -292,8 +303,8 @@ isolated in the RSC kernel.
 
 ## Remaining architecture work
 
-1. extend the RSC checkpoint with initial-document SSR decoding, Start's RSC
-   serialization adapters, server actions, and CSS dependency collection.
+1. extend the RSC checkpoint with Composite Components, server actions,
+   client-reference preload metadata, and CSS dependency collection.
 2. move execution and the shared runtime directory behind a hardened sandbox
    such as an isolated container or
    microVM before treating arbitrary untrusted student code as safe for a
@@ -310,5 +321,7 @@ This checkpoint claims router SSR, hydration, streamed document responses,
 matched-route client component chunks, route/server-function ESM chunks,
 route-scoped CSS loading during browser navigation, the covered server-route
 HTTP path, and the documented opt-in Flight/client-boundary slice. It does not
-yet claim complete TanStack Start RSC parity or an operating-system security
-boundary. Those remain work for the full-runtime tier.
+yet claim complete TanStack Start RSC parity. The covered loader-owned
+`renderServerComponent` path now includes initial SSR and hydration; Composite
+Components, server actions, RSC asset dependency collection, and an
+operating-system security boundary remain work for the full-runtime tier.

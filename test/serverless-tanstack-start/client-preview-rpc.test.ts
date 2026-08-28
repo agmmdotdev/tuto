@@ -147,7 +147,10 @@ globalThis.__tutoPreviewPromise = greet({ data: { name: ' Ada ' } })
   assert.ok(Object.keys(preview.serverChunks).length > 0);
   assert.doesNotMatch(preview.serverBundle, /hi /);
   assert.ok(
-    Object.values(preview.serverChunks).some((chunk) => chunk.includes("hi ")),
+    Object.entries(preview.serverChunks).some(
+      ([name, chunk]) =>
+        name.startsWith("chunks/rsc-") && chunk.includes("hi "),
+    ),
   );
   assert.ok(preview.buildMetrics.clientRevisionBytes < 20_000);
   assert.ok(preview.buildMetrics.serverRevisionBytes < 20_000);

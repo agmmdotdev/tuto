@@ -15,8 +15,9 @@ const files: WorkspaceFile[] = [
   {
     content: `import { Suspense, useState } from 'react';
 import { createMiddleware, createServerFn } from '@tanstack/react-start';
-import { createFromFetch } from '@tanstack/react-start/rsc';
+import { createFromFetch, renderServerComponent } from '@tanstack/react-start/rsc';
 import { Link, createFileRoute } from '@tanstack/react-router';
+import { InitialRsc } from '../initial-rsc';
 
 const addContext = createMiddleware({ type: 'function' }).server(({ next }) =>
   next({ context: { source: 'browser-middleware' } }),
@@ -30,9 +31,17 @@ const greet = createServerFn({ method: 'POST' })
     source: context.source,
   }));
 
-export const Route = createFileRoute('/')({ component: HomeRoute });
+const getInitialRsc = createServerFn({ method: 'GET' }).handler(async () => ({
+  InitialRsc: await renderServerComponent(<InitialRsc />),
+}));
+
+export const Route = createFileRoute('/')({
+  loader: () => getInitialRsc(),
+  component: HomeRoute,
+});
 
 function HomeRoute() {
+  const { InitialRsc } = Route.useLoaderData();
   const [count, setCount] = useState(0);
   const [serverResult, setServerResult] = useState('idle');
   const [requestResult, setRequestResult] = useState('idle');
@@ -45,6 +54,7 @@ function HomeRoute() {
       <button data-testid="hydrate" onClick={() => setCount((value) => value + 1)}>
         Hydration count: {count}
       </button>
+      <section data-testid="initial-rsc-result">{InitialRsc}</section>
       <button
         data-testid="server-fn"
         onClick={async () => setServerResult(JSON.stringify(await greet({ data: { name: 'Ada' } })))}
@@ -95,6 +105,41 @@ function HomeRoute() {
 }`,
     language: "tsx",
     path: "src/routes/index.tsx",
+  },
+  {
+    content: `import { InitialRscCounter } from './initial-rsc-counter';
+
+export function InitialRsc() {
+  return (
+    <article data-testid="initial-rsc-root">
+      <h2>Initial Flight rendered in SSR</h2>
+      <InitialRscCounter initial={5} message="initial-server-only-rsc" />
+    </article>
+  );
+}`,
+    language: "tsx",
+    path: "src/initial-rsc.tsx",
+  },
+  {
+    content: `'use client';
+import { useState } from 'react';
+
+export function InitialRscCounter({ initial, message }) {
+  const [count, setCount] = useState(initial);
+  return (
+    <div>
+      <p data-testid="initial-rsc-message">{message}</p>
+      <button
+        data-testid="initial-rsc-counter"
+        onClick={() => setCount((value) => value + 1)}
+      >
+        Initial RSC count: {count}
+      </button>
+    </div>
+  );
+}`,
+    language: "tsx",
+    path: "src/initial-rsc-counter.tsx",
   },
   {
     content: `'use client';
@@ -273,7 +318,19 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
 
   const renderResponse = await page.goto(new URL(renderPath, baseURL).href);
   expect(renderResponse?.status()).toBe(200);
+  expect(await renderResponse?.text()).toContain("Initial Flight rendered in SSR");
   await expect(page.getByRole("heading", { name: "Browser runtime fixture" })).toBeVisible();
+  await expect(page.getByTestId("initial-rsc-root")).toBeVisible();
+  await expect(page.getByTestId("initial-rsc-message")).toHaveText(
+    "initial-server-only-rsc",
+  );
+  await expect(page.getByTestId("initial-rsc-counter")).toHaveText(
+    "Initial RSC count: 5",
+  );
+  await page.getByTestId("initial-rsc-counter").click();
+  await expect(page.getByTestId("initial-rsc-counter")).toHaveText(
+    "Initial RSC count: 6",
+  );
 
   await page.getByTestId("hydrate").click();
   await expect(page.getByTestId("hydrate")).toHaveText("Hydration count: 1");
