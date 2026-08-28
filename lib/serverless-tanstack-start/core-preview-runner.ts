@@ -1,9 +1,14 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import nodePath from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
+import { parseAstAsync } from "rolldown/parseAst";
+import {
+  hasDirective,
+  transformDirectiveProxyExport,
+} from "@vitejs/plugin-rsc/transforms";
 import type {
   Loader,
   OnLoadArgs,
@@ -494,7 +499,9 @@ async function compileTailwindCss(
   return compiledCss.build(candidates);
 }
 
-function createKernelExternalPlugin(target: "client" | "server"): Plugin {
+function createKernelExternalPlugin(
+  target: "client" | "rsc" | "server",
+): Plugin {
   const targetManifest = kernelManifest[target];
   const modules = new Set<string>(targetManifest.modules);
 
@@ -546,6 +553,127 @@ ${declarations.join("\n")}
 ${defaultExport}
 `,
             loader: "js",
+          };
+        },
+      );
+    },
+  };
+}
+
+function rscReferenceKey(filePath: string) {
+  return `tuto-rsc-${createHash("sha256")
+    .update(filePath)
+    .digest("hex")
+    .slice(0, 20)}`;
+}
+
+async function isUseClientModule(source: string) {
+  if (!source.includes("use client")) return false;
+  const ast = await parseAstAsync(source, { lang: "tsx" });
+  return hasDirective(
+    ast.body as unknown as Parameters<typeof hasDirective>[0],
+    "use client",
+  );
+}
+
+async function collectRscClientReferences(files: WorkspaceFileMap) {
+  const references: Record<string, string> = {};
+  await Promise.all(
+    [...files.entries()].map(async ([filePath, source]) => {
+      if (loaderForPath(filePath) === "css") return;
+      if (await isUseClientModule(source)) {
+        references[rscReferenceKey(filePath)] = filePath;
+      }
+    }),
+  );
+  return references;
+}
+
+function createRscWorkspacePlugin({
+  clientReferences,
+  entrySource,
+  files,
+  root,
+}: {
+  clientReferences: Record<string, string>;
+  entrySource: string;
+  files: WorkspaceFileMap;
+  root: string;
+}): Plugin {
+  const referenceByFile = new Map(
+    Object.entries(clientReferences).map(([reference, filePath]) => [
+      filePath,
+      reference,
+    ]),
+  );
+
+  return {
+    name: "tuto-tanstack-start-rsc-workspace",
+    setup(buildApi) {
+      buildApi.onResolve({ filter: /^__tuto_rsc_entry__$/ }, () => ({
+        path: "__tuto_rsc_entry__",
+        namespace: "tuto-rsc-entry",
+      }));
+      buildApi.onResolve({ filter: /.*/ }, (args) => {
+        const rootedModule = toWorkspaceModuleId(root, args.path);
+        if (files.has(rootedModule)) {
+          return { path: rootedModule, namespace: "tuto-rsc-workspace" };
+        }
+        if (files.has(args.path)) {
+          return { path: args.path, namespace: "tuto-rsc-workspace" };
+        }
+        if (
+          args.namespace === "tuto-rsc-entry" ||
+          args.namespace === "tuto-rsc-workspace"
+        ) {
+          const match = resolveWorkspaceImport(files, args.path, args.importer);
+          if (match) return { path: match, namespace: "tuto-rsc-workspace" };
+        }
+        return null;
+      });
+      buildApi.onLoad({ filter: /.*/, namespace: "tuto-rsc-entry" }, () => ({
+        contents: entrySource,
+        loader: "js",
+        resolveDir: absoluteWorkingDirectory,
+      }));
+      buildApi.onLoad(
+        { filter: /.*/, namespace: "tuto-rsc-workspace" },
+        async (args) => {
+          const source = files.get(args.path);
+          if (typeof source !== "string") return null;
+          const loader = loaderForPath(args.path);
+          if (loader === "css") return { contents: "", loader: "js" };
+          const reference = referenceByFile.get(args.path);
+          if (!reference) {
+            return {
+              contents: source,
+              loader,
+              resolveDir: absoluteWorkingDirectory,
+            };
+          }
+
+          const ast = await parseAstAsync(source, { lang: "tsx" });
+          const transformed = transformDirectiveProxyExport(
+            ast as unknown as Parameters<
+              typeof transformDirectiveProxyExport
+            >[0],
+            {
+              code: source,
+              directive: "use client",
+              keep: false,
+              runtime: (name) =>
+                `$$registerClientReference(() => { throw new Error(${JSON.stringify(
+                  `Client reference ${args.path}#${name} cannot execute in the RSC environment.`,
+                )}); }, ${JSON.stringify(reference)}, ${JSON.stringify(name)})`,
+            },
+          );
+          if (!transformed) {
+            throw new Error(`Unable to compile RSC client boundary ${args.path}.`);
+          }
+          return {
+            contents: `import { registerClientReference as $$registerClientReference } from '@vitejs/plugin-rsc/react/rsc';\n${transformed.output.toString()}`,
+            loader,
+            resolveDir: absoluteWorkingDirectory,
           };
         },
       );
@@ -913,6 +1041,86 @@ globalThis.${kernelManifest.server.resolverKey} = async function getServerFnById
   };
 }
 
+async function buildRscServerBundle({
+  clientReferences,
+  files,
+  root,
+}: {
+  clientReferences: Record<string, string>;
+  files: WorkspaceFileMap;
+  root: string;
+}) {
+  const rscModule = findWorkspaceFile(files, "src/rsc");
+  if (!rscModule) return { chunks: {}, code: "" };
+
+  const entrySource = `
+import React from 'react';
+import RscRoot from ${JSON.stringify(rscModule)};
+import { renderToReadableStream } from '@tanstack/react-start/rsc';
+
+globalThis.${kernelManifest.rsc.handlerKey} = async function handleRsc(request) {
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    return new Response('Method not allowed.', {
+      headers: { allow: 'GET, HEAD' },
+      status: 405,
+    });
+  }
+  const stream = renderToReadableStream(
+    React.createElement(RscRoot, { requestUrl: request.url }),
+  );
+  return new Response(request.method === 'HEAD' ? null : stream, {
+    headers: {
+      'cache-control': 'no-store',
+      'content-type': 'text/x-component; charset=utf-8',
+      'vary': 'accept',
+    },
+  });
+};
+`;
+  const result = await build({
+    absWorkingDir: absoluteWorkingDirectory,
+    bundle: true,
+    charset: "utf8",
+    conditions: ["react-server", "module", "import", "default"],
+    define: {
+      "import.meta.env.DEV": "false",
+      "import.meta.env.__vite_rsc_build__": "true",
+      "process.env.NODE_ENV": '"production"',
+    },
+    entryNames: "chunks/rsc-entry",
+    entryPoints: ["__tuto_rsc_entry__"],
+    format: "esm",
+    jsx: "automatic",
+    jsxImportSource: "react",
+    legalComments: "none",
+    logLevel: "silent",
+    chunkNames: "chunks/rsc-[hash]",
+    outdir: "/out",
+    platform: "node",
+    plugins: [
+      createKernelExternalPlugin("rsc"),
+      createRscWorkspacePlugin({ clientReferences, entrySource, files, root }),
+    ],
+    splitting: true,
+    target: ["node22"],
+    treeShaking: true,
+    write: false,
+  });
+  const entry = result.outputFiles.find((file) =>
+    file.path.replaceAll("\\", "/").endsWith("/chunks/rsc-entry.js"),
+  );
+  if (!entry) throw new Error("The RSC runtime did not produce an entry.");
+
+  return {
+    chunks: Object.fromEntries(
+      result.outputFiles
+        .filter((file) => file.path.endsWith(".js"))
+        .map((file) => [relativeOutputName(file.path), file.text]),
+    ),
+    code: entry.text,
+  };
+}
+
 function relativeOutputName(filePath: string) {
   const normalized = filePath.replaceAll("\\", "/");
   const outMarker = "/out/";
@@ -1132,6 +1340,7 @@ async function buildSsrClientBundle({
   styleAssetBase,
   routeIds,
   routeSplits,
+  rscClientReferences,
 }: {
   chunkAssetBase: string;
   files: WorkspaceFileMap;
@@ -1141,6 +1350,7 @@ async function buildSsrClientBundle({
   styleAssetBase: string;
   routeIds: Record<string, string>;
   routeSplits: WorkspaceFileMap;
+  rscClientReferences: Record<string, string>;
 }) {
   const routerModule = findWorkspaceFile(files, "src/router");
   if (!routerModule)
@@ -1172,6 +1382,21 @@ ${
 
 globalThis.${kernelManifest.client.routerKey} = getRouter;
 globalThis.${kernelManifest.client.startInstanceKey} = startInstance;
+const rscClientReferences = {
+${Object.entries(rscClientReferences)
+  .map(
+    ([reference, filePath]) =>
+      `  ${JSON.stringify(reference)}: () => import(${JSON.stringify(
+        `./${filePath}`,
+      )}),`,
+  )
+  .join("\n")}
+};
+globalThis.${kernelManifest.client.rscLoaderKey} = async function loadRscClientReference(id) {
+  const load = rscClientReferences[id];
+  if (!load) throw new Error('Unknown RSC client reference: ' + id);
+  return load();
+};
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const createRouteFetch = ${createTanstackStartRouteFetch.toString()};
@@ -1307,6 +1532,8 @@ async function compilePreview(
     const transform = await transformStartServerFunctions(originalFileMap, {
       root,
     });
+    const rscClientReferences =
+      await collectRscClientReferences(originalFileMap);
     const transformed = transform.clientFiles;
     const transformedWithRouteSplits = new Map(transformed);
     for (const [splitId, splitCode] of transform.clientRouteSplits) {
@@ -1361,6 +1588,7 @@ async function compilePreview(
       root,
       routeIds: transform.clientRouteIds,
       routeSplits: transform.clientRouteSplits,
+      rscClientReferences,
       serverRouteBase,
       serverFnBase,
       styleAssetBase,
@@ -1372,8 +1600,18 @@ async function compilePreview(
       root,
       transform,
     });
-    const serverBundle = serverBuild.code;
-    const serverChunks = serverBuild.chunks;
+    const rscBuild = await buildRscServerBundle({
+      clientReferences: rscClientReferences,
+      files: transform.serverFiles,
+      root,
+    });
+    const serverBundle = rscBuild.code
+      ? `import ${JSON.stringify("./chunks/rsc-entry.js")};\n${serverBuild.code}`
+      : serverBuild.code;
+    const serverChunks = {
+      ...serverBuild.chunks,
+      ...rscBuild.chunks,
+    };
     const durationMs = Date.now() - startedAt;
     const buildMetrics = {
       clientFrameworkInputs: 0,
@@ -1397,7 +1635,8 @@ async function compilePreview(
           0,
         ),
       sharedClientKernelBytes: kernelManifest.client.bytes,
-      sharedServerKernelBytes: kernelManifest.server.bytes,
+      sharedServerKernelBytes:
+        kernelManifest.server.bytes + kernelManifest.rsc.bytes,
     };
 
     return {
@@ -1413,7 +1652,7 @@ async function compilePreview(
       diagnostics: [
         createDiagnostic(
           "info",
-          `TanStack Start core preview compiled ${Object.keys(serverFnsById).length} server function(s) in ${durationMs}ms. Revision bundles: ${buildMetrics.clientRevisionBytes} client bytes and ${buildMetrics.serverRevisionBytes} server bytes; shared kernel ${kernelManifest.id}.`,
+          `TanStack Start core preview compiled ${Object.keys(serverFnsById).length} server function(s) and ${rscBuild.code ? 1 : 0} RSC entry in ${durationMs}ms. Revision bundles: ${buildMetrics.clientRevisionBytes} client bytes and ${buildMetrics.serverRevisionBytes} server bytes; shared kernel ${kernelManifest.id}.`,
         ),
       ],
       durationMs,
@@ -1438,7 +1677,8 @@ async function compilePreview(
         serverFrameworkInputs: 0,
         serverRevisionBytes: 0,
         sharedClientKernelBytes: kernelManifest.client.bytes,
-        sharedServerKernelBytes: kernelManifest.server.bytes,
+        sharedServerKernelBytes:
+          kernelManifest.server.bytes + kernelManifest.rsc.bytes,
       },
       success: false,
       html: buildFailurePreview(diagnostics),

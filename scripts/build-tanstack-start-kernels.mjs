@@ -4,6 +4,11 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { parseAstAsync } from "rolldown/parseAst";
+import {
+  hasDirective,
+  transformDirectiveProxyExport,
+} from "@vitejs/plugin-rsc/transforms";
 
 const require = createRequire(import.meta.url);
 const {
@@ -14,10 +19,12 @@ const outputRoot = path.resolve("lib/serverless-tanstack-start");
 const manifestPath = path.join(outputRoot, "kernel-manifest.generated.json");
 const clientKernelPath = path.join(outputRoot, "client-kernel.generated.js");
 const serverKernelPath = path.join(outputRoot, "server-kernel.generated.mjs");
+const rscKernelPath = path.join(outputRoot, "rsc-kernel.generated.mjs");
 const clientGlobalKey = "__TUTO_TANSTACK_START_CLIENT_KERNEL__";
 const clientServerFnBaseKey = "__TUTO_TANSTACK_START_SERVER_FN_BASE__";
 const clientRouterKey = "__TUTO_TANSTACK_START_CLIENT_ROUTER_FACTORY__";
 const clientStartInstanceKey = "__TUTO_TANSTACK_START_CLIENT_INSTANCE__";
+const clientRscLoaderKey = "__TUTO_TANSTACK_START_RSC_CLIENT_LOADER__";
 const serverGlobalKey = "__TUTO_TANSTACK_START_SERVER_KERNEL__";
 const serverHandlerKey = "__TUTO_TANSTACK_START_NATIVE_HANDLER__";
 const serverResolverKey = "__TUTO_TANSTACK_START_SERVER_FN_RESOLVER__";
@@ -25,11 +32,15 @@ const serverStartInstanceKey = "__TUTO_TANSTACK_START_INSTANCE__";
 const serverRouterKey = "__TUTO_TANSTACK_START_ROUTER_FACTORY__";
 const serverManifestKey = "__TUTO_TANSTACK_START_MANIFEST__";
 const serverFnInternalBase = "/__tuto_server_fn/";
+const rscGlobalKey = "__TUTO_TANSTACK_START_RSC_KERNEL__";
+const rscHandlerKey = "__TUTO_TANSTACK_START_RSC_HANDLER__";
+const rscInternalPath = "/__tuto_rsc";
 
 const clientModules = [
   "@tanstack/react-start",
   "@tanstack/react-start/client",
   "@tanstack/react-start/client-rpc",
+  "@tanstack/react-start/rsc",
   "@tanstack/react-router",
   "react",
   "react/jsx-runtime",
@@ -37,9 +48,17 @@ const clientModules = [
   "react-dom",
   "react-dom/client",
 ];
+const rscModules = [
+  "@tanstack/react-start/rsc",
+  "@vitejs/plugin-rsc/react/rsc",
+  "react",
+  "react/jsx-runtime",
+  "react/jsx-dev-runtime",
+];
 const serverModules = [
   "@tanstack/react-router",
   "@tanstack/react-start",
+  "@tanstack/react-start/rsc",
   "@tanstack/react-start/server",
   "@tanstack/react-start/server-rpc",
   "react",
@@ -94,7 +113,9 @@ function createStartEnvironmentPlugin(env) {
       buildApi.onLoad(
         {
           filter:
-            /node_modules[\\/]@tanstack[\\/](?:start-client-core|start-fn-stubs|start-storage-context)[\\/].*\.js$/,
+            env === "server"
+              ? /node_modules[\\/]@tanstack[\\/](?:react-start-rsc|start-client-core|start-fn-stubs|start-storage-context)[\\/].*\.js$/
+              : /node_modules[\\/]@tanstack[\\/](?:start-client-core|start-fn-stubs|start-storage-context)[\\/].*\.js$/,
         },
         async (args) => {
           const code = await readFile(args.path, "utf8");
@@ -139,6 +160,15 @@ function createClientEntriesPlugin() {
         (args) => ({
           path: args.path,
           namespace: "tuto-client-kernel-entry",
+        }),
+      );
+      buildApi.onResolve(
+        {
+          filter: /^virtual:tanstack-rsc-(?:browser-decode|ssr-decode|hmr)$/,
+        },
+        (args) => ({
+          path: args.path,
+          namespace: "tuto-client-rsc-runtime",
         }),
       );
       buildApi.onLoad(
@@ -187,6 +217,144 @@ export const startInstance = {
           };
         },
       );
+      buildApi.onLoad(
+        { filter: /.*/, namespace: "tuto-client-rsc-runtime" },
+        (args) => {
+          if (args.path === "virtual:tanstack-rsc-hmr") {
+            return {
+              contents: "export function setupRscHmr() {}",
+              loader: "js",
+            };
+          }
+          return {
+            contents: `
+import {
+  createFromFetch,
+  createFromReadableStream,
+  setRequireModule,
+} from '@vitejs/plugin-rsc/react/browser';
+
+setRequireModule({
+  load(id) {
+    const load = globalThis.${clientRscLoaderKey};
+    if (typeof load !== 'function') {
+      throw new Error('The RSC client-reference loader is not registered.');
+    }
+    return load(id);
+  },
+});
+
+export { createFromFetch, createFromReadableStream };
+`,
+            loader: "js",
+            resolveDir: process.cwd(),
+          };
+        },
+      );
+    },
+  };
+}
+
+function createRscEntriesPlugin() {
+  return {
+    name: "tuto-start-rsc-kernel-entries",
+    setup(buildApi) {
+      buildApi.onResolve(
+        { filter: /^virtual:tanstack-rsc-runtime$/ },
+        () => ({
+          path: "virtual:tanstack-rsc-runtime",
+          namespace: "tuto-rsc-runtime",
+        }),
+      );
+      buildApi.onResolve(
+        { filter: /^virtual:tanstack-rsc-(?:browser|ssr)-decode$/ },
+        (args) => ({
+          path: args.path,
+          namespace: "tuto-rsc-decode-runtime",
+        }),
+      );
+      buildApi.onLoad(
+        { filter: /.*/, namespace: "tuto-rsc-runtime" },
+        () => ({
+          contents:
+            "export { renderToReadableStream } from '@vitejs/plugin-rsc/react/rsc';",
+          loader: "js",
+          resolveDir: process.cwd(),
+        }),
+      );
+      buildApi.onLoad(
+        { filter: /.*/, namespace: "tuto-rsc-decode-runtime" },
+        () => ({
+          contents:
+            "export { createFromReadableStream } from '@vitejs/plugin-rsc/react/rsc'; export function createFromFetch() { throw new Error('createFromFetch is unavailable in the RSC environment.'); }",
+          loader: "js",
+          resolveDir: process.cwd(),
+        }),
+      );
+    },
+  };
+}
+
+function createRscDirectivePlugin() {
+  return {
+    name: "tuto-start-rsc-use-client",
+    setup(buildApi) {
+      buildApi.onLoad(
+        {
+          filter:
+            /node_modules[\\/]@tanstack[\\/]react-start-rsc[\\/].*\.js$/,
+        },
+        async (args) => {
+          const source = await readFile(args.path, "utf8");
+          if (!source.includes("use client")) return null;
+          const ast = await parseAstAsync(source);
+          if (!hasDirective(ast.body, "use client")) return null;
+          const reference = `tanstack-rsc-${createHash("sha256")
+            .update(args.path)
+            .digest("hex")
+            .slice(0, 20)}`;
+          const transformed = transformDirectiveProxyExport(ast, {
+            code: source,
+            directive: "use client",
+            keep: false,
+            runtime: (name) =>
+              `$$registerClientReference(() => { throw new Error('TanStack RSC client reference cannot execute in the RSC environment.'); }, ${JSON.stringify(
+                reference,
+              )}, ${JSON.stringify(name)})`,
+          });
+          if (!transformed) return null;
+          return {
+            contents: `import { registerClientReference as $$registerClientReference } from '@vitejs/plugin-rsc/react/rsc';\n${transformed.output.toString()}`,
+            loader: "js",
+            resolveDir: path.dirname(args.path),
+          };
+        },
+      );
+    },
+  };
+}
+
+function createRscWebpackRuntimePlugin() {
+  return {
+    name: "tuto-start-rsc-webpack-runtime",
+    setup(buildApi) {
+      buildApi.onLoad(
+        {
+          filter:
+            /node_modules[\\/]@vitejs[\\/]plugin-rsc[\\/]dist[\\/]vendor[\\/]react-server-dom[\\/].*\.js$/,
+        },
+        async (args) => {
+          const source = await readFile(args.path, "utf8");
+          if (!source.includes("__webpack_require__")) return null;
+          return {
+            contents: source
+              .replaceAll("__webpack_require__.u", "({}).u")
+              .replaceAll("__webpack_require__", "__vite_rsc_require__"),
+            loader: "js",
+            resolveDir: path.dirname(args.path),
+          };
+        },
+      );
     },
   };
 }
@@ -209,6 +377,13 @@ function createServerEntriesPlugin() {
         path: "tanstack-start-manifest:v",
         namespace: "tuto-server-kernel-entry",
       }));
+      buildApi.onResolve(
+        { filter: /^virtual:tanstack-rsc-(?:browser|ssr)-decode$/ },
+        (args) => ({
+          path: args.path,
+          namespace: "tuto-server-rsc-decode",
+        }),
+      );
       buildApi.onLoad(
         { filter: /.*/, namespace: "tuto-server-kernel-entry" },
         (args) => {
@@ -265,6 +440,25 @@ export const startInstance = {
             resolveDir: process.cwd(),
           };
         },
+      );
+      buildApi.onLoad(
+        { filter: /.*/, namespace: "tuto-server-rsc-decode" },
+        () => ({
+          contents: `
+import { createFromReadableStream, setRequireModule } from '@vitejs/plugin-rsc/react/ssr';
+setRequireModule({
+  load(id) {
+    throw new Error('RSC client reference ' + id + ' is unavailable during Start SSR.');
+  },
+});
+export { createFromReadableStream };
+export function createFromFetch() {
+  throw new Error('createFromFetch is unavailable during Start SSR.');
+}
+`,
+          loader: "js",
+          resolveDir: process.cwd(),
+        }),
       );
     },
   };
@@ -334,6 +528,9 @@ export async function buildTanstackStartKernels() {
   const packages = {
     "@tanstack/react-router": packageVersion("@tanstack/react-router"),
     "@tanstack/react-start": packageVersion("@tanstack/react-start"),
+    "@tanstack/react-start-rsc": packageVersion(
+      "@tanstack/react-start-rsc",
+    ),
     "@tanstack/start-plugin-core": packageVersion(
       "@tanstack/start-plugin-core",
     ),
@@ -342,10 +539,13 @@ export async function buildTanstackStartKernels() {
     ),
     react: packageVersion("react"),
     "react-dom": packageVersion("react-dom"),
+    "@vitejs/plugin-rsc": packageVersion("@vitejs/plugin-rsc"),
   };
   const id = createHash("sha256")
     .update(await readFile(fileURLToPath(import.meta.url)))
-    .update(JSON.stringify({ clientModules, packages, serverModules }))
+    .update(
+      JSON.stringify({ clientModules, packages, rscModules, serverModules }),
+    )
     .digest("hex")
     .slice(0, 20);
   const [clientExports, serverExports] = await Promise.all([
@@ -368,8 +568,24 @@ globalThis.${serverGlobalKey} = Object.freeze({
 const startHandler = createStartHandler(defaultStreamHandler);
 globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
   startHandler(request, requestOptions);`;
+  const rscEntry = `
+import { renderToReadableStream } from '@tanstack/react-start/rsc';
+import * as rscRuntime from '@vitejs/plugin-rsc/react/rsc';
+import * as rscReact from 'react';
+import * as rscJsxRuntime from 'react/jsx-runtime';
+import * as rscJsxDevRuntime from 'react/jsx-dev-runtime';
+globalThis.${rscGlobalKey} = Object.freeze({
+  id: ${JSON.stringify(id)},
+  modules: Object.freeze({
+    '@tanstack/react-start/rsc': Object.freeze({ renderToReadableStream }),
+    '@vitejs/plugin-rsc/react/rsc': rscRuntime,
+    'react': rscReact,
+    'react/jsx-runtime': rscJsxRuntime,
+    'react/jsx-dev-runtime': rscJsxDevRuntime,
+  }),
+});`;
 
-  const [clientBuild, serverBuild] = await Promise.all([
+  const [clientBuild, rscBuild, serverBuild] = await Promise.all([
     build({
       absWorkingDir: process.cwd(),
       bundle: true,
@@ -388,6 +604,7 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
       platform: "browser",
       plugins: [
         createClientEntriesPlugin(),
+        createRscWebpackRuntimePlugin(),
         createStartEnvironmentPlugin("client"),
       ],
       stdin: {
@@ -397,6 +614,36 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
         sourcefile: "tuto-tanstack-start-client-kernel.js",
       },
       target: ["es2022"],
+      write: false,
+    }),
+    build({
+      absWorkingDir: process.cwd(),
+      bundle: true,
+      charset: "utf8",
+      conditions: ["react-server", "module", "import", "default"],
+      define: {
+        "import.meta.env.DEV": "false",
+        "import.meta.env.__vite_rsc_build__": "true",
+        "process.env.NODE_ENV": '"production"',
+      },
+      format: "esm",
+      legalComments: "none",
+      logLevel: "silent",
+      minify: true,
+      outfile: rscKernelPath,
+      platform: "node",
+      plugins: [
+        createRscEntriesPlugin(),
+        createRscDirectivePlugin(),
+        createRscWebpackRuntimePlugin(),
+      ],
+      stdin: {
+        contents: rscEntry,
+        loader: "js",
+        resolveDir: process.cwd(),
+        sourcefile: "tuto-tanstack-start-rsc-kernel.js",
+      },
+      target: ["node22"],
       write: false,
     }),
     build({
@@ -419,6 +666,7 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
       plugins: [
         createServerResolverPlugin(),
         createServerEntriesPlugin(),
+        createRscWebpackRuntimePlugin(),
         createStartEnvironmentPlugin("server"),
       ],
       stdin: {
@@ -432,7 +680,19 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
     }),
   ]);
   const clientCode = clientBuild.outputFiles[0].text;
+  const rscCode = rscBuild.outputFiles[0].text;
   const serverCode = serverBuild.outputFiles[0].text;
+  await import(
+    `data:text/javascript;base64,${Buffer.from(rscCode).toString("base64")}#${id}`
+  );
+  const rscKernel = globalThis[rscGlobalKey];
+  const rscExports = Object.fromEntries(
+    rscModules.map((specifier) => [
+      specifier,
+      Object.keys(rscKernel.modules[specifier]).sort(),
+    ]),
+  );
+  delete globalThis[rscGlobalKey];
   if (clientCode.includes("process.env.")) {
     throw new Error(
       "The TanStack Start client kernel contains an unresolved process.env reference.",
@@ -445,6 +705,7 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
       exports: clientExports,
       file: path.basename(clientKernelPath),
       globalKey: clientGlobalKey,
+      rscLoaderKey: clientRscLoaderKey,
       modules: clientModules,
       routerKey: clientRouterKey,
       serverFnBaseKey: clientServerFnBaseKey,
@@ -452,6 +713,15 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
       url: `/api/serverless/tanstack-start/kernel/client?v=${id}`,
     },
     packages,
+    rsc: {
+      bytes: Buffer.byteLength(rscCode),
+      exports: rscExports,
+      file: path.basename(rscKernelPath),
+      globalKey: rscGlobalKey,
+      handlerKey: rscHandlerKey,
+      internalPath: rscInternalPath,
+      modules: rscModules,
+    },
     server: {
       bytes: Buffer.byteLength(serverCode),
       exports: serverExports,
@@ -469,6 +739,7 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
 
   await Promise.all([
     writeFile(clientKernelPath, clientCode, "utf8"),
+    writeFile(rscKernelPath, rscCode, "utf8"),
     writeFile(serverKernelPath, serverCode, "utf8"),
     writeFile(
       `${manifestPath}`,
@@ -483,6 +754,6 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const manifest = await buildTanstackStartKernels();
   process.stdout.write(
-    `Built TanStack Start kernel ${manifest.id} (${manifest.client.bytes} client bytes, ${manifest.server.bytes} server bytes).\n`,
+    `Built TanStack Start kernel ${manifest.id} (${manifest.client.bytes} client bytes, ${manifest.server.bytes} server bytes, ${manifest.rsc.bytes} RSC bytes).\n`,
   );
 }

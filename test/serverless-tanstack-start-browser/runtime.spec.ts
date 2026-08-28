@@ -13,8 +13,9 @@ const files: WorkspaceFile[] = [
     path: "src/main.ts",
   },
   {
-    content: `import { useState } from 'react';
+    content: `import { Suspense, useState } from 'react';
 import { createMiddleware, createServerFn } from '@tanstack/react-start';
+import { createFromFetch } from '@tanstack/react-start/rsc';
 import { Link, createFileRoute } from '@tanstack/react-router';
 
 const addContext = createMiddleware({ type: 'function' }).server(({ next }) =>
@@ -36,6 +37,7 @@ function HomeRoute() {
   const [serverResult, setServerResult] = useState('idle');
   const [requestResult, setRequestResult] = useState('idle');
   const [redirectResult, setRedirectResult] = useState('idle');
+  const [rscTree, setRscTree] = useState(null);
 
   return (
     <main>
@@ -75,12 +77,58 @@ function HomeRoute() {
         Follow route redirect
       </button>
       <output data-testid="redirect-result">{redirectResult}</output>
+      <button
+        data-testid="rsc-load"
+        onClick={async () => {
+          const tree = await createFromFetch(fetch('/__tuto_rsc'));
+          setRscTree(tree);
+        }}
+      >
+        Load server component
+      </button>
+      <Suspense fallback={<p data-testid="rsc-loading">Loading RSC</p>}>
+        <section data-testid="rsc-result">{rscTree}</section>
+      </Suspense>
       <Link data-testid="about-link" to="/about">Open lazy route</Link>
     </main>
   );
 }`,
     language: "tsx",
     path: "src/routes/index.tsx",
+  },
+  {
+    content: `'use client';
+import { useState } from 'react';
+
+export function RscCounter({ initial, message }) {
+  const [count, setCount] = useState(initial);
+  return (
+    <div>
+      <p data-testid="rsc-message">{message}</p>
+      <button data-testid="rsc-counter" onClick={() => setCount((value) => value + 1)}>
+        RSC count: {count}
+      </button>
+    </div>
+  );
+}`,
+    language: "tsx",
+    path: "src/rsc-counter.tsx",
+  },
+  {
+    content: `import { RscCounter } from './rsc-counter';
+
+export default async function RscRoot({ requestUrl }) {
+  await Promise.resolve();
+  const pathname = new URL(requestUrl).pathname;
+  return (
+    <article data-testid="rsc-root">
+      <h2>Flight rendered on the server</h2>
+      <RscCounter initial={2} message={'server-only-rsc:' + pathname} />
+    </article>
+  );
+}`,
+    language: "tsx",
+    path: "src/rsc.tsx",
   },
   {
     content: `import './about.css';
@@ -209,11 +257,18 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   const renderPath = await compilePreview(request);
   const routeChunks = new Set<string>();
   const routeStyles = new Set<string>();
+  const flightResponses: Array<{ contentType: string | null; status: number }> = [];
 
   page.on("response", (response) => {
     const url = response.url();
     if (url.includes("/core-asset") && url.includes("kind=chunk")) routeChunks.add(url);
     if (url.includes("/core-asset") && url.includes("kind=style") && url.includes("name=")) routeStyles.add(url);
+    if (url.includes("/core-route") && url.includes("__tuto_rsc")) {
+      flightResponses.push({
+        contentType: response.headers()["content-type"] ?? null,
+        status: response.status(),
+      });
+    }
   });
 
   const renderResponse = await page.goto(new URL(renderPath, baseURL).href);
@@ -247,6 +302,20 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
 
   await page.getByTestId("redirect-fetch").click();
   await expect(page.getByTestId("redirect-result")).toContainText('"landed":true');
+
+  const chunksBeforeRsc = new Set(routeChunks);
+  await page.getByTestId("rsc-load").click();
+  await expect(page.getByTestId("rsc-root")).toBeVisible();
+  await expect(page.getByTestId("rsc-message")).toHaveText(
+    "server-only-rsc:/__tuto_rsc",
+  );
+  await expect(page.getByTestId("rsc-counter")).toHaveText("RSC count: 2");
+  await page.getByTestId("rsc-counter").click();
+  await expect(page.getByTestId("rsc-counter")).toHaveText("RSC count: 3");
+  expect(flightResponses).toEqual([
+    expect.objectContaining({ contentType: expect.stringContaining("text/x-component"), status: 200 }),
+  ]);
+  expect([...routeChunks].some((url) => !chunksBeforeRsc.has(url))).toBe(true);
 
   const chunksBeforeNavigation = new Set(routeChunks);
   expect(routeStyles.size).toBe(0);

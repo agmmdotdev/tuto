@@ -53,6 +53,7 @@ const runtimePaths = [
   ...runnerPaths,
   "lib/serverless-tanstack-start/client-kernel.generated.js",
   "lib/serverless-tanstack-start/server-kernel.generated.mjs",
+  "lib/serverless-tanstack-start/rsc-kernel.generated.mjs",
   "lib/serverless-tanstack-start/kernel-manifest.generated.json",
   "lib/serverless-tanstack-start/native-rpc-protocol.ts",
   "lib/serverless-tanstack-start/native-rpc-worker-pool.ts",

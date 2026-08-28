@@ -16,6 +16,7 @@ type NativeHandler = (
 ) => Promise<Response>;
 
 const handlerKey = "__TUTO_TANSTACK_START_NATIVE_HANDLER__";
+const rscHandlerKey = "__TUTO_TANSTACK_START_RSC_HANDLER__";
 const activeStreams = new Map<
   string,
   {
@@ -47,6 +48,12 @@ async function cleanup() {
   shuttingDown = true;
   delete (globalThis as typeof globalThis & Record<string, unknown>)[
     handlerKey
+  ];
+  delete (globalThis as typeof globalThis & Record<string, unknown>)[
+    rscHandlerKey
+  ];
+  delete (globalThis as typeof globalThis & Record<string, unknown>)[
+    kernelManifest.rsc.globalKey
   ];
   delete (globalThis as typeof globalThis & Record<string, unknown>)[
     kernelManifest.server.globalKey
@@ -104,16 +111,37 @@ async function initialize(
     "serverless-tanstack-start",
     kernelManifest.server.file,
   );
+  const rscKernelPath = path.resolve(
+    process.cwd(),
+    "lib",
+    "serverless-tanstack-start",
+    kernelManifest.rsc.file,
+  );
   await import(pathToFileURL(kernelPath).href);
+  await import(pathToFileURL(rscKernelPath).href);
   await import(pathToFileURL(runtimeEntryPath).href);
-  handler = (globalThis as typeof globalThis & Record<string, unknown>)[
+  const startHandler = (
+    globalThis as typeof globalThis & Record<string, unknown>
+  )[
     handlerKey
   ] as NativeHandler | undefined;
-  if (typeof handler !== "function") {
+  if (typeof startHandler !== "function") {
     throw new Error(
       "The compiled artifact did not register a Start request handler.",
     );
   }
+  handler = (request, options) => {
+    const rscHandler = (
+      globalThis as typeof globalThis & Record<string, unknown>
+    )[rscHandlerKey] as NativeHandler | undefined;
+    if (
+      new URL(request.url).pathname === kernelManifest.rsc.internalPath &&
+      typeof rscHandler === "function"
+    ) {
+      return rscHandler(request, options);
+    }
+    return startHandler(request, options);
+  };
 
   send({ pid: process.pid, revision, type: "ready" });
 }

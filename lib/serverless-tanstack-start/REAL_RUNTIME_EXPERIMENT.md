@@ -164,9 +164,27 @@ redirect hops; external redirects remain external. The official TanStack Router
 compiler removes `server`, `headers`, and `ssr` route options from the client
 revision, preventing server-handler code from leaking into the browser bundle.
 
-This remains a checkpoint rather than the complete production host. Route and
-server-function ESM chunks plus route-scoped CSS are covered in Firefox, but RSC
-and an operating-system isolation boundary remain outside this tier.
+### RSC Flight checkpoint
+
+An optional `src/rsc.tsx` default export now runs in a separate revision RSC
+artifact compiled with the `react-server` condition. The artifact imports the
+public `renderToReadableStream` API from `@tanstack/react-start/rsc`; the shared
+RSC kernel supplies TanStack's official Flight runtime. Top-level `"use client"`
+workspace modules are transformed with the official
+`@vitejs/plugin-rsc/transforms` client-reference transform, and matching browser
+modules are emitted as lazy revision chunks.
+
+The reserved `/__tuto_rsc` path streams `text/x-component` through the existing
+capability-checked route gateway and revision-pinned worker. Browser code can
+decode it with `createFromFetch` from `@tanstack/react-start/rsc`. The Firefox
+fixture proves an async server component, a lazy client-reference chunk, and
+interactive state after the boundary loads.
+
+This is the first real Flight slice, not complete TanStack Start RSC parity. It
+does not yet pre-decode RSC into the initial SSR document, register the RSC
+serialization adapters for loaders/server-function results, implement RSC
+server actions, or collect RSC CSS dependencies. Those are separate follow-up
+layers. An operating-system isolation boundary also remains outside this tier.
 
 ### Cross-instance artifact storage
 
@@ -259,22 +277,23 @@ they no longer traverse or emit those framework graphs.
 Run `yarn measure:tanstack-start-kernels` to rebuild and measure the boundary. A
 local two-edit measurement produced these uncompressed minified sizes:
 
-- shared client kernel: 337,697 bytes
-- shared server kernel: 459,186 bytes
+- shared client kernel: 366,167 bytes
+- shared SSR server kernel: 489,690 bytes
+- shared RSC kernel: 91,592 bytes
 - first client/server revision: 3,027 / 3,887 bytes
 - edited client/server revision: 3,025 / 3,887 bytes
 - measured compile durations: 205 ms and 216 ms
 
 Those timings are local diagnostics, not a production latency claim. The
-important result is structural: each non-router edit emitted about 6.9 KiB
-instead of rebundling roughly 797 KiB of shared framework code. The larger shared
-server kernel now contains Start's public request host, React SSR graph, Router,
-and its H3 request/session graph.
+important result is structural: revision edits do not rebundle the shared
+framework kernels. The shared server graph contains Start's public request host,
+React SSR graph, Router, and its H3 request/session graph; Flight rendering is
+isolated in the RSC kernel.
 
 ## Remaining architecture work
 
-1. add the full-runtime features that are still outside this checkpoint, such
-   as React Server Components.
+1. extend the RSC checkpoint with initial-document SSR decoding, Start's RSC
+   serialization adapters, server actions, and CSS dependency collection.
 2. move execution and the shared runtime directory behind a hardened sandbox
    such as an isolated container or
    microVM before treating arbitrary untrusted student code as safe for a
@@ -289,6 +308,7 @@ the official React Start package exports.
 
 This checkpoint claims router SSR, hydration, streamed document responses,
 matched-route client component chunks, route/server-function ESM chunks,
-route-scoped CSS loading during browser navigation, and the covered server-route
-HTTP path. It does not yet claim RSC support or an operating-system security
+route-scoped CSS loading during browser navigation, the covered server-route
+HTTP path, and the documented opt-in Flight/client-boundary slice. It does not
+yet claim complete TanStack Start RSC parity or an operating-system security
 boundary. Those remain work for the full-runtime tier.
