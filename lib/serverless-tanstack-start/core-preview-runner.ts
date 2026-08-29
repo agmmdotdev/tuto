@@ -81,6 +81,10 @@ type RouteManifestEntry = {
   css?: string[];
   preloads: string[];
 };
+type RscClientReferenceDeps = {
+  css: string[];
+  js: string[];
+};
 type ServerlessPreviewResult = {
   buildMetrics: {
     clientFrameworkInputs: number;
@@ -1019,6 +1023,7 @@ function normalizeBuildError(error: unknown): BuildDiagnostic[] {
 async function buildNativeServerBundle({
   clientAssetUrl,
   cssAssetUrl,
+  rscClientReferenceDeps,
   rscClientReferences,
   routeManifest,
   root,
@@ -1026,6 +1031,7 @@ async function buildNativeServerBundle({
 }: {
   clientAssetUrl: string;
   cssAssetUrl?: string;
+  rscClientReferenceDeps: Record<string, RscClientReferenceDeps>;
   rscClientReferences: Record<string, string>;
   routeManifest: Record<string, RouteManifestEntry>;
   root: string;
@@ -1081,17 +1087,25 @@ ${Object.entries(rscClientReferences)
   )
   .join("\n")}
 };
+const rscSsrReferenceDeps = ${JSON.stringify(rscClientReferenceDeps)};
 const frameworkRscSsrReferences = ${JSON.stringify(
     kernelManifest.rsc.clientReferences,
   )};
 globalThis.${kernelManifest.server.rscLoaderKey} = async function loadRscSsrClientReference(id) {
   const load = rscSsrReferences[id];
-  if (load) return load();
+  if (load) {
+    return {
+      deps: rscSsrReferenceDeps[id] ?? { css: [], js: [] },
+      module: await load(),
+    };
+  }
   const moduleKey = frameworkRscSsrReferences[id];
   const frameworkModule = moduleKey
     ? globalThis.${kernelManifest.server.globalKey}?.modules?.[moduleKey]
     : undefined;
-  if (frameworkModule) return frameworkModule;
+  if (frameworkModule) {
+    return { deps: { css: [], js: [] }, module: frameworkModule };
+  }
   throw new Error('Unknown RSC SSR client reference: ' + id);
 };
 if (typeof globalThis.${kernelManifest.server.resolverKey} !== 'function') {
@@ -1396,20 +1410,15 @@ if (typeof document !== "undefined") {
 `;
 }
 
-function buildClientRouteManifest({
+function createClientOutputPreloadCollector({
   chunks,
   chunkAssetBase,
-  styleAssetBase,
   metafile,
-  routeIds,
 }: {
   chunks: Record<string, string>;
   chunkAssetBase: string;
-  styleAssetBase: string;
   metafile: NonNullable<Awaited<ReturnType<typeof build>>["metafile"]>;
-  routeIds: Record<string, string>;
 }) {
-  const manifest: Record<string, RouteManifestEntry> = {};
   const outputByName = new Map(
     Object.entries(metafile.outputs).map(([outputPath, output]) => [
       relativeOutputName(outputPath),
@@ -1464,6 +1473,29 @@ function buildClientRouteManifest({
     ];
   }
 
+  return collectPreloads;
+}
+
+function buildClientRouteManifest({
+  chunks,
+  chunkAssetBase,
+  styleAssetBase,
+  metafile,
+  routeIds,
+}: {
+  chunks: Record<string, string>;
+  chunkAssetBase: string;
+  styleAssetBase: string;
+  metafile: NonNullable<Awaited<ReturnType<typeof build>>["metafile"]>;
+  routeIds: Record<string, string>;
+}) {
+  const manifest: Record<string, RouteManifestEntry> = {};
+  const collectPreloads = createClientOutputPreloadCollector({
+    chunks,
+    chunkAssetBase,
+    metafile,
+  });
+
   for (const [outputPath, output] of Object.entries(metafile.outputs)) {
     if (
       !outputPath.endsWith(".js") ||
@@ -1491,6 +1523,60 @@ function buildClientRouteManifest({
   }
 
   return manifest;
+}
+
+function buildRscClientReferenceDeps({
+  chunks,
+  chunkAssetBase,
+  clientReferences,
+  entryFiles,
+  metafile,
+  styleAssetBase,
+}: {
+  chunks: Record<string, string>;
+  chunkAssetBase: string;
+  clientReferences: Record<string, string>;
+  entryFiles: WorkspaceFileMap;
+  metafile: NonNullable<Awaited<ReturnType<typeof build>>["metafile"]>;
+  styleAssetBase: string;
+}) {
+  const deps: Record<string, RscClientReferenceDeps> = {};
+  const referenceByFile = new Map(
+    Object.entries(clientReferences).map(([reference, filePath]) => [
+      filePath,
+      reference,
+    ]),
+  );
+  const collectPreloads = createClientOutputPreloadCollector({
+    chunks,
+    chunkAssetBase,
+    metafile,
+  });
+
+  for (const [outputPath, output] of Object.entries(metafile.outputs)) {
+    if (!output.entryPoint || !outputPath.endsWith(".js")) continue;
+    const workspacePath = workspacePathFromMetafileInput(
+      output.entryPoint,
+      entryFiles,
+    );
+    const reference = workspacePath
+      ? referenceByFile.get(workspacePath)
+      : undefined;
+    if (!reference) continue;
+    deps[reference] = {
+      css: output.cssBundle
+        ? [
+            routeStyleUrl(
+              styleAssetBase,
+              relativeOutputName(output.cssBundle),
+            ),
+          ]
+        : [],
+      js: collectPreloads(relativeOutputName(outputPath)),
+    };
+  }
+
+  return deps;
 }
 
 function workspacePathFromMetafileInput(
@@ -1597,6 +1683,7 @@ async function buildSsrClientBundle({
       css: "",
       cssChunks: {},
       frameworkInputs: 0,
+      rscClientReferenceDeps: {},
       routeManifest: {},
     };
   const startModule = findWorkspaceFile(files, "src/start");
@@ -1733,12 +1820,21 @@ startTransition(() => {
     metafile: result.metafile,
     root,
   });
+  const rscClientReferenceDeps = buildRscClientReferenceDeps({
+    chunks,
+    chunkAssetBase,
+    clientReferences: rscClientReferences,
+    entryFiles,
+    metafile: result.metafile,
+    styleAssetBase,
+  });
   return {
     chunks,
     code: jsOutput.text,
     css,
     cssChunks,
     frameworkInputs: 0,
+    rscClientReferenceDeps,
     routeManifest: buildClientRouteManifest({
       chunks,
       chunkAssetBase,
@@ -1841,6 +1937,7 @@ async function compilePreview(
     const serverBuild = await buildNativeServerBundle({
       clientAssetUrl: `${assetBase}client`,
       ...(ssrClientBuild.css ? { cssAssetUrl: `${assetBase}style` } : {}),
+      rscClientReferenceDeps: ssrClientBuild.rscClientReferenceDeps,
       rscClientReferences,
       routeManifest: ssrClientBuild.routeManifest,
       root,

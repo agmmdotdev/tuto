@@ -190,13 +190,14 @@ export function InitialRsc() {
   },
   {
     content: `'use client';
+import './initial-rsc-counter.css';
 import { useState } from 'react';
 
 export function InitialRscCounter({ action, initial, message }) {
   const [count, setCount] = useState(initial);
   const [actionResult, setActionResult] = useState('idle');
   return (
-    <div>
+    <div className="initial-rsc-counter-boundary">
       <p data-testid="initial-rsc-message">{message}</p>
       <button
         data-testid="initial-rsc-counter"
@@ -216,6 +217,11 @@ export function InitialRscCounter({ action, initial, message }) {
 }`,
     language: "tsx",
     path: "src/initial-rsc-counter.tsx",
+  },
+  {
+    content: `.initial-rsc-counter-boundary { border-top: 3px solid rgb(98, 76, 54); }`,
+    language: "css",
+    path: "src/initial-rsc-counter.css",
   },
   {
     content: `'use client';
@@ -403,6 +409,8 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   expect(initialHtml).toContain('<article data-testid="composite-card">');
   expect(initialHtml).toContain('<button data-testid="composite-title-slot">');
   expect(initialHtml).toContain("Children supplied by the client route");
+  expect(initialHtml).toContain('rel="modulepreload"');
+  expect(initialHtml).toContain("kind=style");
   await expect(page.getByRole("heading", { name: "Browser runtime fixture" })).toBeVisible();
   await expect(page.getByTestId("initial-rsc-root")).toBeVisible();
   await expect(page.getByTestId("initial-rsc-message")).toHaveText(
@@ -411,6 +419,11 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   await expect(page.getByTestId("initial-rsc-counter")).toHaveText(
     "Initial RSC count: 5",
   );
+  await expect(page.getByTestId("initial-rsc-root").locator("div").first()).toHaveCSS(
+    "border-top-color",
+    "rgb(98, 76, 54)",
+  );
+  expect(routeStyles.size).toBeGreaterThan(0);
   await page.getByTestId("initial-rsc-counter").click();
   await expect(page.getByTestId("initial-rsc-counter")).toHaveText(
     "Initial RSC count: 6",
@@ -498,11 +511,13 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   expect([...routeChunks].some((url) => !chunksBeforeRsc.has(url))).toBe(true);
 
   const chunksBeforeNavigation = new Set(routeChunks);
-  expect(routeStyles.size).toBe(0);
+  const stylesBeforeNavigation = new Set(routeStyles);
   await page.getByTestId("about-link").click();
   await expect(page.getByTestId("about-route")).toHaveText("Lazy route loaded in the browser");
   await expect(page.getByTestId("about-route")).toHaveCSS("color", "rgb(12, 34, 56)");
   expect([...routeChunks].some((url) => !chunksBeforeNavigation.has(url))).toBe(true);
-  expect(routeStyles.size).toBeGreaterThan(0);
+  expect(
+    [...routeStyles].some((url) => !stylesBeforeNavigation.has(url)),
+  ).toBe(true);
   expect(browserErrors).toEqual([]);
 });

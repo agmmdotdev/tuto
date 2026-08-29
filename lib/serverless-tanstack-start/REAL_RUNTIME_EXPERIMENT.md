@@ -202,6 +202,16 @@ The Firefox fixture proves named and nested composite selections, a slot
 argument, a children slot, initial HTML output, hydration, and interactive
 client state.
 
+The revision client build now derives JavaScript and CSS dependencies for every
+workspace client reference from esbuild's output graph. The SSR decode bridge
+passes those real capability-checked asset URLs through TanStack's
+`setOnClientReference` hook. TanStack's public RSC serialization adapter keeps
+the dependencies on the decoded proxy, emits module/style preloads during
+document SSR, and serializes the same dependency metadata for hydration. The
+Firefox fixture imports a stylesheet from an initial RSC client boundary and
+proves that its chunk is preloaded, its CSS is present and applied in the first
+document, and later route CSS remains independently lazy.
+
 RSC server actions use the official `@vitejs/plugin-rsc` transforms and React
 transport. Module-level `"use server"` exports become `createServerReference`
 proxies in browser and SSR revisions while their implementations remain in
@@ -218,8 +228,9 @@ public request helpers such as `getRequestUrl`.
 This remains a checkpoint rather than complete TanStack Start RSC parity. The
 low-level endpoint plus loader-owned `renderServerComponent` and
 `createCompositeComponent` paths and RSC server actions are covered.
-Deployment-secret encryption for inline-action bound arguments,
-client-reference preload metadata, and RSC CSS dependency collection are not.
+Deployment-secret encryption for inline-action bound arguments and CSS imported
+only by pure RSC server modules are not covered. The latter
+still needs the official `import.meta.viteRsc.loadCss()` marker/resource path.
 An operating-system isolation boundary also remains outside this tier.
 
 ### Cross-instance artifact storage
@@ -314,11 +325,11 @@ Run `yarn measure:tanstack-start-kernels` to rebuild and measure the boundary. A
 local two-edit measurement produced these uncompressed minified sizes:
 
 - shared client kernel: 372,410 bytes
-- shared SSR server kernel: 497,554 bytes
+- shared SSR server kernel: 497,573 bytes
 - shared RSC kernel: 104,017 bytes
-- first client/server revision: 3,027 / 4,815 bytes
-- edited client/server revision: 3,025 / 4,815 bytes
-- measured compile durations: 317 ms and 340 ms
+- first client/server revision: 3,027 / 4,992 bytes
+- edited client/server revision: 3,025 / 4,992 bytes
+- measured compile durations: 329 ms and 314 ms
 
 Those timings are local diagnostics, not a production latency claim. The
 important result is structural: revision edits do not rebundle the shared
@@ -329,8 +340,8 @@ isolated in the RSC kernel.
 ## Remaining architecture work
 
 1. extend the RSC checkpoint with deployment-secret encryption for bound
-   server-action arguments, client-reference preload metadata, and CSS
-   dependency collection.
+   server-action arguments and resource markers for CSS imported only by pure
+   RSC server modules.
 2. move execution and the shared runtime directory behind a hardened sandbox
    such as an isolated container or
    microVM before treating arbitrary untrusted student code as safe for a
@@ -350,5 +361,5 @@ HTTP path, and the documented opt-in Flight/client-boundary slice. It does not
 yet claim complete TanStack Start RSC parity. The covered loader-owned
 `renderServerComponent` path now includes initial SSR and hydration; Composite
 Components now include nested selections, slots, initial SSR, and hydration.
-Bound-action encryption, RSC asset dependency collection, and an
-operating-system security boundary remain work for the full-runtime tier.
+Bound-action encryption, pure-server RSC CSS resource markers, and an operating-
+system security boundary remain work for the full-runtime tier.

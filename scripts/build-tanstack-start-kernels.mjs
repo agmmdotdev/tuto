@@ -540,8 +540,9 @@ setRequireModule({
     if (typeof load !== 'function') {
       throw new Error('The RSC SSR client-reference loader is not registered.');
     }
-    const module = await load(id);
-    const deps = { css: [], js: [] };
+    const reference = await load(id);
+    const module = reference.module;
+    const deps = reference.deps ?? { css: [], js: [] };
     onClientReference?.({ id, deps, runtime: 'tuto' });
     return new Proxy(module, {
       get(target, property, receiver) {
