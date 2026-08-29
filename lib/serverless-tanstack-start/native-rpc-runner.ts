@@ -137,8 +137,10 @@ async function initialize(
     const rscHandler = (
       globalThis as typeof globalThis & Record<string, unknown>
     )[rscHandlerKey] as NativeHandler | undefined;
+    const pathname = new URL(request.url).pathname;
     if (
-      new URL(request.url).pathname === kernelManifest.rsc.internalPath &&
+      (pathname === kernelManifest.rsc.internalPath ||
+        pathname === kernelManifest.rsc.actionInternalPath) &&
       typeof rscHandler === "function"
     ) {
       return rscHandler(request, options);

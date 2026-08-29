@@ -8,6 +8,7 @@ import { parseAstAsync } from "rolldown/parseAst";
 import {
   hasDirective,
   transformDirectiveProxyExport,
+  transformServerActionServer,
 } from "@vitejs/plugin-rsc/transforms";
 import type {
   Loader,
@@ -567,6 +568,87 @@ function rscReferenceKey(filePath: string) {
     .slice(0, 20)}`;
 }
 
+function rscServerActionReferenceKey(filePath: string, root: string) {
+  const workspaceModuleId = toWorkspaceModuleId(root, filePath).split("?")[0];
+  return `tuto-rsc-action-${createHash("sha256")
+    .update(workspaceModuleId)
+    .digest("hex")
+    .slice(0, 20)}`;
+}
+
+async function transformRscServerActionProxy(
+  source: string,
+  filePath: string,
+  root: string,
+  environment: "browser" | "ssr",
+) {
+  if (!source.includes("use server")) return source;
+  const ast = await parseAstAsync(source, { lang: "tsx" });
+  if (
+    !hasDirective(
+      ast.body as unknown as Parameters<typeof hasDirective>[0],
+      "use server",
+    )
+  )
+    return source;
+  const reference = rscServerActionReferenceKey(filePath, root);
+  const result = transformDirectiveProxyExport(
+    ast as unknown as Parameters<typeof transformDirectiveProxyExport>[0],
+    {
+      code: source,
+      directive: "use server",
+      rejectNonAsyncFunction: true,
+      runtime: (name) =>
+        `$$createServerReference(${JSON.stringify(
+          `${reference}#${name}`,
+        )}, $$callServer, undefined, undefined, ${JSON.stringify(name)})`,
+    },
+  );
+  if (!result) return source;
+  return `import { callServer as $$callServer, createServerReference as $$createServerReference } from '@vitejs/plugin-rsc/react/${environment}';\n${result.output.toString()}`;
+}
+
+type RscServerActionReference = {
+  exportNames: string[];
+  filePath: string;
+};
+
+async function transformRscServerActionModules(
+  files: WorkspaceFileMap,
+  root: string,
+) {
+  const references: Record<string, RscServerActionReference> = {};
+  await Promise.all(
+    [...files.entries()].map(async ([filePath, source]) => {
+      if (loaderForPath(filePath) === "css" || !source.includes("use server"))
+        return;
+      const ast = await parseAstAsync(source, { lang: "tsx" });
+      const reference = rscServerActionReferenceKey(filePath, root);
+      const result = transformServerActionServer(
+        source,
+        ast as unknown as Parameters<typeof transformServerActionServer>[1],
+        {
+          rejectNonAsyncFunction: true,
+          runtime: (value, name) =>
+            `$$registerServerReference(${value}, ${JSON.stringify(
+              reference,
+            )}, ${JSON.stringify(name)})`,
+        },
+      );
+      if (!result.output.hasChanged()) return;
+      const exportNames =
+        "names" in result ? result.names : result.exportNames;
+      if (exportNames.length === 0) return;
+      files.set(
+        filePath,
+        `import { registerServerReference as $$registerServerReference } from '@vitejs/plugin-rsc/react/rsc';\n${result.output.toString()}`,
+      );
+      references[reference] = { exportNames, filePath };
+    }),
+  );
+  return references;
+}
+
 async function isUseClientModule(source: string) {
   if (!source.includes("use client")) return false;
   const ast = await parseAstAsync(source, { lang: "tsx" });
@@ -741,13 +823,23 @@ function createServerWorkspacePlugin({
       );
       buildApi.onLoad(
         { filter: /.*/, namespace: "tuto-server-workspace" },
-        (args) => {
+        async (args) => {
           const loader = loaderForPath(args.path);
+          const source = files.get(args.path);
+          const contents =
+            loader === "css" || typeof source !== "string"
+              ? ""
+              : await transformRscServerActionProxy(
+                  source,
+                  args.path,
+                  root,
+                  "ssr",
+                );
           return {
             // Route modules commonly import their stylesheet. The browser SSR
             // entry compiles that stylesheet separately; the server only needs
             // the module graph and must not try to resolve CSS package imports.
-            contents: loader === "css" ? "" : files.get(args.path),
+            contents,
             loader,
             resolveDir: absoluteWorkingDirectory,
           };
@@ -783,7 +875,11 @@ function resolveWorkspaceModule(
   return null;
 }
 
-function createWorkspacePlugin(files: WorkspaceFileMap, root?: string): Plugin {
+function createWorkspacePlugin(
+  files: WorkspaceFileMap,
+  root?: string,
+  rscActionEnvironment?: "browser" | "ssr",
+): Plugin {
   return {
     name: "tuto-tanstack-start-core-preview-workspace",
     setup(buildApi: PluginBuild) {
@@ -798,11 +894,20 @@ function createWorkspacePlugin(files: WorkspaceFileMap, root?: string): Plugin {
           if (typeof contents !== "string") return null;
 
           const loader = loaderForPath(args.path);
+          const compiledContents =
+            loader !== "css" && root && rscActionEnvironment
+              ? await transformRscServerActionProxy(
+                  contents,
+                  args.path,
+                  root,
+                  rscActionEnvironment,
+                )
+              : contents;
           return {
             contents:
               loader === "css"
                 ? await compileTailwindCss(files, args.path, contents)
-                : contents,
+                : compiledContents,
             loader,
             resolveDir: absoluteWorkingDirectory,
           };
@@ -1058,6 +1163,10 @@ async function buildRscServerBundle({
 }) {
   const files = new Map(transform.serverFiles);
   const rscModule = findWorkspaceFile(files, "src/rsc");
+  const rscServerActionReferences = await transformRscServerActionModules(
+    files,
+    root,
+  );
   const entries: string[] = [];
   for (const [id, serverFn] of Object.entries(transform.serverFnsById)) {
     const splitModuleId = toWorkspaceModuleId(root, serverFn.extractedFilename);
@@ -1072,20 +1181,95 @@ async function buildRscServerBundle({
       )}).then((module) => module[${JSON.stringify(serverFn.functionName)}]),`,
     );
   }
-  if (!rscModule && entries.length === 0) return { chunks: {}, code: "" };
+  const actionEntries = Object.entries(rscServerActionReferences).map(
+    ([reference, action]) =>
+      `${JSON.stringify(reference)}: () => import(${JSON.stringify(
+        action.filePath,
+      )}),`,
+  );
+  if (!rscModule && entries.length === 0 && actionEntries.length === 0)
+    return { chunks: {}, code: "" };
 
-  const entrySource = `
-import React from 'react';
-${rscModule ? `import RscRoot from ${JSON.stringify(rscModule)};` : ""}
-${rscModule ? "import { renderToReadableStream } from '@tanstack/react-start/rsc';" : ""}
-const actions = { ${entries.join("\n")} };
-globalThis.${kernelManifest.server.resolverKey} = async function getServerFnById(id) {
-  const loadAction = actions[id];
-  if (!loadAction) throw new Error('Unknown server function: ' + id);
-  return loadAction();
+  const hasRscServerActions = actionEntries.length > 0;
+  const actionRuntimeSource = hasRscServerActions
+    ? `
+const rscActionModules = {
+${actionEntries.join("\n")}
 };
-${rscModule ? `
-globalThis.${kernelManifest.rsc.handlerKey} = async function handleRsc(request) {
+setRequireModule({
+  async load(id) {
+    const loadModule = rscActionModules[id];
+    if (!loadModule) throw new Error('Unknown RSC server-action module: ' + id);
+    return loadModule();
+  },
+});
+`
+    : "";
+  const actionHandlerSource = hasRscServerActions
+    ? `
+  if (pathname === ${JSON.stringify(
+    kernelManifest.rsc.actionInternalPath,
+  )}) {
+    if (request.method !== 'POST') {
+      return new Response('Method not allowed.', {
+        headers: { allow: 'POST' },
+        status: 405,
+      });
+    }
+    const actionId = request.headers.get('x-tuto-rsc-action');
+    const separator = actionId?.lastIndexOf('#') ?? -1;
+    if (!actionId || separator <= 0 || separator === actionId.length - 1) {
+      return new Response('Invalid RSC server action.', { status: 400 });
+    }
+    const moduleId = actionId.slice(0, separator);
+    const exportName = actionId.slice(separator + 1);
+    const loadModule = rscActionModules[moduleId];
+    if (!loadModule) return new Response('Unknown RSC server action.', { status: 404 });
+    const contentType = request.headers.get('content-type') ?? '';
+    const body = contentType.startsWith('multipart/form-data')
+      ? await request.formData()
+      : await request.text();
+    const args = await decodeReply(body);
+    if (!Array.isArray(args)) {
+      return new Response('Invalid RSC server-action arguments.', { status: 400 });
+    }
+    const module = await loadModule();
+    const action = module[exportName];
+    if (typeof action !== 'function') {
+      return new Response('Unknown RSC server-action export.', { status: 404 });
+    }
+    const routerFactory = globalThis.${kernelManifest.server.routerKey};
+    const startInstance = globalThis.${kernelManifest.server.startInstanceKey};
+    const startOptions = startInstance && typeof startInstance.getOptions === 'function'
+      ? await startInstance.getOptions()
+      : {};
+    return runWithStartContext({
+      getRouter: async () => {
+        if (typeof routerFactory !== 'function') {
+          throw new Error('This revision does not export getRouter from src/router.');
+        }
+        return routerFactory();
+      },
+      request,
+      startOptions,
+      contextAfterGlobalMiddlewares: requestOptions.context ?? {},
+      executedRequestMiddlewares: new Set(),
+      handlerType: 'serverFn',
+    }, () => {
+      const stream = renderToReadableStream(action(...args));
+      return new Response(stream, {
+        headers: {
+          'cache-control': 'no-store',
+          'content-type': 'text/x-component; charset=utf-8',
+          'vary': 'accept',
+        },
+      });
+    });
+  }
+`
+    : "";
+  const lowLevelRscHandlerSource = rscModule
+    ? `
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return new Response('Method not allowed.', {
       headers: { allow: 'GET, HEAD' },
@@ -1102,8 +1286,33 @@ globalThis.${kernelManifest.rsc.handlerKey} = async function handleRsc(request) 
       'vary': 'accept',
     },
   });
+`
+    : "return new Response('RSC endpoint not found.', { status: 404 });";
+  const rscHandlerSource =
+    rscModule || hasRscServerActions
+      ? `
+globalThis.${kernelManifest.rsc.handlerKey} = requestHandler(async function handleRsc(request, requestOptions = {}) {
+  const pathname = new URL(request.url).pathname;
+${actionHandlerSource}
+${lowLevelRscHandlerSource}
+});
+`
+      : "";
+  const entrySource = `
+import React from 'react';
+${rscModule ? `import RscRoot from ${JSON.stringify(rscModule)};` : ""}
+${rscModule || hasRscServerActions ? "import { renderToReadableStream } from '@tanstack/react-start/rsc';" : ""}
+${hasRscServerActions ? "import { decodeReply, setRequireModule } from '@vitejs/plugin-rsc/react/rsc';" : ""}
+${hasRscServerActions ? "import { runWithStartContext } from '@tanstack/start-storage-context';" : ""}
+${rscModule || hasRscServerActions ? "import { requestHandler } from '@tanstack/react-start/server';" : ""}
+const actions = { ${entries.join("\n")} };
+globalThis.${kernelManifest.server.resolverKey} = async function getServerFnById(id) {
+  const loadAction = actions[id];
+  if (!loadAction) throw new Error('Unknown server function: ' + id);
+  return loadAction();
 };
-` : ""}
+${actionRuntimeSource}
+${rscHandlerSource}
 `;
   const result = await build({
     absWorkingDir: absoluteWorkingDirectory,
@@ -1472,7 +1681,7 @@ startTransition(() => {
     publicPath: chunkAssetBase,
     plugins: [
       createKernelExternalPlugin("client"),
-      createWorkspacePlugin(entryFiles, root),
+      createWorkspacePlugin(entryFiles, root, "browser"),
     ],
     target: ["es2022"],
     treeShaking: true,
@@ -1602,7 +1811,7 @@ async function compilePreview(
       platform: "browser",
       plugins: [
         createKernelExternalPlugin("client"),
-        createWorkspacePlugin(transformedWithRouteSplits, root),
+        createWorkspacePlugin(transformedWithRouteSplits, root, "browser"),
       ],
       target: ["es2022"],
       treeShaking: true,

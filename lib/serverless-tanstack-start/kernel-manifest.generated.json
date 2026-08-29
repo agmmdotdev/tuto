@@ -1,7 +1,7 @@
 {
-  "id": "b472fadea0c7c257904a",
+  "id": "213eec379b3e36bedc5b",
   "client": {
-    "bytes": 371460,
+    "bytes": 372410,
     "exports": {
       "@tanstack/react-start": [
         "FRAME_HEADER_SIZE",
@@ -159,6 +159,17 @@
         "useSearch",
         "useTags"
       ],
+      "@vitejs/plugin-rsc/react/browser": [
+        "callServer",
+        "createFromFetch",
+        "createFromReadableStream",
+        "createServerReference",
+        "createTemporaryReferenceSet",
+        "encodeReply",
+        "findSourceMapURL",
+        "setRequireModule",
+        "setServerCallback"
+      ],
       "react": [
         "Activity",
         "Children",
@@ -255,6 +266,7 @@
       "@tanstack/react-start/client-rpc",
       "@tanstack/react-start/rsc",
       "@tanstack/react-router",
+      "@vitejs/plugin-rsc/react/browser",
       "react",
       "react/jsx-runtime",
       "react/jsx-dev-runtime",
@@ -264,7 +276,7 @@
     "routerKey": "__TUTO_TANSTACK_START_CLIENT_ROUTER_FACTORY__",
     "serverFnBaseKey": "__TUTO_TANSTACK_START_SERVER_FN_BASE__",
     "startInstanceKey": "__TUTO_TANSTACK_START_CLIENT_INSTANCE__",
-    "url": "/api/serverless/tanstack-start/kernel/client?v=b472fadea0c7c257904a"
+    "url": "/api/serverless/tanstack-start/kernel/client?v=213eec379b3e36bedc5b"
   },
   "packages": {
     "@tanstack/react-router": "1.170.32",
@@ -277,10 +289,11 @@
     "@vitejs/plugin-rsc": "0.5.26"
   },
   "rsc": {
-    "bytes": 101933,
+    "actionInternalPath": "/__tuto_rsc_action",
+    "bytes": 104017,
     "clientReferences": {
-      "tanstack-rsc-407bd0d413f9ca08e67b": "#tanstack-rsc-client-reference/tanstack-rsc-407bd0d413f9ca08e67b",
-      "tanstack-rsc-c29551c0c2ec4fca7197": "#tanstack-rsc-client-reference/tanstack-rsc-c29551c0c2ec4fca7197"
+      "tanstack-rsc-089a74926d5662de46d8": "#tanstack-rsc-client-reference/tanstack-rsc-089a74926d5662de46d8",
+      "tanstack-rsc-78f39ef23bf122201a45": "#tanstack-rsc-client-reference/tanstack-rsc-78f39ef23bf122201a45"
     },
     "exports": {
       "@tanstack/react-start": [
@@ -297,6 +310,47 @@
         "createFromReadableStream",
         "renderServerComponent",
         "renderToReadableStream"
+      ],
+      "@tanstack/react-start/server": [
+        "HEADERS",
+        "StartServer",
+        "VIRTUAL_MODULES",
+        "attachRouterServerSsrUtils",
+        "clearResponseHeaders",
+        "clearSession",
+        "createRequestHandler",
+        "createStartHandler",
+        "defaultRenderHandler",
+        "defaultStreamHandler",
+        "defineHandlerCallback",
+        "deleteCookie",
+        "getCookie",
+        "getCookies",
+        "getRequest",
+        "getRequestHeader",
+        "getRequestHeaders",
+        "getRequestHost",
+        "getRequestIP",
+        "getRequestProtocol",
+        "getRequestUrl",
+        "getResponse",
+        "getResponseHeader",
+        "getResponseHeaders",
+        "getResponseStatus",
+        "getSession",
+        "getValidatedQuery",
+        "removeResponseHeader",
+        "requestHandler",
+        "sealSession",
+        "setCookie",
+        "setResponseHeader",
+        "setResponseHeaders",
+        "setResponseStatus",
+        "transformPipeableStreamWithRouter",
+        "transformReadableStreamWithRouter",
+        "unsealSession",
+        "updateSession",
+        "useSession"
       ],
       "@tanstack/react-start/server-rpc": [
         "createServerRpc"
@@ -366,6 +420,7 @@
     "modules": [
       "@tanstack/react-start",
       "@tanstack/react-start/rsc",
+      "@tanstack/react-start/server",
       "@tanstack/react-start/server-rpc",
       "@tanstack/start-storage-context",
       "@vitejs/plugin-rsc/react/rsc",
@@ -375,7 +430,7 @@
     ]
   },
   "server": {
-    "bytes": 496785,
+    "bytes": 497554,
     "exports": {
       "@tanstack/react-router": [
         "Asset",
@@ -577,6 +632,13 @@
         "getStartContext",
         "runWithStartContext"
       ],
+      "@vitejs/plugin-rsc/react/ssr": [
+        "callServer",
+        "createFromReadableStream",
+        "createServerReference",
+        "findSourceMapURL",
+        "setRequireModule"
+      ],
       "react": [
         "Activity",
         "Children",
@@ -655,6 +717,7 @@
       "@tanstack/react-start/server-rpc",
       "@tanstack/react-start/ssr-rpc",
       "@tanstack/start-storage-context",
+      "@vitejs/plugin-rsc/react/ssr",
       "react",
       "react/jsx-runtime",
       "react-dom/server"

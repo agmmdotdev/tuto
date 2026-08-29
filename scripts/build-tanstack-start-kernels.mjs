@@ -36,6 +36,7 @@ const serverFnInternalBase = "/__tuto_server_fn/";
 const rscGlobalKey = "__TUTO_TANSTACK_START_RSC_KERNEL__";
 const rscHandlerKey = "__TUTO_TANSTACK_START_RSC_HANDLER__";
 const rscInternalPath = "/__tuto_rsc";
+const rscActionInternalPath = "/__tuto_rsc_action";
 
 const clientModules = [
   "@tanstack/react-start",
@@ -43,6 +44,7 @@ const clientModules = [
   "@tanstack/react-start/client-rpc",
   "@tanstack/react-start/rsc",
   "@tanstack/react-router",
+  "@vitejs/plugin-rsc/react/browser",
   "react",
   "react/jsx-runtime",
   "react/jsx-dev-runtime",
@@ -52,6 +54,7 @@ const clientModules = [
 const rscModules = [
   "@tanstack/react-start",
   "@tanstack/react-start/rsc",
+  "@tanstack/react-start/server",
   "@tanstack/react-start/server-rpc",
   "@tanstack/start-storage-context",
   "@vitejs/plugin-rsc/react/rsc",
@@ -67,10 +70,31 @@ const serverModules = [
   "@tanstack/react-start/server-rpc",
   "@tanstack/react-start/ssr-rpc",
   "@tanstack/start-storage-context",
+  "@vitejs/plugin-rsc/react/ssr",
   "react",
   "react/jsx-runtime",
   "react-dom/server",
 ];
+const moduleExportOverrides = {
+  "@vitejs/plugin-rsc/react/browser": [
+    "callServer",
+    "createFromFetch",
+    "createFromReadableStream",
+    "createServerReference",
+    "createTemporaryReferenceSet",
+    "encodeReply",
+    "findSourceMapURL",
+    "setRequireModule",
+    "setServerCallback",
+  ],
+  "@vitejs/plugin-rsc/react/ssr": [
+    "callServer",
+    "createFromReadableStream",
+    "createServerReference",
+    "findSourceMapURL",
+    "setRequireModule",
+  ],
+};
 
 function createStartEnvironmentPlugin(env) {
   let compilerPromise;
@@ -241,6 +265,8 @@ export const startInstance = {
 import {
   createFromFetch,
   createFromReadableStream,
+  encodeReply,
+  setServerCallback,
   setRequireModule,
 } from '@vitejs/plugin-rsc/react/browser';
 
@@ -254,6 +280,25 @@ setRequireModule({
   },
 });
 
+setServerCallback(async (id, args) => {
+  const body = await encodeReply(args);
+  const headers = {
+    accept: 'text/x-component',
+    'x-tuto-rsc-action': id,
+  };
+  if (typeof body === 'string') {
+    headers['content-type'] = 'text/plain; charset=utf-8';
+  }
+  return createFromFetch(globalThis.fetch(${JSON.stringify(
+    rscActionInternalPath,
+  )}, {
+    body,
+    credentials: 'include',
+    headers,
+    method: 'POST',
+  }));
+});
+
 export { createFromFetch, createFromReadableStream };
 `,
             loader: "js",
@@ -265,14 +310,17 @@ export { createFromFetch, createFromReadableStream };
   };
 }
 
-function createRscEntriesPlugin(storageContextExports) {
+function createRscEntriesPlugin(serverBridgeExports) {
   return {
     name: "tuto-start-rsc-kernel-entries",
     setup(buildApi) {
       buildApi.onResolve(
-        { filter: /^@tanstack\/start-storage-context$/ },
-        () => ({
-          path: "@tanstack/start-storage-context",
+        {
+          filter:
+            /^@tanstack\/(?:start-storage-context|react-start\/server)$/,
+        },
+        (args) => ({
+          path: args.path,
           namespace: "tuto-rsc-storage-context",
         }),
       );
@@ -310,14 +358,16 @@ function createRscEntriesPlugin(storageContextExports) {
       );
       buildApi.onLoad(
         { filter: /.*/, namespace: "tuto-rsc-storage-context" },
-        () => ({
+        (args) => ({
           contents: `
-const storageContext = globalThis.${serverGlobalKey}?.modules?.['@tanstack/start-storage-context'];
-if (!storageContext) {
-  throw new Error('The shared Start storage context is not initialized.');
+const serverModule = globalThis.${serverGlobalKey}?.modules?.[${JSON.stringify(
+            args.path,
+          )}];
+if (!serverModule) {
+  throw new Error('The shared Start server module is not initialized: ${args.path}');
 }
-${storageContextExports
-  .map((name) => `export const ${name} = storageContext[${JSON.stringify(name)}];`)
+${serverBridgeExports[args.path]
+  .map((name) => `export const ${name} = serverModule[${JSON.stringify(name)}];`)
   .join("\n")}
 `,
           loader: "js",
@@ -551,6 +601,8 @@ async function moduleExports(specifiers) {
   return Object.fromEntries(
     await Promise.all(
       specifiers.map(async (specifier) => {
+        const overriddenExports = moduleExportOverrides[specifier];
+        if (overriddenExports) return [specifier, overriddenExports];
         const namespace = await import(specifier);
         return [specifier, Object.keys(namespace).sort()];
       }),
@@ -643,6 +695,7 @@ import {
   createServerOnlyFn,
 } from '@tanstack/react-start';
 import * as rscStart from '@tanstack/react-start/rsc';
+import * as rscStartServer from '@tanstack/react-start/server';
 import * as rscServerRpc from '@tanstack/react-start/server-rpc';
 import * as rscStorageContext from '@tanstack/start-storage-context';
 import * as rscRuntime from '@vitejs/plugin-rsc/react/rsc';
@@ -660,6 +713,7 @@ globalThis.${rscGlobalKey} = Object.freeze({
       createServerOnlyFn,
     }),
     '@tanstack/react-start/rsc': rscStart,
+    '@tanstack/react-start/server': rscStartServer,
     '@tanstack/react-start/server-rpc': rscServerRpc,
     '@tanstack/start-storage-context': rscStorageContext,
     '@vitejs/plugin-rsc/react/rsc': rscRuntime,
@@ -687,9 +741,12 @@ globalThis.${rscGlobalKey} = Object.freeze({
     outfile: rscKernelPath,
     platform: "node",
     plugins: [
-      createRscEntriesPlugin(
-        serverExports["@tanstack/start-storage-context"],
-      ),
+      createRscEntriesPlugin({
+        "@tanstack/react-start/server":
+          serverExports["@tanstack/react-start/server"],
+        "@tanstack/start-storage-context":
+          serverExports["@tanstack/start-storage-context"],
+      }),
       createRscDirectivePlugin(frameworkRscClientReferences),
       createRscWebpackRuntimePlugin(),
     ],
@@ -804,6 +861,9 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
   const previousServerKernel = globalThis[serverGlobalKey];
   globalThis[serverGlobalKey] = {
     modules: {
+      "@tanstack/react-start/server": await import(
+        "@tanstack/react-start/server"
+      ),
       "@tanstack/start-storage-context": await import(
         "@tanstack/start-storage-context"
       ),
@@ -849,6 +909,7 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
     },
     packages,
     rsc: {
+      actionInternalPath: rscActionInternalPath,
       bytes: Buffer.byteLength(rscCode),
       clientReferences: Object.fromEntries(
         frameworkRscEntries.map(({ moduleKey, reference }) => [

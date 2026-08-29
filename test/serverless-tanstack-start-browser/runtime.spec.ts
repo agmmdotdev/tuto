@@ -23,6 +23,7 @@ import {
 } from '@tanstack/react-start/rsc';
 import { Link, createFileRoute } from '@tanstack/react-router';
 import { InitialRsc } from '../initial-rsc';
+import { multiplyOnRscServer } from '../rsc-actions';
 
 const addContext = createMiddleware({ type: 'function' }).server(({ next }) =>
   next({ context: { source: 'browser-middleware' } }),
@@ -67,6 +68,7 @@ function HomeRoute() {
   const [requestResult, setRequestResult] = useState('idle');
   const [redirectResult, setRedirectResult] = useState('idle');
   const [rscTree, setRscTree] = useState(null);
+  const [rscActionResult, setRscActionResult] = useState('idle');
 
   return (
     <main>
@@ -89,6 +91,15 @@ function HomeRoute() {
         <p data-testid="composite-children-slot">Children supplied by the client route</p>
       </CompositeComponent>
       <CompositeComponent src={CompositeSrc.Footer} />
+      <button
+        data-testid="rsc-server-action"
+        onClick={async () => {
+          setRscActionResult(JSON.stringify(await multiplyOnRscServer(6, 7)));
+        }}
+      >
+        Run RSC server action
+      </button>
+      <output data-testid="rsc-server-action-result">{rscActionResult}</output>
       <button
         data-testid="server-fn"
         onClick={async () => setServerResult(JSON.stringify(await greet({ data: { name: 'Ada' } })))}
@@ -141,13 +152,36 @@ function HomeRoute() {
     path: "src/routes/index.tsx",
   },
   {
+    content: `'use server';
+import { getRequestUrl } from '@tanstack/react-start/server';
+
+export async function multiplyOnRscServer(left, right) {
+  return {
+    pathname: getRequestUrl().pathname,
+    result: left * right,
+    source: 'module-rsc-server-action',
+  };
+}`,
+    language: "ts",
+    path: "src/rsc-actions.ts",
+  },
+  {
     content: `import { InitialRscCounter } from './initial-rsc-counter';
 
 export function InitialRsc() {
+  const prefix = 'inline-bound-action:';
+  async function describeFromServer(value) {
+    'use server';
+    return prefix + value;
+  }
   return (
     <article data-testid="initial-rsc-root">
       <h2>Initial Flight rendered in SSR</h2>
-      <InitialRscCounter initial={5} message="initial-server-only-rsc" />
+      <InitialRscCounter
+        action={describeFromServer}
+        initial={5}
+        message="initial-server-only-rsc"
+      />
     </article>
   );
 }`,
@@ -158,8 +192,9 @@ export function InitialRsc() {
     content: `'use client';
 import { useState } from 'react';
 
-export function InitialRscCounter({ initial, message }) {
+export function InitialRscCounter({ action, initial, message }) {
   const [count, setCount] = useState(initial);
+  const [actionResult, setActionResult] = useState('idle');
   return (
     <div>
       <p data-testid="initial-rsc-message">{message}</p>
@@ -169,6 +204,13 @@ export function InitialRscCounter({ initial, message }) {
       >
         Initial RSC count: {count}
       </button>
+      <button
+        data-testid="inline-rsc-server-action"
+        onClick={async () => setActionResult(await action('client-value'))}
+      >
+        Run inline RSC action
+      </button>
+      <output data-testid="inline-rsc-server-action-result">{actionResult}</output>
     </div>
   );
 }`,
@@ -337,13 +379,17 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   const routeChunks = new Set<string>();
   const routeStyles = new Set<string>();
   const flightResponses: Array<{ contentType: string | null; status: number }> = [];
+  const actionResponses: Array<{ contentType: string | null; status: number }> = [];
 
   page.on("response", (response) => {
     const url = response.url();
     if (url.includes("/core-asset") && url.includes("kind=chunk")) routeChunks.add(url);
     if (url.includes("/core-asset") && url.includes("kind=style") && url.includes("name=")) routeStyles.add(url);
     if (url.includes("/core-route") && url.includes("__tuto_rsc")) {
-      flightResponses.push({
+      const target = url.includes("__tuto_rsc_action")
+        ? actionResponses
+        : flightResponses;
+      target.push({
         contentType: response.headers()["content-type"] ?? null,
         status: response.status(),
       });
@@ -383,6 +429,31 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   await expect(page.getByTestId("composite-title-slot")).toHaveText(
     "Title passed through Flight: 1",
   );
+
+  await page.getByTestId("rsc-server-action").click();
+  await expect(page.getByTestId("rsc-server-action-result")).toContainText(
+    '"result":42',
+  );
+  await expect(page.getByTestId("rsc-server-action-result")).toContainText(
+    "module-rsc-server-action",
+  );
+  await expect(page.getByTestId("rsc-server-action-result")).toContainText(
+    '"pathname":"/__tuto_rsc_action"',
+  );
+  await page.getByTestId("inline-rsc-server-action").click();
+  await expect(
+    page.getByTestId("inline-rsc-server-action-result"),
+  ).toHaveText("inline-bound-action:client-value");
+  expect(actionResponses).toEqual([
+    expect.objectContaining({
+      contentType: expect.stringContaining("text/x-component"),
+      status: 200,
+    }),
+    expect.objectContaining({
+      contentType: expect.stringContaining("text/x-component"),
+      status: 200,
+    }),
+  ]);
 
   await page.getByTestId("hydrate").click();
   await expect(page.getByTestId("hydrate")).toHaveText("Hydration count: 1");

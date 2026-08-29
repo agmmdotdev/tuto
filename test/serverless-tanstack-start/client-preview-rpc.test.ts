@@ -271,6 +271,43 @@ globalThis.__tutoPreviewPromise = greet({ data: { name: ' Ada ' } })
   }
 });
 
+test('keeps "use server" implementations in RSC revision chunks', () => {
+  const files: WorkspaceFileInput[] = [
+    {
+      path: "index.html",
+      language: "html",
+      content: '<script type="module" src="./src/main.ts"></script>',
+    },
+    {
+      path: "src/rsc-action.ts",
+      language: "ts",
+      content: `'use server';
+export async function rscAction(value) {
+  return 'rsc-action-implementation-only:' + value;
+}`,
+    },
+    {
+      path: "src/main.ts",
+      language: "ts",
+      content: `import { rscAction } from './rsc-action';
+globalThis.__tutoRscAction = rscAction;`,
+    },
+  ];
+  const preview = compilePreview(files);
+
+  assert.equal(preview.success, true);
+  assert.doesNotMatch(preview.html, /rsc-action-implementation-only/);
+  assert.doesNotMatch(preview.serverBundle, /rsc-action-implementation-only/);
+  assert.ok(
+    Object.entries(preview.serverChunks).some(
+      ([name, chunk]) =>
+        name.startsWith("chunks/rsc-") &&
+        chunk.includes("rsc-action-implementation-only"),
+    ),
+  );
+  assert.match(preview.html, /tuto-rsc-action-[a-f0-9]{20}/);
+});
+
 test("the native Start host runs request middleware, cookies, and sessions", async () => {
   const files: WorkspaceFileInput[] = [
     {
