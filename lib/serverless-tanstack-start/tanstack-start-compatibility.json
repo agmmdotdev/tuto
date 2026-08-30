@@ -1,0 +1,412 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-08-30",
+  "upstream": {
+    "repository": "TanStack/router",
+    "commit": "0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5",
+    "docsBase": "docs/start/framework/react"
+  },
+  "runtime": {
+    "node": "22",
+    "reactStart": "1.168.49",
+    "reactRouter": "1.170.32",
+    "startPluginCore": "1.171.39",
+    "startServerCore": "1.169.31",
+    "viteRsc": "0.5.26",
+    "executionModel": "request-based reusable Node workers compiled with esbuild"
+  },
+  "features": [
+    {
+      "id": "router-ssr-loaders",
+      "area": "Routing and SSR",
+      "status": "verified",
+      "upstreamSource": "guide/routing.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start/client-preview-rpc.test.ts",
+          "test": "the native Start host renders a workspace router with loaders"
+        }
+      ],
+      "notes": "Matched routes, loaders, streamed HTML, route chunks, server chunks, and route manifests run through the request host."
+    },
+    {
+      "id": "browser-hydration-lazy-routes-css",
+      "area": "Routing and SSR",
+      "status": "verified",
+      "upstreamSource": "guide/routing.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "hydrates and exercises the native Start browser runtime"
+        }
+      ],
+      "notes": "Firefox verifies hydration, client navigation, lazy route chunks, and route-scoped CSS."
+    },
+    {
+      "id": "server-functions",
+      "area": "Server functions",
+      "status": "verified",
+      "upstreamSource": "guide/server-functions.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start/real-runtime-experiment.test.ts",
+          "test": "runs a server function through the real Start client and server runtimes"
+        },
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "hydrates and exercises the native Start browser runtime"
+        }
+      ],
+      "notes": "Official createServerFn client stubs and server handlers run over the revision-pinned RPC gateway."
+    },
+    {
+      "id": "server-function-validation-methods",
+      "area": "Server functions",
+      "status": "verified",
+      "upstreamSource": "guide/server-functions.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start/server-functions-transform.test.ts",
+          "test": "executes inputValidator before the server function handler"
+        },
+        {
+          "file": "test/serverless-tanstack-start/server-functions-transform.test.ts",
+          "test": "passes method metadata into the server function handler"
+        }
+      ],
+      "notes": "GET/POST method metadata and input validators are preserved by the compiler transform."
+    },
+    {
+      "id": "server-function-control-flow",
+      "area": "Server functions",
+      "status": "verified",
+      "upstreamSource": "guide/server-functions.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start/server-functions-transform.test.ts",
+          "test": "returns thrown server function errors through the RPC error channel"
+        },
+        {
+          "file": "test/serverless-tanstack-start/server-functions-transform.test.ts",
+          "test": "serializes thrown redirects through the RPC control channel"
+        },
+        {
+          "file": "test/serverless-tanstack-start/server-functions-transform.test.ts",
+          "test": "serializes thrown notFound values through the RPC control channel"
+        }
+      ],
+      "notes": "Errors, redirects, and notFound control values survive the RPC boundary."
+    },
+    {
+      "id": "server-function-middleware",
+      "area": "Middleware",
+      "status": "verified",
+      "upstreamSource": "guide/middleware.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start/server-functions-transform.test.ts",
+          "test": "runs server middleware before the handler and merges context"
+        },
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "hydrates and exercises the native Start browser runtime"
+        }
+      ],
+      "notes": "Function middleware ordering, context merging, and Response short-circuiting are covered."
+    },
+    {
+      "id": "request-middleware-cookies-sessions",
+      "area": "Middleware",
+      "status": "verified",
+      "upstreamSource": "guide/middleware.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start/client-preview-rpc.test.ts",
+          "test": "the native Start host runs request middleware, cookies, and sessions"
+        }
+      ],
+      "notes": "Request middleware, cookie mutation, session persistence, and CSRF handling run in the shared Start request context."
+    },
+    {
+      "id": "server-function-response-values",
+      "area": "Server functions",
+      "status": "verified",
+      "upstreamSource": "guide/server-functions.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start/server-functions-transform.test.ts",
+          "test": "serializes Response results across the RPC boundary"
+        }
+      ],
+      "notes": "Response status, headers, and body are transported without flattening them into plain JSON."
+    },
+    {
+      "id": "server-function-formdata-files",
+      "area": "Server functions",
+      "status": "verified",
+      "upstreamSource": "guide/server-functions.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "hydrates and exercises the native Start browser runtime"
+        }
+      ],
+      "notes": "Browser FormData, string fields, and File name/content are revived in the server handler."
+    },
+    {
+      "id": "streaming-server-functions",
+      "area": "Server functions",
+      "status": "verified",
+      "upstreamSource": "guide/streaming-data-from-server-functions.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "hydrates and exercises the native Start browser runtime"
+        }
+      ],
+      "notes": "Both ReadableStream and async-generator server-function results stream through the browser transport."
+    },
+    {
+      "id": "server-routes",
+      "area": "Server routes",
+      "status": "verified",
+      "upstreamSource": "guide/server-routes.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start/client-preview-rpc.test.ts",
+          "test": "the native Start host renders a workspace router with loaders"
+        },
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "hydrates and exercises the native Start browser runtime"
+        }
+      ],
+      "notes": "Request bodies, methods, headers, status codes, internal redirects, and external redirects are covered."
+    },
+    {
+      "id": "rsc-server-components",
+      "area": "React Server Components",
+      "status": "verified",
+      "upstreamSource": "guide/server-components.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "hydrates and exercises the native Start browser runtime"
+        }
+      ],
+      "notes": "renderServerComponent works for initial SSR and on-demand Flight responses."
+    },
+    {
+      "id": "rsc-composite-components",
+      "area": "React Server Components",
+      "status": "verified",
+      "upstreamSource": "guide/server-components.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "hydrates and exercises the native Start browser runtime"
+        }
+      ],
+      "notes": "Composite selections, nested selections, client slots, SSR, and hydration are covered."
+    },
+    {
+      "id": "rsc-client-boundaries",
+      "area": "React Server Components",
+      "status": "verified",
+      "upstreamSource": "guide/server-components.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "hydrates and exercises the native Start browser runtime"
+        }
+      ],
+      "notes": "Client references emitted from server components load and remain interactive in Firefox."
+    },
+    {
+      "id": "rsc-server-actions",
+      "area": "React Server Components",
+      "status": "verified",
+      "upstreamSource": "guide/server-components.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "hydrates and exercises the native Start browser runtime"
+        }
+      ],
+      "notes": "Module-level and inline bound actions use the official Flight action transport."
+    },
+    {
+      "id": "rsc-action-encryption",
+      "area": "React Server Components",
+      "status": "verified",
+      "upstreamSource": "guide/server-components.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start/rsc-action-encryption.test.ts",
+          "test": "the shared RSC kernel encrypts bound arguments and rejects tampering"
+        }
+      ],
+      "notes": "AES-GCM bound-argument encryption and tamper rejection use the plugin-rsc hooks."
+    },
+    {
+      "id": "rsc-css-resources",
+      "area": "React Server Components",
+      "status": "verified",
+      "upstreamSource": "guide/server-components.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start/client-preview-rpc.test.ts",
+          "test": "emits CSS imported only by an RSC server module as a Flight resource"
+        },
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "hydrates and exercises the native Start browser runtime"
+        }
+      ],
+      "notes": "CSS from client references and pure server-only RSC modules is emitted and applied."
+    },
+    {
+      "id": "error-boundary-ui",
+      "area": "Routing and SSR",
+      "status": "verified",
+      "upstreamSource": "guide/error-boundaries.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "hydrates and exercises the native Start browser runtime"
+        }
+      ],
+      "notes": "Route errorComponent and route notFoundComponent rendering and recovery navigation are covered in Firefox."
+    },
+    {
+      "id": "deferred-loader-data",
+      "area": "Streaming",
+      "status": "not-verified",
+      "upstreamSource": "guide/routing.md",
+      "evidence": [],
+      "notes": "Deferred route loader values and Await/Suspense hydration are not yet in the compatibility suite."
+    },
+    {
+      "id": "selective-ssr",
+      "area": "Rendering modes",
+      "status": "not-verified",
+      "upstreamSource": "guide/selective-ssr.md",
+      "evidence": [],
+      "notes": "Per-route ssr true/data-only/false behavior has not been exercised."
+    },
+    {
+      "id": "deferred-hydration",
+      "area": "Rendering modes",
+      "status": "not-verified",
+      "upstreamSource": "guide/deferred-hydration.md",
+      "evidence": [],
+      "notes": "Hydration deferral controls have not been exercised."
+    },
+    {
+      "id": "seo-head-metadata",
+      "area": "Document output",
+      "status": "not-verified",
+      "upstreamSource": "guide/seo.md",
+      "evidence": [],
+      "notes": "Route head/meta/link/script merging needs a focused SSR and navigation fixture."
+    },
+    {
+      "id": "static-prerendering",
+      "area": "Build output",
+      "status": "not-verified",
+      "upstreamSource": "guide/static-prerendering.md",
+      "evidence": [],
+      "notes": "Tuto currently compiles and serves request-time previews rather than emitting a static site."
+    },
+    {
+      "id": "incremental-static-regeneration",
+      "area": "Build output",
+      "status": "not-verified",
+      "upstreamSource": "guide/isr.md",
+      "evidence": [],
+      "notes": "ISR headers and regeneration behavior are not implemented in the preview host."
+    },
+    {
+      "id": "static-server-functions",
+      "area": "Build output",
+      "status": "not-verified",
+      "upstreamSource": "guide/static-server-functions.md",
+      "evidence": [],
+      "notes": "Build-time server-function result generation is not part of the request-time compiler path."
+    },
+    {
+      "id": "environment-import-protection",
+      "area": "Compiler protection",
+      "status": "partial",
+      "upstreamSource": "guide/import-protection.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start/client-preview-rpc.test.ts",
+          "test": "the native Start host renders a workspace router with loaders"
+        }
+      ],
+      "notes": "Server route implementation markers are proven absent from client assets; the full upstream import-protection policy matrix is not covered."
+    },
+    {
+      "id": "custom-entry-points",
+      "area": "Compiler configuration",
+      "status": "not-verified",
+      "upstreamSource": "guide/client-entry-point.md",
+      "evidence": [],
+      "notes": "Custom client and server entry points are not currently fixture-tested."
+    },
+    {
+      "id": "path-aliases",
+      "area": "Compiler configuration",
+      "status": "not-verified",
+      "upstreamSource": "guide/path-aliases.md",
+      "evidence": [],
+      "notes": "Workspace tsconfig path aliases need explicit compiler coverage."
+    },
+    {
+      "id": "spa-mode",
+      "area": "Rendering modes",
+      "status": "not-verified",
+      "upstreamSource": "guide/spa-mode.md",
+      "evidence": [],
+      "notes": "The preview host targets Start SSR and has not validated the SPA shell/fallback mode."
+    },
+    {
+      "id": "vite-plugin-ecosystem",
+      "area": "Compiler configuration",
+      "status": "partial",
+      "upstreamSource": "guide/css-styling.md",
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "hydrates and exercises the native Start browser runtime"
+        }
+      ],
+      "notes": "CSS and the platform Tailwind pipeline work; arbitrary user-supplied Vite plugins are not a compatibility promise."
+    },
+    {
+      "id": "vite-dev-server-hmr",
+      "area": "Development server",
+      "status": "out-of-scope",
+      "upstreamSource": "guide/execution-model.md",
+      "evidence": [],
+      "notes": "Tuto intentionally recompiles request revisions with esbuild; it does not run a per-student Vite watcher or HMR server."
+    },
+    {
+      "id": "non-node-hosting-adapters",
+      "area": "Deployment",
+      "status": "out-of-scope",
+      "upstreamSource": "guide/hosting.md",
+      "evidence": [],
+      "notes": "The platform target is Tuto's Node 22 request host, not Netlify, Cloudflare, Bun, or Deno adapter parity."
+    },
+    {
+      "id": "container-or-microvm-execution",
+      "area": "Execution model",
+      "status": "out-of-scope",
+      "upstreamSource": "guide/execution-model.md",
+      "evidence": [],
+      "notes": "The agreed design runs compiled revisions in bounded reusable Node workers; it does not create a container or microVM per preview."
+    }
+  ]
+}

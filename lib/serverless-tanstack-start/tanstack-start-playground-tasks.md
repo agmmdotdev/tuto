@@ -1,6 +1,10 @@
-# TanStack Start Playground Remaining Tasks
+# TanStack Start playground roadmap
 
-The following items are remaining for the TanStack Start playground integration:
+The request-based runtime is the fixed architecture: workspace revisions are
+compiled with esbuild and executed by bounded, reusable Node workers. Tuto does
+not start a per-student Vite watcher, container, or microVM.
+
+The remaining playground work is:
 
 1. **Explorer File Actions (Create/Delete/Rename):**
    - Implement frontend UI controls in the sidebar tree explorer to allow users to add, delete, and rename files. This will enable dynamic adding and deleting of routes (e.g. creating `src/routes/about.tsx`).
@@ -8,5 +12,13 @@ The following items are remaining for the TanStack Start playground integration:
    - Hide generated files (`src/routeTree.gen.ts`, `src/tanstack-router-register.d.ts`, and `src/tanstack-router-editor-shim.tsx`) from the explorer tree, or mark them as read-only in the editor.
 3. **Monaco Diagnostics Refresh:**
    - Force a diagnostics compile check on all open Monaco editor models when the route tree is regenerated to resolve or display link type warnings instantly.
-4. **Harden Untrusted Execution:**
-   - Move arbitrary student server code from the current bounded child-process lifecycle into a container or microVM security boundary before multi-tenant production use.
+4. **Route Rendering Compatibility:**
+   - Add official-guide-inspired browser fixtures for deferred loader data, selective SSR, and SEO/head metadata. Error boundaries and not-found UI are covered.
+5. **Compiler Configuration Compatibility:**
+   - Add focused fixtures for path aliases and custom client/server entry points.
+
+The versioned support contract and its executable evidence live in
+[`TANSTACK_START_COMPATIBILITY.md`](./TANSTACK_START_COMPATIBILITY.md). Static
+prerendering, ISR, static server functions, third-party hosting adapters, and a
+per-student Vite/HMR server are not prerequisites for the interactive Tuto
+preview path.

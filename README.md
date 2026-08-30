@@ -36,10 +36,16 @@ yarn test:serverless-tanstack-start-browser
 ```
 
 The browser checkpoint covers SSR and hydration, middleware-backed server
-functions, Request body forwarding and redirects, lazy client chunks, and
-route-scoped CSS loaded during navigation. The compiler/request-host suite also
-verifies revision-pinned server entry and route/function chunks inside the
-isolated worker.
+functions, streaming server functions, FormData/File transport, Request body
+forwarding and redirects, lazy client chunks, route-scoped CSS, React Server
+Components, and server actions. The compiler/request-host suite also verifies
+revision-pinned server entry and route/function chunks inside the reusable Node
+worker.
+
+See the version-pinned
+[TanStack Start compatibility matrix](./lib/serverless-tanstack-start/TANSTACK_START_COMPATIBILITY.md)
+for the exact supported, partial, unverified, and intentionally out-of-scope
+surface.
 
 ## Learn More
 

@@ -37,6 +37,34 @@ const greet = createServerFn({ method: 'POST' })
     source: context.source,
   }));
 
+const streamMessages = createServerFn({ method: 'GET' }).handler(() =>
+  new ReadableStream({
+    start(controller) {
+      controller.enqueue({ content: 'readable-' });
+      controller.enqueue({ content: 'stream' });
+      controller.close();
+    },
+  }),
+);
+
+const generateMessages = createServerFn({ method: 'GET' }).handler(
+  async function* () {
+    yield { content: 'async-' };
+    yield { content: 'generator' };
+  },
+);
+
+const inspectFormData = createServerFn({ method: 'POST' }).handler(
+  async ({ data }) => {
+    const upload = data.get('upload');
+    return {
+      fileName: upload.name,
+      fileText: await upload.text(),
+      title: data.get('title'),
+    };
+  },
+);
+
 const getInitialRsc = createServerFn({ method: 'GET' }).handler(async () => ({
   CompositeSrc: await createCompositeComponent((props) => ({
     Card: (
@@ -65,6 +93,8 @@ function HomeRoute() {
   const [compositeCount, setCompositeCount] = useState(0);
   const [count, setCount] = useState(0);
   const [serverResult, setServerResult] = useState('idle');
+  const [streamResult, setStreamResult] = useState('idle');
+  const [formResult, setFormResult] = useState('idle');
   const [requestResult, setRequestResult] = useState('idle');
   const [redirectResult, setRedirectResult] = useState('idle');
   const [rscTree, setRscTree] = useState(null);
@@ -108,6 +138,39 @@ function HomeRoute() {
       </button>
       <output data-testid="server-result">{serverResult}</output>
       <button
+        data-testid="streaming-server-functions"
+        onClick={async () => {
+          const readable = await streamMessages();
+          const reader = readable.getReader();
+          let readableText = '';
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            readableText += value.content;
+          }
+          let generatorText = '';
+          for await (const value of await generateMessages()) {
+            generatorText += value.content;
+          }
+          setStreamResult(readableText + '|' + generatorText);
+        }}
+      >
+        Stream server-function data
+      </button>
+      <output data-testid="streaming-server-functions-result">{streamResult}</output>
+      <button
+        data-testid="formdata-server-function"
+        onClick={async () => {
+          const data = new FormData();
+          data.set('title', 'compatibility-form');
+          data.set('upload', new File(['fixture-body'], 'fixture.txt', { type: 'text/plain' }));
+          setFormResult(JSON.stringify(await inspectFormData({ data })));
+        }}
+      >
+        Send FormData
+      </button>
+      <output data-testid="formdata-server-function-result">{formResult}</output>
+      <button
         data-testid="request-fetch"
         onClick={async () => {
           const routeRequest = new Request('/api/echo', {
@@ -144,6 +207,8 @@ function HomeRoute() {
       <Suspense fallback={<p data-testid="rsc-loading">Loading RSC</p>}>
         <section data-testid="rsc-result">{rscTree}</section>
       </Suspense>
+      <Link data-testid="error-link" to="/error">Open route error fixture</Link>
+      <Link data-testid="not-found-link" to="/missing">Open not-found fixture</Link>
       <Link data-testid="about-link" to="/about">Open lazy route</Link>
     </main>
   );
@@ -279,6 +344,40 @@ export const Route = createFileRoute('/about')({
     path: "src/routes/about.css",
   },
   {
+    content: `import { Link, createFileRoute } from '@tanstack/react-router';
+
+export const Route = createFileRoute('/error')({
+  loader: () => {
+    throw new Error('official-fixture-route-error');
+  },
+  errorComponent: ({ error }) => (
+    <section data-testid="route-error-boundary">
+      <p>{error.message}</p>
+      <Link data-testid="error-home" to="/">Return home</Link>
+    </section>
+  ),
+});`,
+    language: "tsx",
+    path: "src/routes/error.tsx",
+  },
+  {
+    content: `import { Link, createFileRoute, notFound } from '@tanstack/react-router';
+
+export const Route = createFileRoute('/missing')({
+  loader: () => {
+    throw notFound();
+  },
+  notFoundComponent: () => (
+    <section data-testid="route-not-found">
+      <p>Official fixture not found</p>
+      <Link data-testid="not-found-home" to="/">Return home</Link>
+    </section>
+  ),
+});`,
+    language: "tsx",
+    path: "src/routes/missing.tsx",
+  },
+  {
     content: `import { createFileRoute } from '@tanstack/react-router';
 
 export const Route = createFileRoute('/api/echo')({
@@ -313,7 +412,9 @@ export const Route = createFileRoute('/api/echo')({
 } from '@tanstack/react-router';
 import { Route as aboutRouteImport } from './routes/about';
 import { Route as apiEchoRouteImport } from './routes/api.echo';
+import { Route as errorRouteImport } from './routes/error';
 import { Route as indexRouteImport } from './routes/index';
+import { Route as missingRouteImport } from './routes/missing';
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -339,8 +440,24 @@ const apiEchoRoute = apiEchoRouteImport.update({
   id: '/api/echo',
   path: '/api/echo',
 });
+const errorRoute = errorRouteImport.update({
+  getParentRoute: () => rootRoute,
+  id: '/error',
+  path: '/error',
+});
+const missingRoute = missingRouteImport.update({
+  getParentRoute: () => rootRoute,
+  id: '/missing',
+  path: '/missing',
+});
 
-const routeTree = rootRoute.addChildren([indexRoute, aboutRoute, apiEchoRoute]);
+const routeTree = rootRoute.addChildren([
+  indexRoute,
+  aboutRoute,
+  apiEchoRoute,
+  errorRoute,
+  missingRoute,
+]);
 
 export function getRouter() {
   return createRouter({
@@ -512,6 +629,20 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   await expect(page.getByTestId("server-result")).toContainText("Hello Ada");
   await expect(page.getByTestId("server-result")).toContainText("browser-middleware");
 
+  await page.getByTestId("streaming-server-functions").click();
+  await expect(
+    page.getByTestId("streaming-server-functions-result"),
+  ).toHaveText("readable-stream|async-generator");
+
+  await page.getByTestId("formdata-server-function").click();
+  await expect(page.getByTestId("formdata-server-function-result")).toHaveText(
+    JSON.stringify({
+      fileName: "fixture.txt",
+      fileText: "fixture-body",
+      title: "compatibility-form",
+    }),
+  );
+
   await page.getByTestId("request-fetch").click();
   await expect(page.getByTestId("request-result")).toContainText("browser-body");
   await expect(page.getByTestId("request-result")).toContainText("active");
@@ -533,6 +664,25 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
     expect.objectContaining({ contentType: expect.stringContaining("text/x-component"), status: 200 }),
   ]);
   expect([...routeChunks].some((url) => !chunksBeforeRsc.has(url))).toBe(true);
+
+  const errorsBeforeExpectedRouteError = browserErrors.length;
+  await page.getByTestId("error-link").click();
+  await expect(page.getByTestId("route-error-boundary")).toContainText(
+    "official-fixture-route-error",
+  );
+  expect(browserErrors.slice(errorsBeforeExpectedRouteError)).toEqual([
+    "Error",
+  ]);
+  browserErrors.splice(errorsBeforeExpectedRouteError);
+  await page.getByTestId("error-home").click();
+  await expect(page.getByTestId("hydrate")).toBeVisible();
+
+  await page.getByTestId("not-found-link").click();
+  await expect(page.getByTestId("route-not-found")).toHaveText(
+    "Official fixture not foundReturn home",
+  );
+  await page.getByTestId("not-found-home").click();
+  await expect(page.getByTestId("hydrate")).toBeVisible();
 
   const chunksBeforeNavigation = new Set(routeChunks);
   const stylesBeforeNavigation = new Set(routeStyles);

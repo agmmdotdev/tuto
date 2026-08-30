@@ -251,11 +251,12 @@ shared by workers for local and single-instance use. Multi-instance deployments
 must configure the key; rotating it invalidates bound actions in already
 rendered documents.
 
-This remains a checkpoint rather than complete TanStack Start RSC parity. The
-low-level endpoint plus loader-owned `renderServerComponent` and
-`createCompositeComponent` paths, RSC server actions, client-reference CSS,
-and pure-server RSC CSS resources are covered. An operating-system isolation
-boundary remains outside this tier.
+This remains a checkpoint rather than a blanket claim of complete TanStack
+Start parity. The low-level endpoint plus loader-owned
+`renderServerComponent` and `createCompositeComponent` paths, RSC server
+actions, client-reference CSS, and pure-server RSC CSS resources are covered.
+The exact version-pinned claim is maintained in
+[`TANSTACK_START_COMPATIBILITY.md`](./TANSTACK_START_COMPATIBILITY.md).
 
 ### Cross-instance artifact storage
 
@@ -361,14 +362,20 @@ framework kernels. The shared server graph contains Start's public request host,
 React SSR graph, Router, and its H3 request/session graph; Flight rendering is
 isolated in the RSC kernel.
 
-## Remaining architecture work
+## Execution model and remaining compatibility work
 
-1. move execution and the shared runtime directory behind a hardened sandbox
-   such as an isolated container or
-   microVM before treating arbitrary untrusted student code as safe for a
-   multi-tenant production service. The current child-process boundary protects
-   the Next.js host module graph and makes worker lifecycle enforceable; it is
-   not an operating-system security boundary.
+The playground intentionally compiles workspace revisions with esbuild and
+runs them in bounded, reusable Node workers behind the request gateway. It does
+not create a container or microVM per preview and does not run a per-student
+Vite watcher. Worker timeouts, request caps, revision pinning, and capability
+checks are properties of this execution model; they are not an operating-system
+sandbox, so deployments must apply the appropriate trust and access policy to
+student code.
+
+The next runtime work is compatibility coverage inside that architecture:
+deferred loader data, selective SSR, SEO/head metadata, path aliases, and
+custom entry points. Route error/not-found UI is now covered. The compatibility
+matrix is the source of truth for that sequence.
 
 The standalone proof script above still uses its original minimal host adapter
 to isolate the compiler experiment. The integrated playground no longer relies
@@ -378,9 +385,9 @@ the official React Start package exports.
 This checkpoint claims router SSR, hydration, streamed document responses,
 matched-route client component chunks, route/server-function ESM chunks,
 route-scoped CSS loading during browser navigation, the covered server-route
-HTTP path, and the documented opt-in Flight/client-boundary slice. It does not
-yet claim complete TanStack Start RSC parity. The covered loader-owned
-`renderServerComponent` path now includes initial SSR and hydration; Composite
-Components now include nested selections, slots, initial SSR, and hydration.
-Pure-server RSC CSS resources now use the official compiler marker path. An
-operating-system security boundary remains work for the full-runtime tier.
+HTTP path, and the tested Flight/client-boundary slice. The covered
+loader-owned `renderServerComponent` path includes initial SSR and hydration;
+Composite Components include nested selections, slots, initial SSR, and
+hydration. Pure-server RSC CSS resources use the official compiler marker path.
+Broader framework parity is tracked feature by feature in the compatibility
+matrix instead of as a single all-or-nothing claim.
