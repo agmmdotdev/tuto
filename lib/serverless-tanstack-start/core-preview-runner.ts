@@ -278,11 +278,14 @@ function loaderForPath(filePath: string): Loader {
 
   switch (extension) {
     case ".ts":
+    case ".mts":
+    case ".cts":
       return "ts";
     case ".tsx":
       return "tsx";
     case ".js":
     case ".mjs":
+    case ".cjs":
       return "js";
     case ".jsx":
       return "jsx";
@@ -306,7 +309,19 @@ function loaderForPath(filePath: string): Loader {
 
 function findWorkspaceFile(files: WorkspaceFileMap, candidatePath: string) {
   const normalized = normalizeWorkspacePath(candidatePath);
-  const extensions = ["", ".ts", ".tsx", ".js", ".jsx", ".css", ".json"];
+  const extensions = [
+    "",
+    ".ts",
+    ".tsx",
+    ".mts",
+    ".cts",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".css",
+    ".json",
+  ];
 
   if (files.has(normalized)) return normalized;
 
@@ -328,13 +343,136 @@ function findWorkspaceFile(files: WorkspaceFileMap, candidatePath: string) {
   return null;
 }
 
+function findWorkspaceScriptFile(
+  files: WorkspaceFileMap,
+  candidatePath: string,
+) {
+  const match = findWorkspaceFile(files, candidatePath);
+  return match && /\.[cm]?[jt]sx?$/.test(match) ? match : null;
+}
+
+type WorkspacePathAlias = {
+  patternPrefix: string;
+  patternSuffix: string;
+  targets: string[];
+};
+
+type WorkspacePathAliasConfig = {
+  aliases: WorkspacePathAlias[];
+  baseUrl: string;
+};
+
+const workspacePathAliasCache = new WeakMap<
+  WorkspaceFileMap,
+  WorkspacePathAliasConfig
+>();
+
+function readWorkspacePathAliases(
+  files: WorkspaceFileMap,
+): WorkspacePathAliasConfig {
+  const cached = workspacePathAliasCache.get(files);
+  if (cached) return cached;
+  const configSource = files.get("tsconfig.json") ?? files.get("jsconfig.json");
+  if (!configSource) {
+    const empty = { aliases: [], baseUrl: "" };
+    workspacePathAliasCache.set(files, empty);
+    return empty;
+  }
+
+  let config: unknown;
+  try {
+    config = JSON.parse(configSource);
+  } catch {
+    const empty = { aliases: [], baseUrl: "" };
+    workspacePathAliasCache.set(files, empty);
+    return empty;
+  }
+  if (!config || typeof config !== "object") {
+    const empty = { aliases: [], baseUrl: "" };
+    workspacePathAliasCache.set(files, empty);
+    return empty;
+  }
+  const compilerOptions = (config as Record<string, unknown>).compilerOptions;
+  if (!compilerOptions || typeof compilerOptions !== "object") {
+    const empty = { aliases: [], baseUrl: "" };
+    workspacePathAliasCache.set(files, empty);
+    return empty;
+  }
+  const options = compilerOptions as Record<string, unknown>;
+  const baseUrl =
+    typeof options.baseUrl === "string"
+      ? normalizeWorkspacePath(options.baseUrl).replace(/^\.\/?/, "")
+      : "";
+  const paths = options.paths;
+  if (!paths || typeof paths !== "object") {
+    const withoutPaths = { aliases: [], baseUrl };
+    workspacePathAliasCache.set(files, withoutPaths);
+    return withoutPaths;
+  }
+
+  const aliases = Object.entries(paths as Record<string, unknown>)
+    .flatMap(([pattern, targets]) => {
+      if (!Array.isArray(targets) || !targets.every((target) => typeof target === "string")) {
+        return [];
+      }
+      const wildcard = pattern.indexOf("*");
+      return [
+        {
+          patternPrefix: wildcard === -1 ? pattern : pattern.slice(0, wildcard),
+          patternSuffix: wildcard === -1 ? "" : pattern.slice(wildcard + 1),
+          targets,
+        },
+      ];
+    })
+    .sort(
+      (left, right) =>
+        right.patternPrefix.length + right.patternSuffix.length -
+        (left.patternPrefix.length + left.patternSuffix.length),
+    );
+  const result = { aliases, baseUrl };
+  workspacePathAliasCache.set(files, result);
+  return result;
+}
+
+function resolveWorkspacePathAlias(files: WorkspaceFileMap, source: string) {
+  const { aliases, baseUrl } = readWorkspacePathAliases(files);
+
+  for (const alias of aliases) {
+    if (
+      !source.startsWith(alias.patternPrefix) ||
+      !source.endsWith(alias.patternSuffix)
+    ) {
+      continue;
+    }
+    const wildcardValue = source.slice(
+      alias.patternPrefix.length,
+      source.length - alias.patternSuffix.length,
+    );
+    for (const target of alias.targets) {
+      const candidate = target.includes("*")
+        ? target.replaceAll("*", wildcardValue)
+        : wildcardValue
+          ? null
+          : target;
+      if (!candidate) continue;
+      const normalized = normalizeWorkspacePath(
+        path.normalize(path.join(baseUrl, candidate)),
+      ).replace(/^\.\/?/, "");
+      if (normalized.startsWith("..") || path.isAbsolute(normalized)) continue;
+      const match = findWorkspaceFile(files, normalized);
+      if (match) return match;
+    }
+  }
+  return null;
+}
+
 function resolveWorkspaceImport(
   files: WorkspaceFileMap,
   source: string,
   importerPath: string,
 ) {
   if (source.startsWith("/")) return findWorkspaceFile(files, source);
-  if (!source.startsWith(".")) return null;
+  if (!source.startsWith(".")) return resolveWorkspacePathAlias(files, source);
 
   const baseDir = importerPath ? path.dirname(importerPath) : "";
 
@@ -1276,8 +1414,16 @@ async function buildNativeServerBundle({
 }) {
   const serverFiles = new Map(transform.serverFiles);
   const startModule = findWorkspaceFile(serverFiles, "src/start");
+  const customServerModule = findWorkspaceScriptFile(
+    serverFiles,
+    "src/server",
+  );
   const routerModule = findWorkspaceFile(serverFiles, "src/router");
-  if (Object.keys(transform.serverFnsById).length === 0 && !routerModule) {
+  if (
+    Object.keys(transform.serverFnsById).length === 0 &&
+    !routerModule &&
+    !customServerModule
+  ) {
     return { chunks: {}, code: "", frameworkInputs: 0 };
   }
   for (const [splitId, splitSource] of transform.serverRouteSplits) {
@@ -1350,7 +1496,17 @@ if (typeof globalThis.${kernelManifest.server.resolverKey} !== 'function') {
     throw new Error('Unknown server function: ' + id);
   };
 }`;
-  const entrySource = resolverSource;
+  const customServerEntrySource = customServerModule
+    ? `
+import customServerEntry from ${JSON.stringify(customServerModule)};
+if (!customServerEntry || typeof customServerEntry.fetch !== 'function') {
+  throw new Error('src/server must default-export a TanStack Start server entry with fetch().');
+}
+globalThis.${kernelManifest.server.handlerKey} = (request, requestOptions = {}) =>
+  customServerEntry.fetch(request, requestOptions);
+`
+    : "";
+  const entrySource = `${resolverSource}\n${customServerEntrySource}`;
   const result = await build({
     absWorkingDir: absoluteWorkingDirectory,
     bundle: true,
@@ -2094,6 +2250,7 @@ async function buildSsrClientBundle({
       routeManifest: {},
     };
   const startModule = findWorkspaceFile(files, "src/start");
+  const customClientModule = findWorkspaceScriptFile(files, "src/client");
   const entryPath = "__tuto_ssr_client_entry__.tsx";
   const entryFiles = new Map(files);
   for (const [splitId, splitCode] of routeSplits) {
@@ -2145,9 +2302,13 @@ globalThis.fetch = createRouteFetch(
   ${JSON.stringify(serverRouteBase)},
 );
 
-startTransition(() => {
+${
+  customClientModule
+    ? `await import(${JSON.stringify(`./${customClientModule}`)});`
+    : `startTransition(() => {
   hydrateRoot(document, <StrictMode><StartClient /></StrictMode>);
-});`,
+});`
+}`,
   );
   const result = await build({
     absWorkingDir: absoluteWorkingDirectory,

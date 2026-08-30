@@ -13,6 +13,58 @@ const files: WorkspaceFile[] = [
     path: "src/main.ts",
   },
   {
+    content: JSON.stringify({
+      compilerOptions: {
+        baseUrl: ".",
+        paths: { "~/*": ["./src/*"] },
+      },
+    }),
+    language: "json",
+    path: "tsconfig.json",
+  },
+  {
+    content: `export function SeoAliasLabel() {
+  return <span data-testid="path-alias-component">Resolved through tsconfig paths</span>;
+}`,
+    language: "tsx",
+    path: "src/components/seo-label.tsx",
+  },
+  {
+    content: `export function makeGreeting(name) {
+  return 'Hello ' + name;
+}`,
+    language: "ts",
+    path: "src/server/greeting.ts",
+  },
+  {
+    content: `import { StartClient } from '@tanstack/react-start/client';
+import { StrictMode } from 'react';
+import { hydrateRoot } from 'react-dom/client';
+
+globalThis.__tutoCustomClientEntryLoaded = true;
+hydrateRoot(document, <StrictMode><StartClient /></StrictMode>);`,
+    language: "tsx",
+    path: "src/client.tsx",
+  },
+  {
+    content: `import handler, { createServerEntry } from '@tanstack/react-start/server-entry';
+
+export default createServerEntry({
+  async fetch(request, requestOptions) {
+    const response = await handler.fetch(request, requestOptions);
+    const headers = new Headers(response.headers);
+    headers.set('x-custom-server-entry', 'active');
+    return new Response(response.body, {
+      headers,
+      status: response.status,
+      statusText: response.statusText,
+    });
+  },
+});`,
+    language: "ts",
+    path: "src/server.ts",
+  },
+  {
     content: `import { Suspense, useState } from 'react';
 import { createMiddleware, createServerFn } from '@tanstack/react-start';
 import {
@@ -24,6 +76,7 @@ import {
 import { Link, createFileRoute } from '@tanstack/react-router';
 import { InitialRsc } from '../initial-rsc';
 import { multiplyOnRscServer } from '../rsc-actions';
+import { makeGreeting } from '~/server/greeting';
 
 const addContext = createMiddleware({ type: 'function' }).server(({ next }) =>
   next({ context: { source: 'browser-middleware' } }),
@@ -33,7 +86,7 @@ const greet = createServerFn({ method: 'POST' })
   .middleware([addContext])
   .inputValidator((data) => ({ name: String(data.name) }))
   .handler(async ({ context, data }) => ({
-    message: 'Hello ' + data.name,
+    message: makeGreeting(data.name),
     source: context.source,
   }));
 
@@ -207,6 +260,10 @@ function HomeRoute() {
       <Suspense fallback={<p data-testid="rsc-loading">Loading RSC</p>}>
         <section data-testid="rsc-result">{rscTree}</section>
       </Suspense>
+      <Link data-testid="deferred-link" to="/deferred">Open deferred loader fixture</Link>
+      <Link data-testid="ssr-full-link" to="/ssr-full">Open full SSR fixture</Link>
+      <Link data-testid="ssr-data-only-link" to="/ssr-data-only">Open data-only SSR fixture</Link>
+      <Link data-testid="ssr-client-only-link" to="/ssr-client-only">Open client-only SSR fixture</Link>
       <Link data-testid="error-link" to="/error">Open route error fixture</Link>
       <Link data-testid="not-found-link" to="/missing">Open not-found fixture</Link>
       <Link data-testid="about-link" to="/about">Open lazy route</Link>
@@ -331,9 +388,28 @@ export default async function RscRoot({ requestUrl }) {
   {
     content: `import './about.css';
 import { createFileRoute } from '@tanstack/react-router';
+import { SeoAliasLabel } from '~/components/seo-label';
 
 export const Route = createFileRoute('/about')({
-  component: () => <h2 className="about-route" data-testid="about-route">Lazy route loaded in the browser</h2>,
+  loader: () => ({ title: 'About compatibility fixture' }),
+  head: ({ loaderData }) => ({
+    links: [{ rel: 'canonical', href: 'https://tuto.test/about' }],
+    meta: [
+      { title: loaderData.title },
+      { name: 'description', content: 'TanStack Start head metadata fixture' },
+      { property: 'og:title', content: loaderData.title },
+    ],
+    scripts: [{
+      type: 'application/ld+json',
+      children: JSON.stringify({ '@context': 'https://schema.org', name: loaderData.title }),
+    }],
+  }),
+  component: () => (
+    <section>
+      <h2 className="about-route" data-testid="about-route">Lazy route loaded in the browser</h2>
+      <SeoAliasLabel />
+    </section>
+  ),
 });`,
     language: "tsx",
     path: "src/routes/about.tsx",
@@ -342,6 +418,114 @@ export const Route = createFileRoute('/about')({
     content: `.about-route { color: rgb(12, 34, 56); }`,
     language: "css",
     path: "src/routes/about.css",
+  },
+  {
+    content: `import { Suspense, useState } from 'react';
+import { Await, Link, createFileRoute } from '@tanstack/react-router';
+
+export const Route = createFileRoute('/deferred')({
+  loader: () => ({
+    immediate: 'immediate-loader-value',
+    deferred: new Promise((resolve) =>
+      setTimeout(() => resolve('deferred-loader-value'), 75),
+    ),
+  }),
+  component: DeferredRoute,
+});
+
+function DeferredRoute() {
+  const { deferred, immediate } = Route.useLoaderData();
+  const [count, setCount] = useState(0);
+  return (
+    <section>
+      <p data-testid="deferred-immediate">{immediate}</p>
+      <Suspense fallback={<p data-testid="deferred-pending">Loading deferred data</p>}>
+        <Await promise={deferred}>
+          {(value) => <p data-testid="deferred-value">{value}</p>}
+        </Await>
+      </Suspense>
+      <button data-testid="deferred-counter" onClick={() => setCount((value) => value + 1)}>
+        Deferred count: {count}
+      </button>
+      <Link data-testid="deferred-home" to="/">Return home</Link>
+    </section>
+  );
+}`,
+    language: "tsx",
+    path: "src/routes/deferred.tsx",
+  },
+  {
+    content: `import { Link, createFileRoute } from '@tanstack/react-router';
+
+export const Route = createFileRoute('/ssr-full')({
+  ssr: true,
+  loader: () => ({ source: typeof window === 'undefined' ? 'server-full-loader' : 'client-full-loader' }),
+  component: FullSsrRoute,
+});
+
+function FullSsrRoute() {
+  const data = Route.useLoaderData();
+  return (
+    <section data-testid="ssr-full-component">
+      full-component:{data.source}
+      <Link data-testid="ssr-full-home" to="/">Return home</Link>
+    </section>
+  );
+}`,
+    language: "tsx",
+    path: "src/routes/ssr-full.tsx",
+  },
+  {
+    content: `import { Link, createFileRoute } from '@tanstack/react-router';
+
+export const Route = createFileRoute('/ssr-data-only')({
+  ssr: 'data-only',
+  loader: () => ({ source: typeof window === 'undefined' ? 'server-data-only-loader' : 'client-data-only-loader' }),
+  pendingComponent: () => <p data-testid="ssr-data-only-pending">data-only-pending</p>,
+  component: DataOnlyRoute,
+});
+
+function DataOnlyRoute() {
+  if (typeof window === 'undefined') {
+    throw new Error('data-only component rendered on the server');
+  }
+  const data = Route.useLoaderData();
+  return (
+    <section data-testid="ssr-data-only-component">
+      data-only-component:{data.source}
+      <Link data-testid="ssr-data-only-home" to="/">Return home</Link>
+    </section>
+  );
+}`,
+    language: "tsx",
+    path: "src/routes/ssr-data-only.tsx",
+  },
+  {
+    content: `import { Link, createFileRoute } from '@tanstack/react-router';
+
+export const Route = createFileRoute('/ssr-client-only')({
+  ssr: false,
+  loader: () => {
+    if (typeof window === 'undefined') {
+      throw new Error('client-only loader executed on the server');
+    }
+    return { source: 'client-only-loader' };
+  },
+  pendingComponent: () => <p data-testid="ssr-client-only-pending">client-only-pending</p>,
+  component: ClientOnlyRoute,
+});
+
+function ClientOnlyRoute() {
+  const data = Route.useLoaderData();
+  return (
+    <section data-testid="ssr-client-only-component">
+      client-only-component:{data.source}
+      <Link data-testid="ssr-client-only-home" to="/">Return home</Link>
+    </section>
+  );
+}`,
+    language: "tsx",
+    path: "src/routes/ssr-client-only.tsx",
   },
   {
     content: `import { Link, createFileRoute } from '@tanstack/react-router';
@@ -403,6 +587,7 @@ export const Route = createFileRoute('/api/echo')({
   },
   {
     content: `import {
+  HeadContent,
   Link,
   Outlet,
   Scripts,
@@ -412,14 +597,19 @@ export const Route = createFileRoute('/api/echo')({
 } from '@tanstack/react-router';
 import { Route as aboutRouteImport } from './routes/about';
 import { Route as apiEchoRouteImport } from './routes/api.echo';
+import { Route as deferredRouteImport } from './routes/deferred';
 import { Route as errorRouteImport } from './routes/error';
 import { Route as indexRouteImport } from './routes/index';
 import { Route as missingRouteImport } from './routes/missing';
+import { Route as ssrClientOnlyRouteImport } from './routes/ssr-client-only';
+import { Route as ssrDataOnlyRouteImport } from './routes/ssr-data-only';
+import { Route as ssrFullRouteImport } from './routes/ssr-full';
 
 const rootRoute = createRootRoute({
+  head: () => ({ meta: [{ title: 'TanStack Start browser E2E' }] }),
   component: () => (
     <html lang="en">
-      <head><title>TanStack Start browser E2E</title></head>
+      <head><HeadContent /></head>
       <body><Outlet /><Scripts /></body>
     </html>
   ),
@@ -445,18 +635,42 @@ const errorRoute = errorRouteImport.update({
   id: '/error',
   path: '/error',
 });
+const deferredRoute = deferredRouteImport.update({
+  getParentRoute: () => rootRoute,
+  id: '/deferred',
+  path: '/deferred',
+});
 const missingRoute = missingRouteImport.update({
   getParentRoute: () => rootRoute,
   id: '/missing',
   path: '/missing',
+});
+const ssrFullRoute = ssrFullRouteImport.update({
+  getParentRoute: () => rootRoute,
+  id: '/ssr-full',
+  path: '/ssr-full',
+});
+const ssrDataOnlyRoute = ssrDataOnlyRouteImport.update({
+  getParentRoute: () => rootRoute,
+  id: '/ssr-data-only',
+  path: '/ssr-data-only',
+});
+const ssrClientOnlyRoute = ssrClientOnlyRouteImport.update({
+  getParentRoute: () => rootRoute,
+  id: '/ssr-client-only',
+  path: '/ssr-client-only',
 });
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
   aboutRoute,
   apiEchoRoute,
+  deferredRoute,
   errorRoute,
   missingRoute,
+  ssrFullRoute,
+  ssrDataOnlyRoute,
+  ssrClientOnlyRoute,
 ]);
 
 export function getRouter() {
@@ -493,6 +707,12 @@ async function compilePreview(request: APIRequestContext) {
   return JSON.parse(redirect as string) as string;
 }
 
+function renderRoutePath(renderPath: string, pathname: string) {
+  const url = new URL(renderPath, "http://tuto.local");
+  url.searchParams.set("path", pathname);
+  return `${url.pathname}${url.search}`;
+}
+
 function collectBrowserErrors(page: Page) {
   const errors: string[] = [];
   page.on("console", (message) => {
@@ -513,9 +733,15 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
     status: number;
     workerId: string | null;
   }> = [];
+  const customServerEntryRpcHeaders: Array<string | null> = [];
 
   page.on("response", (response) => {
     const url = response.url();
+    if (url.includes("/core-rpc")) {
+      customServerEntryRpcHeaders.push(
+        response.headers()["x-custom-server-entry"] ?? null,
+      );
+    }
     if (url.includes("/core-asset") && url.includes("kind=chunk")) routeChunks.add(url);
     if (url.includes("/core-asset") && url.includes("kind=style") && url.includes("name=")) routeStyles.add(url);
     if (url.includes("/core-route") && url.includes("__tuto_rsc")) {
@@ -534,9 +760,61 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
     }
   });
 
+  const deferredSsrResponse = await request.get(
+    renderRoutePath(renderPath, "/deferred"),
+  );
+  const deferredSsrHtml = await deferredSsrResponse.text();
+  expect(deferredSsrResponse.status()).toBe(200);
+  expect(deferredSsrHtml).toContain("immediate-loader-value");
+  expect(deferredSsrHtml).toContain("Loading deferred data");
+  expect(deferredSsrHtml).toContain("deferred-loader-value");
+
+  const fullSsrResponse = await request.get(
+    renderRoutePath(renderPath, "/ssr-full"),
+  );
+  const fullSsrHtml = await fullSsrResponse.text();
+  expect(fullSsrResponse.status()).toBe(200);
+  expect(fullSsrResponse.headers()["x-custom-server-entry"]).toBe("active");
+  expect(fullSsrHtml).toContain("full-component:<!-- -->server-full-loader");
+
+  const dataOnlySsrResponse = await request.get(
+    renderRoutePath(renderPath, "/ssr-data-only"),
+  );
+  const dataOnlySsrHtml = await dataOnlySsrResponse.text();
+  expect(dataOnlySsrResponse.status()).toBe(200);
+  expect(dataOnlySsrHtml).toContain("server-data-only-loader");
+  expect(dataOnlySsrHtml).toContain("data-only-pending");
+  expect(dataOnlySsrHtml).not.toContain("data-only-component:");
+
+  const clientOnlySsrResponse = await request.get(
+    renderRoutePath(renderPath, "/ssr-client-only"),
+  );
+  const clientOnlySsrHtml = await clientOnlySsrResponse.text();
+  expect(clientOnlySsrResponse.status()).toBe(200);
+  expect(clientOnlySsrHtml).toContain("client-only-pending");
+  expect(clientOnlySsrHtml).not.toContain("client-only-component:");
+  expect(clientOnlySsrHtml).not.toContain(
+    "client-only loader executed on the server",
+  );
+
+  const aboutSsrResponse = await request.get(
+    renderRoutePath(renderPath, "/about"),
+  );
+  const aboutSsrHtml = await aboutSsrResponse.text();
+  expect(aboutSsrResponse.status()).toBe(200);
+  expect(aboutSsrHtml).toContain("<title>About compatibility fixture</title>");
+  expect(aboutSsrHtml).toContain(
+    'name="description" content="TanStack Start head metadata fixture"',
+  );
+  expect(aboutSsrHtml).toContain(
+    'rel="canonical" href="https://tuto.test/about"',
+  );
+  expect(aboutSsrHtml).toContain('type="application/ld+json"');
+
   const renderResponse = await page.goto(new URL(renderPath, baseURL).href);
   expect(renderResponse?.status()).toBe(200);
   const initialHtml = await renderResponse!.text();
+  expect(renderResponse?.headers()["x-custom-server-entry"]).toBe("active");
   expect(initialHtml).toContain("Initial Flight rendered in SSR");
   expect(initialHtml).not.toContain("inline-bound-action:");
   expect(initialHtml).toContain('<article data-testid="composite-card">');
@@ -546,6 +824,16 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   expect(initialHtml).toContain("data-rsc-css-href");
   expect(initialHtml).toContain("kind=style");
   await expect(page.getByRole("heading", { name: "Browser runtime fixture" })).toBeVisible();
+  expect(
+    await page.evaluate(
+      () =>
+        (
+          globalThis as typeof globalThis & {
+            __tutoCustomClientEntryLoaded?: boolean;
+          }
+        ).__tutoCustomClientEntryLoaded,
+    ),
+  ).toBe(true);
   await expect(page.getByTestId("initial-rsc-root")).toBeVisible();
   await expect(page.getByTestId("initial-rsc-message")).toHaveText(
     "initial-server-only-rsc",
@@ -621,9 +909,15 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
       headers: { "content-type": "text/plain" },
       method: "PATCH",
     });
-    return response.json();
+    return {
+      body: await response.json(),
+      customServerEntry: response.headers.get('x-custom-server-entry'),
+    };
   });
-  expect(directGatewayResult).toMatchObject({ body: "direct-body" });
+  expect(directGatewayResult).toMatchObject({
+    body: { body: "direct-body" },
+    customServerEntry: "active",
+  });
 
   await page.getByTestId("server-fn").click();
   await expect(page.getByTestId("server-result")).toContainText("Hello Ada");
@@ -641,6 +935,10 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
       fileText: "fixture-body",
       title: "compatibility-form",
     }),
+  );
+  expect(customServerEntryRpcHeaders.length).toBeGreaterThanOrEqual(4);
+  expect(customServerEntryRpcHeaders.every((value) => value === "active")).toBe(
+    true,
   );
 
   await page.getByTestId("request-fetch").click();
@@ -664,6 +962,39 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
     expect.objectContaining({ contentType: expect.stringContaining("text/x-component"), status: 200 }),
   ]);
   expect([...routeChunks].some((url) => !chunksBeforeRsc.has(url))).toBe(true);
+
+  await page.getByTestId("deferred-link").click();
+  await expect(page.getByTestId("deferred-immediate")).toHaveText(
+    "immediate-loader-value",
+  );
+  await expect(page.getByTestId("deferred-value")).toHaveText(
+    "deferred-loader-value",
+  );
+  await page.getByTestId("deferred-counter").click();
+  await expect(page.getByTestId("deferred-counter")).toHaveText(
+    "Deferred count: 1",
+  );
+  await page.getByTestId("deferred-home").click();
+  await expect(page.getByTestId("hydrate")).toBeVisible();
+
+  await page.getByTestId("ssr-full-link").click();
+  await expect(page.getByTestId("ssr-full-component")).toContainText(
+    "full-component:client-full-loader",
+  );
+  await page.getByTestId("ssr-full-home").click();
+
+  await page.getByTestId("ssr-data-only-link").click();
+  await expect(page.getByTestId("ssr-data-only-component")).toContainText(
+    "data-only-component:client-data-only-loader",
+  );
+  await page.getByTestId("ssr-data-only-home").click();
+
+  await page.getByTestId("ssr-client-only-link").click();
+  await expect(page.getByTestId("ssr-client-only-component")).toContainText(
+    "client-only-component:client-only-loader",
+  );
+  await page.getByTestId("ssr-client-only-home").click();
+  await expect(page.getByTestId("hydrate")).toBeVisible();
 
   const errorsBeforeExpectedRouteError = browserErrors.length;
   await page.getByTestId("error-link").click();
@@ -689,6 +1020,23 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   await page.getByTestId("about-link").click();
   await expect(page.getByTestId("about-route")).toHaveText("Lazy route loaded in the browser");
   await expect(page.getByTestId("about-route")).toHaveCSS("color", "rgb(12, 34, 56)");
+  await expect(page.getByTestId("path-alias-component")).toHaveText(
+    "Resolved through tsconfig paths",
+  );
+  await expect(page).toHaveTitle("About compatibility fixture");
+  await expect(page.locator('meta[name="description"]')).toHaveAttribute(
+    "content",
+    "TanStack Start head metadata fixture",
+  );
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+    "href",
+    "https://tuto.test/about",
+  );
+  expect(
+    await page.locator('script[type="application/ld+json"]').textContent(),
+  ).toContain(
+    "About compatibility fixture",
+  );
   expect([...routeChunks].some((url) => !chunksBeforeNavigation.has(url))).toBe(true);
   expect(
     [...routeStyles].some((url) => !stylesBeforeNavigation.has(url)),

@@ -281,18 +281,28 @@
     {
       "id": "deferred-loader-data",
       "area": "Streaming",
-      "status": "not-verified",
+      "status": "verified",
       "upstreamSource": "guide/routing.md",
-      "evidence": [],
-      "notes": "Deferred route loader values and Await/Suspense hydration are not yet in the compatibility suite."
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "hydrates and exercises the native Start browser runtime"
+        }
+      ],
+      "notes": "Immediate and promised loader values stream through SSR, resolve through Await/Suspense, hydrate, and remain interactive."
     },
     {
       "id": "selective-ssr",
       "area": "Rendering modes",
-      "status": "not-verified",
+      "status": "verified",
       "upstreamSource": "guide/selective-ssr.md",
-      "evidence": [],
-      "notes": "Per-route ssr true/data-only/false behavior has not been exercised."
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "hydrates and exercises the native Start browser runtime"
+        }
+      ],
+      "notes": "Per-route ssr true, data-only, and false modes distinguish server loader execution, server component rendering, pending fallback, and client navigation."
     },
     {
       "id": "deferred-hydration",
@@ -305,10 +315,15 @@
     {
       "id": "seo-head-metadata",
       "area": "Document output",
-      "status": "not-verified",
+      "status": "verified",
       "upstreamSource": "guide/seo.md",
-      "evidence": [],
-      "notes": "Route head/meta/link/script merging needs a focused SSR and navigation fixture."
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "hydrates and exercises the native Start browser runtime"
+        }
+      ],
+      "notes": "Loader-derived title, description, Open Graph metadata, canonical links, and JSON-LD are covered in SSR and client navigation."
     },
     {
       "id": "static-prerendering",
@@ -350,18 +365,28 @@
     {
       "id": "custom-entry-points",
       "area": "Compiler configuration",
-      "status": "not-verified",
+      "status": "verified",
       "upstreamSource": "guide/client-entry-point.md",
-      "evidence": [],
-      "notes": "Custom client and server entry points are not currently fixture-tested."
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "hydrates and exercises the native Start browser runtime"
+        }
+      ],
+      "notes": "Optional src/client hydration and src/server fetch wrappers run after the platform bootstrap while preserving the request gateway."
     },
     {
       "id": "path-aliases",
       "area": "Compiler configuration",
-      "status": "not-verified",
+      "status": "verified",
       "upstreamSource": "guide/path-aliases.md",
-      "evidence": [],
-      "notes": "Workspace tsconfig path aliases need explicit compiler coverage."
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "hydrates and exercises the native Start browser runtime"
+        }
+      ],
+      "notes": "Root tsconfig/jsconfig baseUrl and paths aliases resolve across route, client, and server revision graphs."
     },
     {
       "id": "spa-mode",

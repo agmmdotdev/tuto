@@ -373,9 +373,11 @@ sandbox, so deployments must apply the appropriate trust and access policy to
 student code.
 
 The next runtime work is compatibility coverage inside that architecture:
-deferred loader data, selective SSR, SEO/head metadata, path aliases, and
-custom entry points. Route error/not-found UI is now covered. The compatibility
-matrix is the source of truth for that sequence.
+deferred hydration, environment functions/variables, and the broader
+import-protection policy matrix. Deferred loader data, selective SSR,
+SEO/head metadata, path aliases, custom entry points, and route error/not-found
+UI are covered. The compatibility matrix is the source of truth for that
+sequence.
 
 The standalone proof script above still uses its original minimal host adapter
 to isolate the compiler experiment. The integrated playground no longer relies

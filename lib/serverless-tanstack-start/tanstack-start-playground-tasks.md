@@ -12,13 +12,16 @@ The remaining playground work is:
    - Hide generated files (`src/routeTree.gen.ts`, `src/tanstack-router-register.d.ts`, and `src/tanstack-router-editor-shim.tsx`) from the explorer tree, or mark them as read-only in the editor.
 3. **Monaco Diagnostics Refresh:**
    - Force a diagnostics compile check on all open Monaco editor models when the route tree is regenerated to resolve or display link type warnings instantly.
-4. **Route Rendering Compatibility:**
-   - Add official-guide-inspired browser fixtures for deferred loader data, selective SSR, and SEO/head metadata. Error boundaries and not-found UI are covered.
-5. **Compiler Configuration Compatibility:**
-   - Add focused fixtures for path aliases and custom client/server entry points.
+4. **Deferred Hydration Compatibility:**
+   - Add browser fixtures for TanStack Start's explicit deferred-hydration strategies. Deferred loader data is already covered separately.
+5. **Environment and Import Protection:**
+   - Cover environment functions/variables and the full client/server import-protection policy matrix. Server implementation leakage is already checked.
 
 The versioned support contract and its executable evidence live in
 [`TANSTACK_START_COMPATIBILITY.md`](./TANSTACK_START_COMPATIBILITY.md). Static
 prerendering, ISR, static server functions, third-party hosting adapters, and a
 per-student Vite/HMR server are not prerequisites for the interactive Tuto
 preview path.
+
+Deferred loader data, selective SSR, SEO/head metadata, path aliases, and
+custom client/server entry points are covered by the real-browser checkpoint.

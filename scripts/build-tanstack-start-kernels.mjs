@@ -70,6 +70,7 @@ const serverModules = [
   "@tanstack/react-start",
   "@tanstack/react-start/rsc",
   "@tanstack/react-start/server",
+  "@tanstack/react-start/server-entry",
   "@tanstack/react-start/server-rpc",
   "@tanstack/react-start/ssr-rpc",
   "@tanstack/start-storage-context",

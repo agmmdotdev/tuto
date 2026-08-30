@@ -52,16 +52,16 @@ or Markdown drift.
 | `rsc-action-encryption` | React Server Components | **verified** | [Server components](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/server-components.md) | AES-GCM bound arguments and tamper rejection. |
 | `rsc-css-resources` | React Server Components | **verified** | [Server components](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/server-components.md) | Client-boundary and pure server-module CSS. |
 | `error-boundary-ui` | Routing and SSR | **verified** | [Error boundaries](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/error-boundaries.md) | Firefox route `errorComponent`, `notFoundComponent`, and recovery navigation. |
-| `deferred-loader-data` | Streaming | **not-verified** | [Routing](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/routing.md) | Add deferred loader and Suspense hydration fixtures inspired by the official `start-basic` example. |
-| `selective-ssr` | Rendering modes | **not-verified** | [Selective SSR](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/selective-ssr.md) | Test per-route full, data-only, and client-only modes. |
+| `deferred-loader-data` | Streaming | **verified** | [Routing](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/routing.md) | Immediate/promised loader values, streamed SSR, Await/Suspense, hydration, and interaction. |
+| `selective-ssr` | Rendering modes | **verified** | [Selective SSR](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/selective-ssr.md) | Full, data-only, and client-only initial renders plus client navigation. |
 | `deferred-hydration` | Rendering modes | **not-verified** | [Deferred hydration](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/deferred-hydration.md) | Add hydration-strategy fixtures. |
-| `seo-head-metadata` | Document output | **not-verified** | [SEO](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/seo.md) | Test SSR and navigated head/meta/link/script merging. |
+| `seo-head-metadata` | Document output | **verified** | [SEO](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/seo.md) | Loader-derived title/meta/Open Graph/canonical/JSON-LD in SSR and navigation. |
 | `static-prerendering` | Build output | **not-verified** | [Static prerendering](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/static-prerendering.md) | Current host is request-time, not static-output generation. |
 | `incremental-static-regeneration` | Build output | **not-verified** | [ISR](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/isr.md) | No preview-host regeneration contract yet. |
 | `static-server-functions` | Build output | **not-verified** | [Static server functions](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/static-server-functions.md) | No build-time result generation in request previews. |
 | `environment-import-protection` | Compiler protection | **partial** | [Import protection](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/import-protection.md) | Server implementation leakage is checked; full policy matrix remains. |
-| `custom-entry-points` | Compiler configuration | **not-verified** | [Client entry](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/client-entry-point.md) | Add custom client and server entry fixtures. |
-| `path-aliases` | Compiler configuration | **not-verified** | [Path aliases](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/path-aliases.md) | Add workspace tsconfig alias coverage. |
+| `custom-entry-points` | Compiler configuration | **verified** | [Client entry](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/client-entry-point.md) / [server entry](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/server-entry-point.md) | Optional `src/client` hydration and `src/server` fetch wrappers preserve the Tuto bootstrap. |
+| `path-aliases` | Compiler configuration | **verified** | [Path aliases](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/path-aliases.md) | Root tsconfig/jsconfig aliases resolve across route, client, and server graphs. |
 | `spa-mode` | Rendering modes | **not-verified** | [SPA mode](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/spa-mode.md) | SSR is the current target; SPA shell behavior is untested. |
 | `vite-plugin-ecosystem` | Compiler configuration | **partial** | [CSS](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/css-styling.md) | CSS and platform Tailwind work; arbitrary Vite plugins are not promised. |
 | `vite-dev-server-hmr` | Development server | **out-of-scope** | [Execution model](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/execution-model.md) | Tuto recompiles content revisions with esbuild; no per-student Vite watcher. |
@@ -70,7 +70,7 @@ or Markdown drift.
 
 ## Next compatibility slice
 
-The highest-value next slice is deferred loader data, selective SSR, and
-SEO/head metadata, followed by path aliases and custom entry points. These
-exercise the existing router/SSR and compiler pipelines and do not require
-changing the request-based Node/esbuild architecture.
+The next compatibility slice is deferred hydration, environment functions and
+variables, and the broader import-protection policy matrix. These build on the
+same request-based Node/esbuild architecture; they do not require a watcher,
+container, or microVM.
