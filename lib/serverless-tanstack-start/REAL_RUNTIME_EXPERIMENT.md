@@ -212,6 +212,19 @@ Firefox fixture imports a stylesheet from an initial RSC client boundary and
 proves that its chunk is preloaded, its CSS is present and applied in the first
 document, and later route CSS remains independently lazy.
 
+CSS imported only by a pure RSC server module now follows the upstream
+`@vitejs/plugin-rsc` resource path as well. The official
+`transformRscCssExport` transform wraps eligible server-component exports and
+emits `import.meta.viteRsc.loadCss()`. The request compiler resolves each
+marker against that importer's workspace graph, compiles its CSS into a
+revision asset, and replaces the marker with the matching stylesheet resource
+element (`precedence` plus `data-rsc-css-href`). The existing signed asset
+gateway serves the CSS, and TanStack's RSC serialization path carries the href
+through initial SSR and hydration. Explicit static-string `loadCss(importer)`
+markers use the same path. The Firefox checkpoint proves that a stylesheet
+reachable only from a server component is linked in the first document and
+applied before hydration.
+
 RSC server actions use the official `@vitejs/plugin-rsc` transforms and React
 transport. Module-level `"use server"` exports become `createServerReference`
 proxies in browser and SSR revisions while their implementations remain in
@@ -240,10 +253,9 @@ rendered documents.
 
 This remains a checkpoint rather than complete TanStack Start RSC parity. The
 low-level endpoint plus loader-owned `renderServerComponent` and
-`createCompositeComponent` paths and RSC server actions are covered.
-CSS imported only by pure RSC server modules is not covered and still needs the
-official `import.meta.viteRsc.loadCss()` marker/resource path.
-An operating-system isolation boundary also remains outside this tier.
+`createCompositeComponent` paths, RSC server actions, client-reference CSS,
+and pure-server RSC CSS resources are covered. An operating-system isolation
+boundary remains outside this tier.
 
 ### Cross-instance artifact storage
 
@@ -351,9 +363,7 @@ isolated in the RSC kernel.
 
 ## Remaining architecture work
 
-1. extend the RSC checkpoint with resource markers for CSS imported only by
-   pure RSC server modules.
-2. move execution and the shared runtime directory behind a hardened sandbox
+1. move execution and the shared runtime directory behind a hardened sandbox
    such as an isolated container or
    microVM before treating arbitrary untrusted student code as safe for a
    multi-tenant production service. The current child-process boundary protects
@@ -372,5 +382,5 @@ HTTP path, and the documented opt-in Flight/client-boundary slice. It does not
 yet claim complete TanStack Start RSC parity. The covered loader-owned
 `renderServerComponent` path now includes initial SSR and hydration; Composite
 Components now include nested selections, slots, initial SSR, and hydration.
-Pure-server RSC CSS resource markers and an operating-system security boundary
-remain work for the full-runtime tier.
+Pure-server RSC CSS resources now use the official compiler marker path. An
+operating-system security boundary remains work for the full-runtime tier.

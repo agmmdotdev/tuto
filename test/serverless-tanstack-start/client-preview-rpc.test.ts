@@ -308,6 +308,65 @@ globalThis.__tutoRscAction = rscAction;`,
   assert.match(preview.html, /tuto-rsc-action-[a-f0-9]{20}/);
 });
 
+test("emits CSS imported only by an RSC server module as a Flight resource", () => {
+  const files: WorkspaceFileInput[] = [
+    {
+      path: "index.html",
+      language: "html",
+      content: '<script type="module" src="./src/main.ts"></script>',
+    },
+    {
+      path: "src/main.ts",
+      language: "ts",
+      content: "export {};",
+    },
+    {
+      path: "src/rsc-only.css",
+      language: "css",
+      content: ".rsc-only-resource { color: rgb(71, 82, 93); }",
+    },
+    {
+      path: "src/manual-only.css",
+      language: "css",
+      content: ".manual-rsc-resource { color: rgb(19, 29, 39); }",
+    },
+    {
+      path: "src/manual-css-anchor.ts",
+      language: "ts",
+      content: `import './manual-only.css';
+export const anchor = true;`,
+    },
+    {
+      path: "src/rsc.tsx",
+      language: "tsx",
+      content: `import './rsc-only.css';
+export default function RscRoot() {
+  return <>
+    {import.meta.viteRsc.loadCss('./manual-css-anchor')}
+    <article className="rsc-only-resource">Pure RSC CSS</article>
+  </>;
+}`,
+    },
+  ];
+  const preview = compilePreview(files);
+
+  assert.equal(preview.success, true, preview.html);
+  assert.doesNotMatch(preview.ssrCss, /rsc-only-resource/);
+  assert.equal(
+    Object.values(preview.ssrCssChunks).filter(
+      (css) =>
+        css.includes("rsc-only-resource") ||
+        css.includes("manual-rsc-resource"),
+    ).length,
+    2,
+  );
+  const rscOutput = Object.values(preview.serverChunks).join("\n");
+  assert.match(rscOutput, /data-rsc-css-href/);
+  assert.match(rscOutput, /vite-rsc\/importer-resources/);
+  assert.match(rscOutput, /kind=style/);
+  assert.doesNotMatch(rscOutput, /import\.meta\.viteRsc\.loadCss/);
+});
+
 test("the native Start host runs request middleware, cookies, and sessions", async () => {
   const files: WorkspaceFileInput[] = [
     {

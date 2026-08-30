@@ -5,6 +5,7 @@ import nodePath from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { parseAstAsync } from "rolldown/parseAst";
+import { transformRscCssExport } from "@vitejs/plugin-rsc/plugin";
 import {
   hasDirective,
   transformDirectiveProxyExport,
@@ -84,6 +85,15 @@ type RouteManifestEntry = {
 type RscClientReferenceDeps = {
   css: string[];
   js: string[];
+};
+type RscCssResource = {
+  assetName: string;
+  href: string;
+};
+type RscCssResourceBuild = {
+  chunks: Record<string, string>;
+  resourcesByImporter: Record<string, RscCssResource[]>;
+  usedAssets: Set<string>;
 };
 type ServerlessPreviewResult = {
   buildMetrics: {
@@ -580,6 +590,194 @@ function rscServerActionReferenceKey(filePath: string, root: string) {
     .slice(0, 20)}`;
 }
 
+function rscCssResourceKey(filePath: string) {
+  return `tuto-rsc-css-${createHash("sha256")
+    .update(filePath)
+    .digest("hex")
+    .slice(0, 20)}`;
+}
+
+type RscAstNode = {
+  type?: string;
+  start?: number;
+  end?: number;
+  name?: string;
+  value?: unknown;
+  computed?: boolean;
+  object?: RscAstNode;
+  property?: RscAstNode;
+  meta?: RscAstNode;
+  callee?: RscAstNode;
+  arguments?: RscAstNode[];
+  source?: RscAstNode;
+  [key: string]: unknown;
+};
+
+function isCssImportPath(value: unknown): value is string {
+  return typeof value === "string" && /\.css(?:\?[^#]*)?(?:#.*)?$/.test(value);
+}
+
+function hasDirectCssImport(ast: RscAstNode) {
+  const body = Array.isArray(ast.body) ? (ast.body as RscAstNode[]) : [];
+  return body.some(
+    (node) =>
+      (node.type === "ImportDeclaration" ||
+        node.type === "ExportAllDeclaration" ||
+        node.type === "ExportNamedDeclaration") &&
+      isCssImportPath(node.source?.value),
+  );
+}
+
+function visitRscAst(value: unknown, visitor: (node: RscAstNode) => void) {
+  if (Array.isArray(value)) {
+    for (const child of value) visitRscAst(child, visitor);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+
+  const node = value as RscAstNode;
+  if (typeof node.type === "string") visitor(node);
+  for (const [key, child] of Object.entries(node)) {
+    if (key !== "loc") visitRscAst(child, visitor);
+  }
+}
+
+function isRscLoadCssCall(node: RscAstNode) {
+  const callee = node.callee;
+  const viteRsc = callee?.object;
+  const importMeta = viteRsc?.object;
+  return (
+    node.type === "CallExpression" &&
+    callee?.type === "MemberExpression" &&
+    callee.computed !== true &&
+    callee.property?.name === "loadCss" &&
+    viteRsc?.type === "MemberExpression" &&
+    viteRsc.computed !== true &&
+    viteRsc.property?.name === "viteRsc" &&
+    importMeta?.type === "MetaProperty" &&
+    importMeta.meta?.name === "import" &&
+    importMeta.property?.name === "meta"
+  );
+}
+
+function resolveRscCssImporter(
+  files: WorkspaceFileMap,
+  filePath: string,
+  argument: RscAstNode | undefined,
+) {
+  if (!argument) return filePath;
+  if (argument.type !== "Literal" || typeof argument.value !== "string") {
+    throw new Error(
+      `import.meta.viteRsc.loadCss() in ${filePath} requires a static string importer.`,
+    );
+  }
+  const importer =
+    findWorkspaceFile(files, argument.value) ??
+    resolveWorkspaceImport(files, argument.value, filePath);
+  if (!importer) {
+    throw new Error(
+      `Unable to resolve RSC CSS importer ${argument.value} from ${filePath}.`,
+    );
+  }
+  return importer;
+}
+
+async function transformRscCssResources(
+  source: string,
+  filePath: string,
+  files: WorkspaceFileMap,
+  resourcesByImporter: Record<string, RscCssResource[]>,
+) {
+  let output = source;
+  let ast = (await parseAstAsync(output, {
+    lang: "tsx",
+  })) as unknown as RscAstNode;
+
+  if (hasDirectCssImport(ast)) {
+    const transformed = await transformRscCssExport({
+      ast: ast as unknown as Parameters<
+        typeof transformRscCssExport
+      >[0]["ast"],
+      code: output,
+      filter: (_name, meta) =>
+        !!(
+          (meta.isFunction &&
+            meta.declName &&
+            /^[A-Z]/.test(meta.declName)) ||
+          (meta.defaultExportIdentifierName &&
+            /^[A-Z]/.test(meta.defaultExportIdentifierName))
+        ),
+    });
+    if (transformed) output = transformed.output.toString();
+  }
+
+  if (!output.includes("import.meta.viteRsc.loadCss")) return output;
+  const hasReactBinding = output.includes("__vite_rsc_react__");
+  ast = (await parseAstAsync(output, {
+    lang: "tsx",
+  })) as unknown as RscAstNode;
+  const calls: Array<{
+    end: number;
+    importer: string;
+    start: number;
+  }> = [];
+  visitRscAst(ast, (node) => {
+    if (!isRscLoadCssCall(node)) return;
+    if (
+      typeof node.start !== "number" ||
+      typeof node.end !== "number" ||
+      (node.arguments?.length ?? 0) > 1
+    ) {
+      throw new Error(`Invalid import.meta.viteRsc.loadCss() in ${filePath}.`);
+    }
+    calls.push({
+      end: node.end,
+      importer: resolveRscCssImporter(files, filePath, node.arguments?.[0]),
+      start: node.start,
+    });
+  });
+  if (calls.length === 0) return output;
+
+  const imports = new Map<string, string>();
+  for (const call of calls) {
+    const resourceKey = rscCssResourceKey(call.importer);
+    resourcesByImporter[call.importer] ??= [];
+    imports.set(
+      resourceKey,
+      `import * as __vite_rsc_importer_resources_${resourceKey.replaceAll("-", "_")} from ${JSON.stringify(`virtual:tuto-rsc/css/${resourceKey}`)};`,
+    );
+  }
+  for (const call of calls.sort((left, right) => right.start - left.start)) {
+    const resourceKey = rscCssResourceKey(call.importer);
+    const identifier = `__vite_rsc_importer_resources_${resourceKey.replaceAll("-", "_")}`;
+    output = `${output.slice(0, call.start)}__vite_rsc_react__.createElement(${identifier}.Resources)${output.slice(call.end)}`;
+  }
+  const reactImport = hasReactBinding
+    ? ""
+    : `import __vite_rsc_react__ from "react";`;
+  return `${reactImport}${[...imports.values()].join("")}${output}`;
+}
+
+function createRscCssResourcesModule(resources: RscCssResource[]) {
+  return `
+import __vite_rsc_react__ from "react";
+const resources = ${JSON.stringify(resources.map(({ href }) => href))};
+export function Resources() {
+  return __vite_rsc_react__.createElement(
+    __vite_rsc_react__.Fragment,
+    null,
+    resources.map((href) => __vite_rsc_react__.createElement("link", {
+      "data-rsc-css-href": href,
+      href,
+      key: "css:" + href,
+      precedence: "vite-rsc/importer-resources",
+      rel: "stylesheet",
+    })),
+  );
+}
+`;
+}
+
 async function transformRscServerActionProxy(
   source: string,
   filePath: string,
@@ -682,11 +880,13 @@ async function collectRscClientReferences(files: WorkspaceFileMap) {
 
 function createRscWorkspacePlugin({
   clientReferences,
+  cssResources,
   entrySource,
   files,
   root,
 }: {
   clientReferences: Record<string, string>;
+  cssResources: RscCssResourceBuild;
   entrySource: string;
   files: WorkspaceFileMap;
   root: string;
@@ -704,6 +904,10 @@ function createRscWorkspacePlugin({
       buildApi.onResolve({ filter: /^__tuto_rsc_entry__$/ }, () => ({
         path: "__tuto_rsc_entry__",
         namespace: "tuto-rsc-entry",
+      }));
+      buildApi.onResolve({ filter: /^virtual:tuto-rsc\/css\// }, (args) => ({
+        path: args.path,
+        namespace: "tuto-rsc-css-resource",
       }));
       buildApi.onResolve({ filter: /.*/ }, (args) => {
         const rootedModule = toWorkspaceModuleId(root, args.path);
@@ -728,6 +932,29 @@ function createRscWorkspacePlugin({
         resolveDir: absoluteWorkingDirectory,
       }));
       buildApi.onLoad(
+        { filter: /.*/, namespace: "tuto-rsc-css-resource" },
+        (args) => {
+          const resourceKey = args.path.slice(
+            "virtual:tuto-rsc/css/".length,
+          );
+          const importer = Object.keys(cssResources.resourcesByImporter).find(
+            (filePath) => rscCssResourceKey(filePath) === resourceKey,
+          );
+          if (!importer) {
+            throw new Error(`Unknown RSC CSS resource: ${resourceKey}`);
+          }
+          const resources = cssResources.resourcesByImporter[importer] ?? [];
+          for (const resource of resources) {
+            cssResources.usedAssets.add(resource.assetName);
+          }
+          return {
+            contents: createRscCssResourcesModule(resources),
+            loader: "js",
+            resolveDir: absoluteWorkingDirectory,
+          };
+        },
+      );
+      buildApi.onLoad(
         { filter: /.*/, namespace: "tuto-rsc-workspace" },
         async (args) => {
           const source = files.get(args.path);
@@ -737,7 +964,12 @@ function createRscWorkspacePlugin({
           const reference = referenceByFile.get(args.path);
           if (!reference) {
             return {
-              contents: source,
+              contents: await transformRscCssResources(
+                source,
+                args.path,
+                files,
+                cssResources.resourcesByImporter,
+              ),
               loader,
               resolveDir: absoluteWorkingDirectory,
             };
@@ -1171,16 +1403,168 @@ if (typeof globalThis.${kernelManifest.server.resolverKey} !== 'function') {
   };
 }
 
+function createRscCssGraphBoundaryPlugin({
+  clientReferences,
+  files,
+  root,
+}: {
+  clientReferences: Record<string, string>;
+  files: WorkspaceFileMap;
+  root: string;
+}): Plugin {
+  const clientFiles = new Set(Object.values(clientReferences));
+  return {
+    name: "tuto-tanstack-start-rsc-css-boundaries",
+    setup(buildApi) {
+      buildApi.onResolve({ filter: /.*/ }, (args) => {
+        if (args.kind === "entry-point") return null;
+        const rootedModule = toWorkspaceModuleId(root, args.path);
+        const workspaceModule = files.has(rootedModule)
+          ? rootedModule
+          : files.has(args.path)
+            ? args.path
+            : resolveWorkspaceImport(files, args.path, args.importer);
+        return workspaceModule && clientFiles.has(workspaceModule)
+          ? { external: true, path: workspaceModule }
+          : null;
+      });
+    },
+  };
+}
+
+async function collectRscCssImporters(
+  files: WorkspaceFileMap,
+  clientReferences: Record<string, string>,
+) {
+  const clientFiles = new Set(Object.values(clientReferences));
+  const importers = new Set<string>();
+  await Promise.all(
+    [...files.entries()].map(async ([filePath, source]) => {
+      const loader = loaderForPath(filePath);
+      if (
+        clientFiles.has(filePath) ||
+        !(
+          loader === "js" ||
+          loader === "jsx" ||
+          loader === "ts" ||
+          loader === "tsx"
+        ) ||
+        (!source.includes(".css") &&
+          !source.includes("import.meta.viteRsc.loadCss"))
+      ) {
+        return;
+      }
+      const ast = (await parseAstAsync(source, {
+        lang: "tsx",
+      })) as unknown as RscAstNode;
+      if (hasDirectCssImport(ast)) importers.add(filePath);
+      if (!source.includes("import.meta.viteRsc.loadCss")) return;
+      visitRscAst(ast, (node) => {
+        if (!isRscLoadCssCall(node) || (node.arguments?.length ?? 0) > 1)
+          return;
+        try {
+          importers.add(
+            resolveRscCssImporter(files, filePath, node.arguments?.[0]),
+          );
+        } catch {
+          // Reachable modules are validated again during the real RSC build.
+        }
+      });
+    }),
+  );
+  return importers;
+}
+
+async function buildRscCssResources({
+  clientReferences,
+  files,
+  root,
+  styleAssetBase,
+}: {
+  clientReferences: Record<string, string>;
+  files: WorkspaceFileMap;
+  root: string;
+  styleAssetBase: string;
+}): Promise<RscCssResourceBuild> {
+  const cssImporters = await collectRscCssImporters(files, clientReferences);
+  const entryPoints = Object.fromEntries(
+    [...cssImporters]
+      .map((filePath) => [rscCssResourceKey(filePath), filePath]),
+  );
+  if (Object.keys(entryPoints).length === 0) {
+    return { chunks: {}, resourcesByImporter: {}, usedAssets: new Set() };
+  }
+
+  const result = await build({
+    absWorkingDir: absoluteWorkingDirectory,
+    bundle: true,
+    charset: "utf8",
+    entryNames: "rsc-css/[name]-[hash]",
+    entryPoints,
+    format: "esm",
+    jsx: "automatic",
+    jsxImportSource: "react",
+    legalComments: "none",
+    logLevel: "silent",
+    metafile: true,
+    outdir: "/out",
+    packages: "external",
+    platform: "node",
+    plugins: [
+      createRscCssGraphBoundaryPlugin({ clientReferences, files, root }),
+      createWorkspacePlugin(files, root),
+    ],
+    splitting: true,
+    target: ["node22"],
+    treeShaking: true,
+    write: false,
+  });
+  const cssChunks = Object.fromEntries(
+    result.outputFiles
+      .filter((file) => file.path.endsWith(".css"))
+      .map((file) => [relativeOutputName(file.path), file.text]),
+  );
+  const resourcesByImporter: Record<string, RscCssResource[]> = {};
+
+  for (const [outputPath, output] of Object.entries(result.metafile.outputs)) {
+    if (!output.entryPoint || !outputPath.endsWith(".js")) continue;
+    const importer = workspacePathFromMetafileInput(output.entryPoint, files);
+    if (!importer) continue;
+    const assetName = output.cssBundle
+      ? relativeOutputName(output.cssBundle)
+      : null;
+    resourcesByImporter[importer] = assetName
+      ? [
+          {
+            assetName,
+            href: routeStyleUrl(styleAssetBase, assetName),
+          },
+        ]
+      : [];
+  }
+
+  return {
+    chunks: cssChunks,
+    resourcesByImporter,
+    usedAssets: new Set(),
+  };
+}
+
 async function buildRscServerBundle({
   clientReferences,
   root,
+  styleAssetBase,
   transform,
 }: {
   clientReferences: Record<string, string>;
   root: string;
+  styleAssetBase: string;
   transform: StartServerFunctionsTransform;
 }) {
   const files = new Map(transform.serverFiles);
+  for (const [splitId, splitSource] of transform.serverRouteSplits) {
+    files.set(splitId, splitSource);
+  }
   const rscModule = findWorkspaceFile(files, "src/rsc");
   const rscServerActionReferences = await transformRscServerActionModules(
     files,
@@ -1207,7 +1591,14 @@ async function buildRscServerBundle({
       )}),`,
   );
   if (!rscModule && entries.length === 0 && actionEntries.length === 0)
-    return { chunks: {}, code: "" };
+    return { chunks: {}, code: "", cssChunks: {} };
+
+  const cssResources = await buildRscCssResources({
+    clientReferences,
+    files,
+    root,
+    styleAssetBase,
+  });
 
   const hasRscServerActions = actionEntries.length > 0;
   const actionRuntimeSource = hasRscServerActions
@@ -1355,7 +1746,13 @@ ${rscHandlerSource}
     platform: "node",
     plugins: [
       createKernelExternalPlugin("rsc"),
-      createRscWorkspacePlugin({ clientReferences, entrySource, files, root }),
+      createRscWorkspacePlugin({
+        clientReferences,
+        cssResources,
+        entrySource,
+        files,
+        root,
+      }),
     ],
     splitting: true,
     target: ["node22"],
@@ -1374,6 +1771,11 @@ ${rscHandlerSource}
         .map((file) => [relativeOutputName(file.path), file.text]),
     ),
     code: entry.text,
+    cssChunks: Object.fromEntries(
+      Object.entries(cssResources.chunks).filter(([assetName]) =>
+        cssResources.usedAssets.has(assetName),
+      ),
+    ),
   };
 }
 
@@ -1951,6 +2353,7 @@ async function compilePreview(
     const rscBuild = await buildRscServerBundle({
       clientReferences: rscClientReferences,
       root,
+      styleAssetBase,
       transform,
     });
     const serverBundle = rscBuild.code
@@ -1959,6 +2362,10 @@ async function compilePreview(
     const serverChunks = {
       ...serverBuild.chunks,
       ...rscBuild.chunks,
+    };
+    const ssrCssChunks = {
+      ...ssrClientBuild.cssChunks,
+      ...rscBuild.cssChunks,
     };
     const durationMs = Date.now() - startedAt;
     const buildMetrics = {
@@ -1971,7 +2378,7 @@ async function compilePreview(
           0,
         ) +
         Buffer.byteLength(ssrClientBuild.css) +
-        Object.values(ssrClientBuild.cssChunks).reduce(
+        Object.values(ssrCssChunks).reduce(
           (bytes, chunk) => bytes + Buffer.byteLength(chunk),
           0,
         ),
@@ -2011,7 +2418,7 @@ async function compilePreview(
       ssrClientBundle: ssrClientBuild.code,
       ssrClientChunks: ssrClientBuild.chunks,
       ssrCss: ssrClientBuild.css,
-      ssrCssChunks: ssrClientBuild.cssChunks,
+      ssrCssChunks,
       serverBundle,
       serverChunks,
       serverFnIds: Object.keys(serverFnsById),

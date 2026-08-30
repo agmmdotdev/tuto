@@ -166,7 +166,8 @@ export async function multiplyOnRscServer(left, right) {
     path: "src/rsc-actions.ts",
   },
   {
-    content: `import { InitialRscCounter } from './initial-rsc-counter';
+    content: `import './initial-rsc.css';
+import { InitialRscCounter } from './initial-rsc-counter';
 
 export function InitialRsc() {
   const prefix = 'inline-bound-action:';
@@ -175,7 +176,7 @@ export function InitialRsc() {
     return prefix + value;
   }
   return (
-    <article data-testid="initial-rsc-root">
+    <article className="initial-rsc-only-resource" data-testid="initial-rsc-root">
       <h2>Initial Flight rendered in SSR</h2>
       <InitialRscCounter
         action={describeFromServer}
@@ -187,6 +188,11 @@ export function InitialRsc() {
 }`,
     language: "tsx",
     path: "src/initial-rsc.tsx",
+  },
+  {
+    content: `.initial-rsc-only-resource { border-bottom: 4px solid rgb(41, 73, 105); }`,
+    language: "css",
+    path: "src/initial-rsc.css",
   },
   {
     content: `'use client';
@@ -420,6 +426,7 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   expect(initialHtml).toContain('<button data-testid="composite-title-slot">');
   expect(initialHtml).toContain("Children supplied by the client route");
   expect(initialHtml).toContain('rel="modulepreload"');
+  expect(initialHtml).toContain("data-rsc-css-href");
   expect(initialHtml).toContain("kind=style");
   await expect(page.getByRole("heading", { name: "Browser runtime fixture" })).toBeVisible();
   await expect(page.getByTestId("initial-rsc-root")).toBeVisible();
@@ -428,6 +435,10 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   );
   await expect(page.getByTestId("initial-rsc-counter")).toHaveText(
     "Initial RSC count: 5",
+  );
+  await expect(page.getByTestId("initial-rsc-root")).toHaveCSS(
+    "border-bottom-color",
+    "rgb(41, 73, 105)",
   );
   await expect(page.getByTestId("initial-rsc-root").locator("div").first()).toHaveCSS(
     "border-top-color",
