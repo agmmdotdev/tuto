@@ -1,16 +1,23 @@
-const builtins = Promise.all([import("node:fs/promises"), import("node:path")]);
+const builtins = Promise.all([
+  import("node:crypto"),
+  import("node:fs/promises"),
+  import("node:path"),
+]);
 
 let initialization;
 
 process.on("message", async (message) => {
   if (message.type === "initialize") {
-    const [{ readFile }, { isAbsolute }] = await builtins;
+    const [{ createHash }, { readFile }, { isAbsolute }] = await builtins;
     const serialized = JSON.stringify(message);
     const entrySource = await readFile(message.runtime.entryPath, "utf8");
     initialization = {
       entryContainsSource: entrySource.includes("ipc-secret-source"),
       entryPathIsAbsolute: isAbsolute(message.runtime.entryPath),
       initializeBytesUnderOneKilobyte: Buffer.byteLength(serialized) < 1_024,
+      rscActionEncryptionKeyHash: createHash("sha256")
+        .update(message.rscActionEncryptionKey)
+        .digest("hex"),
       sourceCrossedIpc: serialized.includes("ipc-secret-source"),
     };
     process.send({

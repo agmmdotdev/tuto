@@ -385,20 +385,29 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   const routeChunks = new Set<string>();
   const routeStyles = new Set<string>();
   const flightResponses: Array<{ contentType: string | null; status: number }> = [];
-  const actionResponses: Array<{ contentType: string | null; status: number }> = [];
+  const actionResponses: Array<{
+    contentType: string | null;
+    status: number;
+    workerId: string | null;
+  }> = [];
 
   page.on("response", (response) => {
     const url = response.url();
     if (url.includes("/core-asset") && url.includes("kind=chunk")) routeChunks.add(url);
     if (url.includes("/core-asset") && url.includes("kind=style") && url.includes("name=")) routeStyles.add(url);
     if (url.includes("/core-route") && url.includes("__tuto_rsc")) {
-      const target = url.includes("__tuto_rsc_action")
-        ? actionResponses
-        : flightResponses;
-      target.push({
+      const responseSummary = {
         contentType: response.headers()["content-type"] ?? null,
         status: response.status(),
-      });
+      };
+      if (url.includes("__tuto_rsc_action")) {
+        actionResponses.push({
+          ...responseSummary,
+          workerId: response.headers()["x-tuto-worker-id"] ?? null,
+        });
+      } else {
+        flightResponses.push(responseSummary);
+      }
     }
   });
 
@@ -406,6 +415,7 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   expect(renderResponse?.status()).toBe(200);
   const initialHtml = await renderResponse!.text();
   expect(initialHtml).toContain("Initial Flight rendered in SSR");
+  expect(initialHtml).not.toContain("inline-bound-action:");
   expect(initialHtml).toContain('<article data-testid="composite-card">');
   expect(initialHtml).toContain('<button data-testid="composite-title-slot">');
   expect(initialHtml).toContain("Children supplied by the client route");
@@ -467,6 +477,9 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
       status: 200,
     }),
   ]);
+  expect(actionResponses[0]?.workerId).toBeTruthy();
+  expect(actionResponses[1]?.workerId).toBeTruthy();
+  expect(actionResponses[1]?.workerId).not.toBe(actionResponses[0]?.workerId);
 
   await page.getByTestId("hydrate").click();
   await expect(page.getByTestId("hydrate")).toHaveText("Hydration count: 1");

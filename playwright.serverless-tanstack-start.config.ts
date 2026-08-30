@@ -28,6 +28,12 @@ export default defineConfig({
   },
   webServer: {
     command: `yarn dev --hostname 127.0.0.1 --port ${port}`,
+    env: {
+      ...process.env,
+      TUTO_TANSTACK_RSC_ACTION_ENCRYPTION_KEY:
+        Buffer.alloc(32, 19).toString("base64"),
+      TUTO_TANSTACK_WORKER_MAX_REQUESTS: "1",
+    },
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
     url: baseURL,

@@ -632,6 +632,9 @@ async function transformRscServerActionModules(
         source,
         ast as unknown as Parameters<typeof transformServerActionServer>[1],
         {
+          decode: (value) =>
+            `await $$decryptActionBoundArgs(${value})`,
+          encode: (value) => `$$encryptActionBoundArgs(${value})`,
           rejectNonAsyncFunction: true,
           runtime: (value, name) =>
             `$$registerServerReference(${value}, ${JSON.stringify(
@@ -645,7 +648,9 @@ async function transformRscServerActionModules(
       if (exportNames.length === 0) return;
       files.set(
         filePath,
-        `import { registerServerReference as $$registerServerReference } from '@vitejs/plugin-rsc/react/rsc';\n${result.output.toString()}`,
+        `import { registerServerReference as $$registerServerReference } from '@vitejs/plugin-rsc/react/rsc';
+import { decryptActionBoundArgs as $$decryptActionBoundArgs, encryptActionBoundArgs as $$encryptActionBoundArgs } from '@vitejs/plugin-rsc/utils/encryption-runtime';
+${result.output.toString()}`,
       );
       references[reference] = { exportNames, filePath };
     }),

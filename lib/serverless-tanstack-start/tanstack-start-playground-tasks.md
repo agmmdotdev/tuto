@@ -8,7 +8,7 @@ The following items are remaining for the TanStack Start playground integration:
    - Hide generated files (`src/routeTree.gen.ts`, `src/tanstack-router-register.d.ts`, and `src/tanstack-router-editor-shim.tsx`) from the explorer tree, or mark them as read-only in the editor.
 3. **Monaco Diagnostics Refresh:**
    - Force a diagnostics compile check on all open Monaco editor models when the route tree is regenerated to resolve or display link type warnings instantly.
-4. **Full Start Router/SSR Host:**
-   - The public Start request host now renders real workspace routers and loaders, streams worker responses, dispatches server-route handlers, preserves redirect hops and `Request` object fetches through the revision gateway, strips server route options from client bundles, and emits matched-route client chunks through a generated manifest. Complete route-level server/CSS chunking and browser hydration/navigation tests.
+4. **Pure-Server RSC CSS Resources:**
+   - Preserve styles imported only by pure RSC server modules through TanStack's official `import.meta.viteRsc.loadCss()` compiler marker and the matching resource-element path.
 5. **Harden Untrusted Execution:**
    - Move arbitrary student server code from the current bounded child-process lifecycle into a container or microVM security boundary before multi-tenant production use.

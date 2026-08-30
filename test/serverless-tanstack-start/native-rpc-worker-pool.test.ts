@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -74,11 +75,13 @@ afterEach(async () => {
 });
 
 test("sends only a content-addressed entry path when initializing a child", async () => {
+  const rscActionEncryptionKey = Buffer.alloc(32, 7).toString("base64");
   const root = await mkdtemp(path.join(tmpdir(), "tuto-worker-ipc-test-"));
   runtimeRoots.push(root);
   const pool = new NativeRpcWorkerPool({
     idleTtlMs: 60_000,
     maxWorkers: 1,
+    rscActionEncryptionKey,
     runtimeStore: new ServerRuntimeStore({ root }),
     workerPath: path.resolve(
       process.cwd(),
@@ -105,6 +108,9 @@ test("sends only a content-addressed entry path when initializing a child", asyn
       entryContainsSource: true,
       entryPathIsAbsolute: true,
       initializeBytesUnderOneKilobyte: true,
+      rscActionEncryptionKeyHash: createHash("sha256")
+        .update(rscActionEncryptionKey)
+        .digest("hex"),
       sourceCrossedIpc: false,
     },
   );

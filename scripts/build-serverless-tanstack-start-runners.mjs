@@ -57,6 +57,7 @@ const runtimePaths = [
   "lib/serverless-tanstack-start/kernel-manifest.generated.json",
   "lib/serverless-tanstack-start/native-rpc-protocol.ts",
   "lib/serverless-tanstack-start/native-rpc-worker-pool.ts",
+  "lib/serverless-tanstack-start/rsc-action-encryption.ts",
   "lib/serverless-tanstack-start/server-runtime-store.ts",
 ];
 const runtimeHash = createHash("sha256");

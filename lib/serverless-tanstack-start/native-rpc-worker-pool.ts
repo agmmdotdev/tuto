@@ -13,6 +13,10 @@ import {
   type ServerRuntimeArtifact,
   type ServerRuntimeStore,
 } from "./server-runtime-store";
+import {
+  getRscActionEncryptionKey,
+  validateRscActionEncryptionKey,
+} from "./rsc-action-encryption";
 
 export type NativeWorkerArtifact = ServerRuntimeArtifact;
 
@@ -67,6 +71,7 @@ export type NativeRpcWorkerPoolOptions = {
   maxWorkers?: number;
   startupTimeoutMs?: number;
   runtimeStore?: ServerRuntimeStore;
+  rscActionEncryptionKey?: string;
   workerFactory?: WorkerFactory;
   workerPath?: string;
 };
@@ -120,6 +125,7 @@ class NativeRpcChildWorker implements WorkerLike {
     executionTimeoutMs,
     maxResponseBytes,
     onExit,
+    rscActionEncryptionKey,
     startupTimeoutMs,
     workerPath,
   }: {
@@ -132,6 +138,7 @@ class NativeRpcChildWorker implements WorkerLike {
     executionTimeoutMs: number;
     maxResponseBytes: number;
     onExit: () => void;
+    rscActionEncryptionKey: string;
     startupTimeoutMs: number;
     workerPath: string;
   }) {
@@ -259,6 +266,7 @@ class NativeRpcChildWorker implements WorkerLike {
     this.child.once("spawn", () => {
       this.send({
         maxResponseBytes,
+        rscActionEncryptionKey,
         runtime,
         type: "initialize",
       });
@@ -424,6 +432,10 @@ export class NativeRpcWorkerPool {
         "native-rpc-runner.generated.cjs",
       );
     const runtimeStore = options.runtimeStore ?? getServerRuntimeStore();
+    const rscActionEncryptionKey =
+      options.rscActionEncryptionKey === undefined
+        ? getRscActionEncryptionKey()
+        : validateRscActionEncryptionKey(options.rscActionEncryptionKey);
     this.idleTtlMs = positiveInteger(options.idleTtlMs, defaultIdleTtlMs);
     this.maxRequestsPerWorker = positiveInteger(
       options.maxRequestsPerWorker,
@@ -441,6 +453,7 @@ export class NativeRpcWorkerPool {
             onExit: () => {
               void lease.release().then(onExit, onExit);
             },
+            rscActionEncryptionKey,
             runtime: {
               entryHash: lease.entryHash,
               entryPath: lease.entryPath,

@@ -225,12 +225,24 @@ module action and an inline bound action passed to a client component. The RSC
 endpoint also enters Start's official `requestHandler`, so action code can use
 public request helpers such as `getRequestUrl`.
 
+Inline-action closure bindings now use `@vitejs/plugin-rsc`'s official
+`encryptActionBoundArgs` and `decryptActionBoundArgs` transform hooks. The
+shared RSC kernel supplies the upstream AES-GCM runtime, while the host passes a
+single deployment key to every child during initialization. The key is not
+compiled into framework kernels, workspace revisions, browser assets, or
+durable artifact manifests. Configure the same base64-encoded 32-byte key on
+every application instance with
+`TUTO_TANSTACK_RSC_ACTION_ENCRYPTION_KEY` (for example, generate one with
+`openssl rand -base64 32`). Without that setting, a process-local random key is
+shared by workers for local and single-instance use. Multi-instance deployments
+must configure the key; rotating it invalidates bound actions in already
+rendered documents.
+
 This remains a checkpoint rather than complete TanStack Start RSC parity. The
 low-level endpoint plus loader-owned `renderServerComponent` and
 `createCompositeComponent` paths and RSC server actions are covered.
-Deployment-secret encryption for inline-action bound arguments and CSS imported
-only by pure RSC server modules are not covered. The latter
-still needs the official `import.meta.viteRsc.loadCss()` marker/resource path.
+CSS imported only by pure RSC server modules is not covered and still needs the
+official `import.meta.viteRsc.loadCss()` marker/resource path.
 An operating-system isolation boundary also remains outside this tier.
 
 ### Cross-instance artifact storage
@@ -339,9 +351,8 @@ isolated in the RSC kernel.
 
 ## Remaining architecture work
 
-1. extend the RSC checkpoint with deployment-secret encryption for bound
-   server-action arguments and resource markers for CSS imported only by pure
-   RSC server modules.
+1. extend the RSC checkpoint with resource markers for CSS imported only by
+   pure RSC server modules.
 2. move execution and the shared runtime directory behind a hardened sandbox
    such as an isolated container or
    microVM before treating arbitrary untrusted student code as safe for a
@@ -361,5 +372,5 @@ HTTP path, and the documented opt-in Flight/client-boundary slice. It does not
 yet claim complete TanStack Start RSC parity. The covered loader-owned
 `renderServerComponent` path now includes initial SSR and hydration; Composite
 Components now include nested selections, slots, initial SSR, and hydration.
-Bound-action encryption, pure-server RSC CSS resource markers, and an operating-
-system security boundary remain work for the full-runtime tier.
+Pure-server RSC CSS resource markers and an operating-system security boundary
+remain work for the full-runtime tier.

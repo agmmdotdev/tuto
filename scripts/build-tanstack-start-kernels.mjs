@@ -35,6 +35,8 @@ const serverManifestKey = "__TUTO_TANSTACK_START_MANIFEST__";
 const serverFnInternalBase = "/__tuto_server_fn/";
 const rscGlobalKey = "__TUTO_TANSTACK_START_RSC_KERNEL__";
 const rscHandlerKey = "__TUTO_TANSTACK_START_RSC_HANDLER__";
+const rscActionEncryptionKeyGlobalKey =
+  "__TUTO_TANSTACK_START_RSC_ACTION_ENCRYPTION_KEY__";
 const rscInternalPath = "/__tuto_rsc";
 const rscActionInternalPath = "/__tuto_rsc_action";
 
@@ -58,6 +60,7 @@ const rscModules = [
   "@tanstack/react-start/server-rpc",
   "@tanstack/start-storage-context",
   "@vitejs/plugin-rsc/react/rsc",
+  "@vitejs/plugin-rsc/utils/encryption-runtime",
   "react",
   "react/jsx-runtime",
   "react/jsx-dev-runtime",
@@ -315,6 +318,13 @@ function createRscEntriesPlugin(serverBridgeExports) {
     name: "tuto-start-rsc-kernel-entries",
     setup(buildApi) {
       buildApi.onResolve(
+        { filter: /^virtual:vite-rsc\/encryption-key$/ },
+        () => ({
+          path: "virtual:vite-rsc/encryption-key",
+          namespace: "tuto-rsc-encryption-key",
+        }),
+      );
+      buildApi.onResolve(
         {
           filter:
             /^@tanstack\/(?:start-storage-context|react-start\/server)$/,
@@ -336,6 +346,21 @@ function createRscEntriesPlugin(serverBridgeExports) {
         (args) => ({
           path: args.path,
           namespace: "tuto-rsc-decode-runtime",
+        }),
+      );
+      buildApi.onLoad(
+        { filter: /.*/, namespace: "tuto-rsc-encryption-key" },
+        () => ({
+          contents: `
+export default function getRscActionEncryptionKey() {
+  const key = globalThis.${rscActionEncryptionKeyGlobalKey};
+  if (typeof key !== 'string') {
+    throw new Error('The RSC action encryption key is not initialized.');
+  }
+  return key;
+}
+`,
+          loader: "js",
         }),
       );
       buildApi.onLoad(
@@ -700,6 +725,7 @@ import * as rscStartServer from '@tanstack/react-start/server';
 import * as rscServerRpc from '@tanstack/react-start/server-rpc';
 import * as rscStorageContext from '@tanstack/start-storage-context';
 import * as rscRuntime from '@vitejs/plugin-rsc/react/rsc';
+import * as rscActionEncryption from '@vitejs/plugin-rsc/utils/encryption-runtime';
 import * as rscReact from 'react';
 import * as rscJsxRuntime from 'react/jsx-runtime';
 import * as rscJsxDevRuntime from 'react/jsx-dev-runtime';
@@ -718,6 +744,7 @@ globalThis.${rscGlobalKey} = Object.freeze({
     '@tanstack/react-start/server-rpc': rscServerRpc,
     '@tanstack/start-storage-context': rscStorageContext,
     '@vitejs/plugin-rsc/react/rsc': rscRuntime,
+    '@vitejs/plugin-rsc/utils/encryption-runtime': rscActionEncryption,
     'react': rscReact,
     'react/jsx-runtime': rscJsxRuntime,
     'react/jsx-dev-runtime': rscJsxDevRuntime,
@@ -911,6 +938,7 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
     packages,
     rsc: {
       actionInternalPath: rscActionInternalPath,
+      actionEncryptionKeyGlobalKey: rscActionEncryptionKeyGlobalKey,
       bytes: Buffer.byteLength(rscCode),
       clientReferences: Object.fromEntries(
         frameworkRscEntries.map(({ moduleKey, reference }) => [

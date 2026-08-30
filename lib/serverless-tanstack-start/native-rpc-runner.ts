@@ -56,6 +56,9 @@ async function cleanup() {
     kernelManifest.rsc.globalKey
   ];
   delete (globalThis as typeof globalThis & Record<string, unknown>)[
+    kernelManifest.rsc.actionEncryptionKeyGlobalKey
+  ];
+  delete (globalThis as typeof globalThis & Record<string, unknown>)[
     kernelManifest.server.globalKey
   ];
   delete (globalThis as typeof globalThis & Record<string, unknown>)[
@@ -95,6 +98,20 @@ async function initialize(
   if (!path.isAbsolute(command.runtime.entryPath)) {
     throw new Error("TanStack Start runtime entry path must be absolute.");
   }
+  if (!/^[A-Za-z0-9+/]{43}=$/.test(command.rscActionEncryptionKey)) {
+    throw new Error("Invalid TanStack Start RSC action encryption key.");
+  }
+  const actionEncryptionKeyBytes = Buffer.from(
+    command.rscActionEncryptionKey,
+    "base64",
+  );
+  if (
+    actionEncryptionKeyBytes.byteLength !== 32 ||
+    actionEncryptionKeyBytes.toString("base64") !==
+      command.rscActionEncryptionKey
+  ) {
+    throw new Error("Invalid TanStack Start RSC action encryption key.");
+  }
 
   maxResponseBytes = command.maxResponseBytes;
   revision = command.runtime.revision;
@@ -120,6 +137,10 @@ async function initialize(
     "serverless-tanstack-start",
     kernelManifest.rsc.file,
   );
+  (
+    globalThis as typeof globalThis & Record<string, unknown>
+  )[kernelManifest.rsc.actionEncryptionKeyGlobalKey] =
+    command.rscActionEncryptionKey;
   await import(pathToFileURL(kernelPath).href);
   await import(pathToFileURL(rscKernelPath).href);
   await import(pathToFileURL(runtimeEntryPath).href);

@@ -26,6 +26,7 @@ export type NativeWorkerCommand =
         revision: string;
       };
       maxResponseBytes: number;
+      rscActionEncryptionKey: string;
       type: "initialize";
     }
   | {
