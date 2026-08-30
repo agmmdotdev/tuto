@@ -251,6 +251,225 @@ console.log(value.safe);`,
   assert.equal(typeOnlyImport.success, true, typeOnlyImport.html);
 });
 
+function importProtectionConfig(
+  importProtection: Record<string, unknown>,
+  mode: "build" | "development" = "build",
+): WorkspaceFileInput {
+  return {
+    path: "tanstack-start.config.json",
+    language: "json",
+    content: JSON.stringify({ mode, importProtection }),
+  };
+}
+
+test("applies configurable import-protection deny and scope rules", () => {
+  const customSpecifier = compilePreview(
+    basicClientWorkspace(
+      "import { secret } from 'private-sdk'; console.log(secret);",
+      [
+        importProtectionConfig({
+          client: { specifiers: ["private-*"] },
+        }),
+      ],
+    ),
+  );
+  assert.equal(customSpecifier.success, false);
+  assert.match(
+    customSpecifier.diagnostics.map(({ message }) => message).join("\n"),
+    /Denied by specifier pattern: private-\*/,
+  );
+
+  const customFile = compilePreview(
+    basicClientWorkspace("import { secret } from './private/secret'; console.log(secret);", [
+      importProtectionConfig({
+        client: { files: ["**/private/**"] },
+      }),
+      {
+        path: "src/private/secret.ts",
+        language: "ts",
+        content: "export const secret = 'private';",
+      },
+    ]),
+  );
+  assert.equal(customFile.success, false);
+  assert.match(
+    customFile.diagnostics.map(({ message }) => message).join("\n"),
+    /Denied by file pattern: \*\*\/private\/\*\*/,
+  );
+
+  const includedImporter = compilePreview(
+    basicClientWorkspace("import './checked/bridge';", [
+      importProtectionConfig({ include: ["src/checked/**"] }),
+      {
+        path: "src/checked/bridge.ts",
+        language: "ts",
+        content: "import { secret } from '../secret.server'; console.log(secret);",
+      },
+      {
+        path: "src/secret.server.ts",
+        language: "ts",
+        content: "export const secret = 'included-scope';",
+      },
+    ]),
+  );
+  assert.equal(includedImporter.success, false);
+  assert.match(
+    includedImporter.diagnostics.map(({ message }) => message).join("\n"),
+    /Importer: src\/checked\/bridge\.ts/,
+  );
+
+  const excludedImporter = compilePreview(
+    basicClientWorkspace("import { safe } from './generated/bridge'; console.log(safe);", [
+      importProtectionConfig({ exclude: ["src/generated/**"] }),
+      {
+        path: "src/generated/bridge.ts",
+        language: "ts",
+        content: "export { secret as safe } from '../secret.server';",
+      },
+      {
+        path: "src/secret.server.ts",
+        language: "ts",
+        content: "export const secret = 'scope-excluded';",
+      },
+    ]),
+  );
+  assert.equal(excludedImporter.success, true, excludedImporter.html);
+
+  const excludedTarget = compilePreview(
+    basicClientWorkspace("import { secret } from './secret.server'; console.log(secret);", [
+      importProtectionConfig({
+        client: { excludeFiles: ["src/secret.server.ts"] },
+      }),
+      {
+        path: "src/secret.server.ts",
+        language: "ts",
+        content: "export const secret = 'target-excluded';",
+      },
+    ]),
+  );
+  assert.equal(excludedTarget.success, true, excludedTarget.html);
+
+  const disabled = compilePreview(
+    basicClientWorkspace("import { secret } from './secret.server'; console.log(secret);", [
+      importProtectionConfig({ enabled: false }),
+      {
+        path: "src/secret.server.ts",
+        language: "ts",
+        content: "export const secret = 'disabled-protection';",
+      },
+    ]),
+  );
+  assert.equal(disabled.success, true, disabled.html);
+
+  const ignoredImporter = compilePreview(
+    basicClientWorkspace("import './fixtures/bridge';", [
+      importProtectionConfig({ ignoreImporters: ["**/fixtures/**"] }),
+      {
+        path: "src/fixtures/bridge.ts",
+        language: "ts",
+        content: "import { secret } from '../secret.server'; console.log(secret);",
+      },
+      {
+        path: "src/secret.server.ts",
+        language: "ts",
+        content: "export const secret = 'ignored-importer';",
+      },
+    ]),
+  );
+  assert.equal(ignoredImporter.success, true, ignoredImporter.html);
+
+  const serverSpecifier = compilePreview(
+    basicClientWorkspace("import { readValue } from './actions'; console.log(readValue);", [
+      importProtectionConfig({
+        server: { specifiers: ["browser-runtime"] },
+      }),
+      {
+        path: "src/actions.ts",
+        language: "ts",
+        content: `import { createServerFn } from '@tanstack/react-start';
+import { browserValue } from 'browser-runtime';
+export const readValue = createServerFn().handler(() => browserValue);`,
+      },
+    ]),
+  );
+  assert.equal(serverSpecifier.success, false);
+  assert.match(
+    serverSpecifier.diagnostics.map(({ message }) => message).join("\n"),
+    /Import denied in server environment[\s\S]*Denied by specifier pattern: browser-runtime/,
+  );
+});
+
+test("mocks development import violations and emits configurable runtime diagnostics", () => {
+  const preview = compilePreview(
+    basicClientWorkspace(
+      "import { secret } from './secret.server'; globalThis.__mockedSecret = secret.value;",
+      [
+        importProtectionConfig(
+          {
+            behavior: { dev: "mock", build: "error" },
+            log: "once",
+            mockAccess: "warn",
+          },
+          "development",
+        ),
+        {
+          path: "src/secret.server.ts",
+          language: "ts",
+          content: "export const secret = { value: 'must-not-leak' };",
+        },
+      ],
+    ),
+  );
+  const clientSource = `${preview.html}\n${preview.ssrClientBundle}\n${Object.values(preview.ssrClientChunks).join("\n")}`;
+  const warnings = preview.diagnostics.filter(({ message }) =>
+    message.includes("[import-protection] Import denied"),
+  );
+
+  assert.equal(preview.success, true, preview.html);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]?.message ?? "", /client environment/);
+  assert.match(clientSource, /console\.warn/);
+  assert.doesNotMatch(clientSource, /must-not-leak/);
+
+  const specifierMock = compilePreview(
+    basicClientWorkspace(
+      "import defaultMock, { namedMock } from 'private-sdk'; globalThis.__specifierMock = [defaultMock.value, namedMock()];",
+      [
+        importProtectionConfig(
+          {
+            client: { specifiers: ["private-*"] },
+            behavior: "mock",
+            mockAccess: "off",
+          },
+          "development",
+        ),
+      ],
+    ),
+  );
+  assert.equal(specifierMock.success, true, specifierMock.html);
+  assert.equal(
+    specifierMock.diagnostics.filter(({ message }) =>
+      message.includes("[import-protection] Import denied"),
+    ).length,
+    1,
+  );
+  assert.doesNotMatch(specifierMock.html, /private-sdk/);
+});
+
+test("validates declarative import-protection configuration", () => {
+  const preview = compilePreview(
+    basicClientWorkspace("console.log('config');", [
+      importProtectionConfig({ client: { files: "**/private/**" } }),
+    ]),
+  );
+
+  assert.equal(preview.success, false);
+  assert.match(
+    preview.diagnostics.map(({ message }) => message).join("\n"),
+    /client\.files must be an array of glob strings/,
+  );
+});
+
 test("real Start client and server runtimes round-trip without sending workspace files", async () => {
   const files: WorkspaceFileInput[] = [
     {

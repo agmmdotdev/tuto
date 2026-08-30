@@ -857,6 +857,7 @@ What is real here:
 - route-scoped CSS assets loaded with lazy route chunks instead of one revision-wide stylesheet
 - route component and server-function chunks loaded on demand inside the revision-pinned worker
 - same-origin string, URL, and Request fetches plus redirect hops through the revision-pinned route gateway
+- configurable client/server import protection through \`tanstack-start.config.json\`, including development mock diagnostics
 
 What is intentionally still experimental here:
 
@@ -873,6 +874,24 @@ content-addressed and revision-pinned even though route/function chunks load on
 demand.
 Without durable storage, a missing hot artifact asks you to rebuild; configured
 durable storage restores it across app processes.`,
+      },
+      {
+        path: "tanstack-start.config.json",
+        language: "json",
+        description:
+          "Safe declarative TanStack Start import-protection options for Tuto's request compiler.",
+        content: `{
+  "mode": "build",
+  "importProtection": {
+    "behavior": {
+      "dev": "mock",
+      "build": "error"
+    },
+    "mockAccess": "error",
+    "log": "once"
+  }
+}
+`,
       },
       {
         path: "index.html",

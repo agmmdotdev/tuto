@@ -397,14 +397,20 @@ checks are properties of this execution model; they are not an operating-system
 sandbox, so deployments must apply the appropriate trust and access policy to
 student code.
 
-The next runtime work inside that architecture is configurable
-import-protection policy and development mock/log modes. Deferred hydration now
-covers interaction, idle, media, visible, condition, never, and prefetch while
-keeping its virtual child chunks out of route preloads. Environment
-functions/variables, default import rules, deferred loader data, selective SSR,
-SEO/head metadata, path aliases, custom entry points, and route error/not-found
-UI are covered. The compatibility matrix is the source of truth for that
-sequence.
+Configurable import protection now runs in those same esbuild graphs. The
+declarative `tanstack-start.config.json` surface covers client/server specifier
+and file globs, target exclusions, importer scopes, build/development error or
+mock behavior, runtime mock diagnostics, log deduplication, and disabling the
+policy. Tuto deliberately does not execute `RegExp` objects or `onViolation`
+callbacks from student Vite configuration in the shared compiler host.
+
+Deferred hydration covers interaction, idle, media, visible, condition, never,
+and prefetch while keeping its virtual child chunks out of route preloads.
+Environment functions/variables, import rules, deferred loader data, selective
+SSR, SEO/head metadata, path aliases, custom entry points, and route
+error/not-found UI are covered. The next core-runtime decision is SPA mode;
+static-output features remain separate roadmap choices. The compatibility
+matrix is the source of truth for that sequence.
 
 The standalone proof script above still uses its original minimal host adapter
 to isolate the compiler experiment. The integrated playground no longer relies
@@ -415,7 +421,7 @@ This checkpoint claims router SSR, hydration, streamed document responses,
 matched-route client component chunks, route/server-function ESM chunks,
 route-scoped CSS loading during browser navigation, strategy-gated deferred
 hydration and prefetch, environment target transforms, public/secret env separation, the
-default import-protection rules, the covered server-route HTTP path, and the
+declarative import-protection policy, the covered server-route HTTP path, and the
 tested Flight/client-boundary slice. The covered
 loader-owned `renderServerComponent` path includes initial SSR and hydration;
 Composite Components include nested selections, slots, initial SSR, and

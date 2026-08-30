@@ -61,7 +61,7 @@ or Markdown drift.
 | `static-server-functions` | Build output | **not-verified** | [Static server functions](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/static-server-functions.md) | No build-time result generation in request previews. |
 | `environment-functions` | Compiler protection | **verified** | [Environment functions](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/environment-functions.md) | Isomorphic/server-only/client-only branch selection, tree-shaking, and wrong-runtime errors. |
 | `environment-variables` | Compiler protection | **verified** | [Environment variables](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/environment-variables.md) | Production `.env` layering, server `process.env`, public `VITE_` client values, and secret non-leakage. |
-| `import-protection` | Compiler protection | **partial** | [Import protection](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/import-protection.md) | Default suffix, marker, protected-specifier, and type-only rules work; custom policy and dev mock/log modes remain. |
+| `import-protection` | Compiler protection | **partial** | [Import protection](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/import-protection.md) | Defaults plus declarative custom specifier/file/scope rules, build/development behavior, mock access, and log deduplication work. Executable RegExp and `onViolation` callbacks remain outside the safe config surface. |
 | `custom-entry-points` | Compiler configuration | **verified** | [Client entry](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/client-entry-point.md) / [server entry](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/server-entry-point.md) | Optional `src/client` hydration and `src/server` fetch wrappers preserve the Tuto bootstrap. |
 | `path-aliases` | Compiler configuration | **verified** | [Path aliases](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/path-aliases.md) | Root tsconfig/jsconfig aliases resolve across route, client, and server graphs. |
 | `spa-mode` | Rendering modes | **not-verified** | [SPA mode](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/spa-mode.md) | SSR is the current target; SPA shell behavior is untested. |
@@ -70,10 +70,24 @@ or Markdown drift.
 | `non-node-hosting-adapters` | Deployment | **out-of-scope** | [Hosting](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/hosting.md) | Tuto targets its Node 22 request host, not third-party adapter parity. |
 | `container-or-microvm-execution` | Execution model | **out-of-scope** | [Execution model](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/execution-model.md) | Bounded reusable Node workers are the design; no container or microVM per preview. |
 
+## Import-protection configuration
+
+Tuto reads `tanstack-start.config.json` instead of executing student
+`vite.config.ts` code in the shared compiler. Its `importProtection` object
+supports `enabled`, `behavior`, `mockAccess`, `log`, `include`, `exclude`,
+`ignoreImporters`, and the client/server `specifiers`, `files`, and
+`excludeFiles` glob arrays. A top-level `mode` of `build` or `development`
+selects the corresponding behavior; production revision builds remain the
+default.
+
+This retains Start's policy behavior without creating a per-student Vite
+process or allowing config callbacks to execute in the compiler host. Because
+JSON cannot represent executable `RegExp` and `onViolation` values, the matrix
+keeps the broader upstream row partial.
+
 ## Next compatibility slice
 
-The next compatibility work is configurable import-protection rules and
-development mock/log modes. After that, SPA mode and static-output features
-remain separate roadmap decisions. All of this stays inside the request-based
-Node/esbuild architecture; it does not require a watcher, container, or
-microVM.
+The next core-runtime decision is SPA mode. Static prerendering, ISR, and static
+server functions remain separate output-generation decisions. All of this
+stays inside the request-based Node/esbuild architecture; it does not require a
+watcher, container, or microVM.

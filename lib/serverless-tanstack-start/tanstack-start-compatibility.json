@@ -401,9 +401,21 @@
         {
           "file": "test/serverless-tanstack-start/client-preview-rpc.test.ts",
           "test": "enforces default Start import protection across client and server graphs"
+        },
+        {
+          "file": "test/serverless-tanstack-start/client-preview-rpc.test.ts",
+          "test": "applies configurable import-protection deny and scope rules"
+        },
+        {
+          "file": "test/serverless-tanstack-start/client-preview-rpc.test.ts",
+          "test": "mocks development import violations and emits configurable runtime diagnostics"
+        },
+        {
+          "file": "test/serverless-tanstack-start/client-preview-rpc.test.ts",
+          "test": "validates declarative import-protection configuration"
         }
       ],
-      "notes": "Build errors cover .server/.client suffixes, server-only/client-only markers, the protected server specifier, and type-only exemptions. Custom deny/include/exclude rules and dev mock/log modes are not implemented."
+      "notes": "Build errors cover .server/.client suffixes, markers, protected specifiers, and type-only exemptions. The safe tanstack-start.config.json surface supports enabled, build/development behavior, mockAccess, log, include/exclude/ignoreImporters, and client/server specifier/file/excludeFile glob rules. Executable RegExp and onViolation callbacks remain outside the declarative request compiler."
     },
     {
       "id": "custom-entry-points",

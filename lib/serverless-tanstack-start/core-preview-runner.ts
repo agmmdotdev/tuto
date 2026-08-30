@@ -29,7 +29,7 @@ import {
   type StartServerFunctionsTransform,
 } from "./server-functions-transform";
 
-type BuildDiagnosticLevel = "info" | "warning" | "error";
+type BuildDiagnosticLevel = "info" | "warn" | "error";
 
 type BuildDiagnostic = {
   id: string;
@@ -54,6 +54,31 @@ type WorkspaceEnvironment = {
 };
 
 type ImportProtectionEnvironment = "client" | "server";
+
+type ImportProtectionBehavior = "error" | "mock";
+type ImportProtectionMockAccess = "error" | "warn" | "off";
+type ImportProtectionLogMode = "once" | "always";
+type ImportProtectionEnvironmentRules = {
+  specifiers: string[];
+  files: string[];
+  excludeFiles: string[];
+};
+type ImportProtectionPolicy = {
+  enabled: boolean;
+  behavior: ImportProtectionBehavior;
+  mockAccess: ImportProtectionMockAccess;
+  log: ImportProtectionLogMode;
+  include: string[];
+  exclude: string[];
+  ignoreImporters: string[];
+  client: ImportProtectionEnvironmentRules;
+  server: ImportProtectionEnvironmentRules;
+};
+type ImportProtectionRun = {
+  diagnostics: BuildDiagnostic[];
+  policy: ImportProtectionPolicy;
+  seenViolations: Set<string>;
+};
 
 type HtmlEntryPoint = {
   html: string;
@@ -150,6 +175,10 @@ type EsbuildError = {
 };
 
 const require = createRequire(__filename);
+const picomatch = require("picomatch") as (
+  pattern: string,
+  options?: { dot?: boolean },
+) => (value: string) => boolean;
 const path = nodePath.posix;
 const absoluteWorkingDirectory = process.cwd();
 const resultStartMarker = "__TUTO_TANSTACK_START_CORE_PREVIEW_RESULT_START__";
@@ -165,8 +194,25 @@ const environmentFileNames = [
   ".env.production.local",
 ] as const;
 const environmentFileNameSet = new Set<string>(environmentFileNames);
+const importProtectionConfigFile = "tanstack-start.config.json";
 const serverOnlyMarker = "@tanstack/react-start/server-only";
 const clientOnlyMarker = "@tanstack/react-start/client-only";
+const defaultImportProtectionRules = {
+  client: {
+    specifiers: ["@tanstack/react-start/server"],
+    files: ["**/*.server.*"],
+    excludeFiles: ["**/node_modules/**"],
+  },
+  server: {
+    specifiers: [],
+    files: ["**/*.client.*"],
+    excludeFiles: ["**/node_modules/**"],
+  },
+} satisfies Record<
+  ImportProtectionEnvironment,
+  ImportProtectionEnvironmentRules
+>;
+let activeImportProtectionRun: ImportProtectionRun | undefined;
 const tailwindSourceExtensions = new Set([
   "astro",
   "css",
@@ -366,12 +412,214 @@ function importMetaEnvironmentDefine(
   return JSON.stringify({ ...environment.client, SSR: ssr, ...overrides });
 }
 
-function isServerOnlyFile(filePath: string) {
-  return /(?:^|\/)[^/]*\.server\.[^/]+$/.test(filePath.split("?")[0] ?? "");
+function importProtectionObject(
+  value: unknown,
+  label: string,
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`[import-protection] ${label} must be an object.`);
+  }
+  return value as Record<string, unknown>;
 }
 
-function isClientOnlyFile(filePath: string) {
-  return /(?:^|\/)[^/]*\.client\.[^/]+$/.test(filePath.split("?")[0] ?? "");
+function importProtectionStringArray(
+  value: unknown,
+  fallback: string[],
+  label: string,
+) {
+  if (value === undefined) return [...fallback];
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new Error(
+      `[import-protection] ${label} must be an array of glob strings.`,
+    );
+  }
+  return [...new Set(value as string[])];
+}
+
+function readImportProtectionPolicy(files: WorkspaceFileMap) {
+  const defaults = (): ImportProtectionPolicy => ({
+    enabled: true,
+    behavior: "error",
+    mockAccess: "error",
+    log: "once",
+    include: [],
+    exclude: [],
+    ignoreImporters: [],
+    client: {
+      specifiers: [...defaultImportProtectionRules.client.specifiers],
+      files: [...defaultImportProtectionRules.client.files],
+      excludeFiles: [...defaultImportProtectionRules.client.excludeFiles],
+    },
+    server: {
+      specifiers: [...defaultImportProtectionRules.server.specifiers],
+      files: [...defaultImportProtectionRules.server.files],
+      excludeFiles: [...defaultImportProtectionRules.server.excludeFiles],
+    },
+  });
+  const source = files.get(importProtectionConfigFile);
+  if (source === undefined) return defaults();
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch (error) {
+    throw new Error(
+      `[import-protection] ${importProtectionConfigFile} is not valid JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const config = importProtectionObject(parsed, importProtectionConfigFile);
+  const mode = config.mode ?? "build";
+  if (mode !== "build" && mode !== "development") {
+    throw new Error(
+      `[import-protection] ${importProtectionConfigFile} mode must be "build" or "development".`,
+    );
+  }
+  const rawOptions = config.importProtection;
+  if (rawOptions === undefined) return defaults();
+  const options = importProtectionObject(
+    rawOptions,
+    `${importProtectionConfigFile} importProtection`,
+  );
+  const policy = defaults();
+
+  if (options.enabled !== undefined && typeof options.enabled !== "boolean") {
+    throw new Error("[import-protection] enabled must be a boolean.");
+  }
+  policy.enabled = options.enabled !== false;
+
+  const behavior = options.behavior;
+  if (typeof behavior === "string") {
+    if (behavior !== "error" && behavior !== "mock") {
+      throw new Error(
+        '[import-protection] behavior must be "error", "mock", or a mode object.',
+      );
+    }
+    policy.behavior = behavior;
+  } else if (behavior !== undefined) {
+    const modes = importProtectionObject(behavior, "behavior");
+    const selected = mode === "development" ? modes.dev : modes.build;
+    if (
+      selected !== undefined &&
+      selected !== "error" &&
+      selected !== "mock"
+    ) {
+      throw new Error(
+        `[import-protection] behavior.${mode === "development" ? "dev" : "build"} must be "error" or "mock".`,
+      );
+    }
+    policy.behavior =
+      (selected as ImportProtectionBehavior | undefined) ??
+      (mode === "development" ? "mock" : "error");
+  } else if (mode === "development") {
+    policy.behavior = "mock";
+  }
+
+  if (
+    options.mockAccess !== undefined &&
+    options.mockAccess !== "error" &&
+    options.mockAccess !== "warn" &&
+    options.mockAccess !== "off"
+  ) {
+    throw new Error(
+      '[import-protection] mockAccess must be "error", "warn", or "off".',
+    );
+  }
+  policy.mockAccess =
+    (options.mockAccess as ImportProtectionMockAccess | undefined) ?? "error";
+  if (
+    options.log !== undefined &&
+    options.log !== "once" &&
+    options.log !== "always"
+  ) {
+    throw new Error('[import-protection] log must be "once" or "always".');
+  }
+  policy.log =
+    (options.log as ImportProtectionLogMode | undefined) ?? "once";
+  policy.include = importProtectionStringArray(
+    options.include,
+    [],
+    "include",
+  );
+  policy.exclude = importProtectionStringArray(
+    options.exclude,
+    [],
+    "exclude",
+  );
+  policy.ignoreImporters = importProtectionStringArray(
+    options.ignoreImporters,
+    [],
+    "ignoreImporters",
+  );
+
+  for (const environment of ["client", "server"] as const) {
+    const rawRules = options[environment];
+    if (rawRules === undefined) continue;
+    const rules = importProtectionObject(rawRules, environment);
+    const defaultRules = defaultImportProtectionRules[environment];
+    const specifiers = importProtectionStringArray(
+      rules.specifiers,
+      defaultRules.specifiers,
+      `${environment}.specifiers`,
+    );
+    policy[environment] = {
+      specifiers:
+        environment === "client"
+          ? [...new Set([...defaultRules.specifiers, ...specifiers])]
+          : specifiers,
+      files: importProtectionStringArray(
+        rules.files,
+        defaultRules.files,
+        `${environment}.files`,
+      ),
+      excludeFiles: importProtectionStringArray(
+        rules.excludeFiles,
+        defaultRules.excludeFiles,
+        `${environment}.excludeFiles`,
+      ),
+    };
+  }
+  return policy;
+}
+
+const importProtectionGlobCache = new Map<string, (value: string) => boolean>();
+
+function matchesImportProtectionPattern(value: string, pattern: string) {
+  let matcher = importProtectionGlobCache.get(pattern);
+  if (!matcher) {
+    matcher = picomatch(pattern, { dot: true });
+    importProtectionGlobCache.set(pattern, matcher);
+  }
+  return matcher(value);
+}
+
+function firstImportProtectionMatch(value: string, patterns: string[]) {
+  return patterns.find((pattern) =>
+    matchesImportProtectionPattern(value, pattern),
+  );
+}
+
+function importProtectionWorkspacePath(filePath: string) {
+  const cleanPath = filePath.split(/[?#]/, 1)[0]?.replaceAll("\\", "/") ?? "";
+  return fromVirtualWorkspacePath(cleanPath) ?? cleanPath.replace(/^\/+/, "");
+}
+
+function shouldCheckImportProtectionImporter(
+  importer: string,
+  policy: ImportProtectionPolicy,
+) {
+  const relativePath = importProtectionWorkspacePath(importer);
+  if (
+    firstImportProtectionMatch(relativePath, policy.exclude) ||
+    firstImportProtectionMatch(relativePath, policy.ignoreImporters)
+  ) {
+    return false;
+  }
+  if (policy.include.length > 0) {
+    return Boolean(firstImportProtectionMatch(relativePath, policy.include));
+  }
+  return relativePath === "src" || relativePath.startsWith("src/");
 }
 
 function workspaceMarkerRestrictions(files: WorkspaceFileMap) {
@@ -420,20 +668,115 @@ function createImportProtectionPlugin(
   environment: ImportProtectionEnvironment,
   root?: string,
 ): Plugin {
-  const restrictions = workspaceMarkerRestrictions(files);
+  const run = activeImportProtectionRun;
+  const policy = run?.policy ?? readImportProtectionPolicy(files);
+  const restrictions = policy.enabled
+    ? workspaceMarkerRestrictions(files)
+    : { clientOnly: new Set<string>(), serverOnly: new Set<string>() };
+  const rules = policy[environment];
   const markerNamespace = `tuto-${environment}-environment-marker`;
+  const mockNamespace = `tuto-${environment}-import-protection-mock`;
+  const mocks = new Map<string, { names: string[]; message: string }>();
+  let mockId = 0;
+
+  const importerSource = (importer: string) => {
+    const workspacePath = importProtectionWorkspacePath(importer);
+    return files.get(workspacePath) ?? "";
+  };
+
+  const mockExportNames = (importer: string, specifier: string) => {
+    const source = importerSource(importer);
+    const escaped = specifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const names = new Set<string>();
+    const declarationPattern = new RegExp(
+      `(?:import|export)\\s+([\\s\\S]*?)\\s+from\\s*["']${escaped}["']`,
+      "g",
+    );
+    for (const match of source.matchAll(declarationPattern)) {
+      const clause = match[1]?.trim() ?? "";
+      if (/^[A-Za-z_$][\w$]*(?:\s*,|$)/.test(clause)) names.add("default");
+      const named = clause.match(/\{([\s\S]*?)\}/)?.[1];
+      for (const part of named?.split(",") ?? []) {
+        const imported = part.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0];
+        if (imported && /^[A-Za-z_$][\w$]*$/.test(imported)) names.add(imported);
+      }
+    }
+    return [...names];
+  };
+
+  const mockModule = (names: string[], message: string) => {
+    const namedExports = names
+      .filter((name) => name !== "default")
+      .map((name) => `export { mock as ${name} };`)
+      .join("\n");
+    const report =
+      policy.mockAccess === "off"
+        ? ""
+        : `if (!reported) { reported = true; console.${policy.mockAccess}(new Error(message)); }`;
+    return `
+const message = ${JSON.stringify(message)};
+let reported = false;
+const report = () => { ${report} };
+const mock = new Proxy(function importProtectionMock() { report(); return mock; }, {
+  apply() { report(); return mock; },
+  construct() { report(); return mock; },
+  get(_target, property) {
+    report();
+    if (property === Symbol.toPrimitive) return () => undefined;
+    if (property === "then") return undefined;
+    return mock;
+  },
+});
+${namedExports}
+export default mock;
+`;
+  };
+
+  const deny = (details: {
+    importer: string;
+    specifier: string;
+    resolved?: string;
+    reason: string;
+  }) => {
+    const error = importProtectionError({ environment, ...details });
+    if (policy.behavior === "error") throw error;
+    const key = [
+      environment,
+      details.importer,
+      details.specifier,
+      details.resolved ?? "",
+    ].join(":");
+    if (
+      run &&
+      (policy.log === "always" || !run.seenViolations.has(key))
+    ) {
+      run.seenViolations.add(key);
+      run.diagnostics.push(createDiagnostic("warn", error.message));
+    }
+    const id = `mock-${mockId++}`;
+    mocks.set(id, {
+      names: mockExportNames(details.importer, details.specifier),
+      message: error.message,
+    });
+    return { path: id, namespace: mockNamespace };
+  };
 
   return {
     name: `tuto-tanstack-start-${environment}-import-protection`,
     setup(buildApi) {
       buildApi.onResolve({ filter: /.*/ }, (args) => {
         if (args.path === serverOnlyMarker || args.path === clientOnlyMarker) {
+          if (!policy.enabled) {
+            return { path: args.path, namespace: markerNamespace };
+          }
+          if (!shouldCheckImportProtectionImporter(args.importer, policy)) {
+            return { path: args.path, namespace: markerNamespace };
+          }
           const denied =
             (environment === "client" && args.path === serverOnlyMarker) ||
             (environment === "server" && args.path === clientOnlyMarker);
           if (denied) {
-            throw importProtectionError({
-              environment,
+            return deny({
               importer: args.importer,
               specifier: args.path,
               reason: `Denied by ${args.path.endsWith("server-only") ? "server-only" : "client-only"} marker`,
@@ -441,15 +784,19 @@ function createImportProtectionPlugin(
           }
           return { path: args.path, namespace: markerNamespace };
         }
-        if (
-          environment === "client" &&
-          args.path === "@tanstack/react-start/server"
-        ) {
-          throw importProtectionError({
-            environment,
+        if (!policy.enabled) return null;
+        if (!shouldCheckImportProtectionImporter(args.importer, policy)) {
+          return null;
+        }
+        const specifierPattern = firstImportProtectionMatch(
+          args.path,
+          rules.specifiers,
+        );
+        if (specifierPattern) {
+          return deny({
             importer: args.importer,
             specifier: args.path,
-            reason: "Denied by protected server specifier",
+            reason: `Denied by specifier pattern: ${specifierPattern}`,
           });
         }
 
@@ -462,22 +809,26 @@ function createImportProtectionPlugin(
             : null);
         if (!resolved) return null;
         const cleanResolved = resolved.split("?")[0] ?? resolved;
-        const deniedByFile =
-          environment === "client"
-            ? isServerOnlyFile(cleanResolved)
-            : isClientOnlyFile(cleanResolved);
+        if (
+          firstImportProtectionMatch(cleanResolved, rules.excludeFiles)
+        ) {
+          return null;
+        }
+        const deniedByFile = firstImportProtectionMatch(
+          cleanResolved,
+          rules.files,
+        );
         const deniedByMarker =
           environment === "client"
             ? restrictions.serverOnly.has(cleanResolved)
             : restrictions.clientOnly.has(cleanResolved);
         if (deniedByFile || deniedByMarker) {
-          throw importProtectionError({
-            environment,
+          return deny({
             importer: args.importer,
             specifier: args.path,
             resolved: cleanResolved,
             reason: deniedByFile
-              ? `Denied by file pattern: **/*.${environment === "client" ? "server" : "client"}.*`
+              ? `Denied by file pattern: ${deniedByFile}`
               : `Denied by ${environment === "client" ? "server-only" : "client-only"} marker`,
           });
         }
@@ -487,6 +838,17 @@ function createImportProtectionPlugin(
         contents: "export {};",
         loader: "js",
       }));
+      buildApi.onLoad(
+        { filter: /.*/, namespace: mockNamespace },
+        (args) => {
+          const mock = mocks.get(args.path);
+          if (!mock) return null;
+          return {
+            contents: mockModule(mock.names, mock.message),
+            loader: "js",
+          };
+        },
+      );
     },
   };
 }
@@ -2656,6 +3018,7 @@ async function compilePreview(
   revision: string,
 ): Promise<ServerlessPreviewResult> {
   const startedAt = Date.now();
+  const importProtectionDiagnostics: BuildDiagnostic[] = [];
   const rpcToken = randomBytes(32).toString("base64url");
   const serverFnBase = `/api/serverless/tanstack-start/core-rpc?revision=${encodeURIComponent(
     revision,
@@ -2671,6 +3034,11 @@ async function compilePreview(
 
   try {
     const originalFileMap = sanitizeWorkspaceFiles(files);
+    activeImportProtectionRun = {
+      diagnostics: importProtectionDiagnostics,
+      policy: readImportProtectionPolicy(originalFileMap),
+      seenViolations: new Set(),
+    };
     const environment = readWorkspaceEnvironment(originalFileMap);
     const root = nodePath.join(
       absoluteWorkingDirectory,
@@ -2814,6 +3182,7 @@ async function compilePreview(
             jsText: jsOutput.text,
           }),
       diagnostics: [
+        ...importProtectionDiagnostics,
         createDiagnostic(
           "info",
           `TanStack Start core preview compiled ${Object.keys(serverFnsById).length} server function(s) and ${rscBuild.code ? 1 : 0} RSC entry in ${durationMs}ms. Revision bundles: ${buildMetrics.clientRevisionBytes} client bytes and ${buildMetrics.serverRevisionBytes} server bytes; shared kernel ${kernelManifest.id}.`,
@@ -2833,7 +3202,10 @@ async function compilePreview(
       serverFnIds: Object.keys(serverFnsById),
     };
   } catch (error) {
-    const diagnostics = normalizeBuildError(error);
+    const diagnostics = [
+      ...importProtectionDiagnostics,
+      ...normalizeBuildError(error),
+    ];
     return {
       buildMetrics: {
         clientFrameworkInputs: 0,
