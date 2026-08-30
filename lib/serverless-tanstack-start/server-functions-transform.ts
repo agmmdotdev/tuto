@@ -3,10 +3,12 @@ import { pathToFileURL } from "node:url";
 import type { detectKindsInCode as detectKindsInCodeType } from "../../node_modules/@tanstack/start-plugin-core/dist/esm/start-compiler/compiler.js";
 import type { createStartCompiler as createStartCompilerType } from "../../node_modules/@tanstack/start-plugin-core/dist/esm/start-compiler/host.js";
 import type { ServerFn } from "../../node_modules/@tanstack/start-plugin-core/dist/esm/start-compiler/types.js";
+import type { StartCompilerPlugin } from "../../node_modules/@tanstack/start-plugin-core/dist/esm/types.js";
 
 type WorkspaceFileMap = Map<string, string>;
 
 type StartCompilerInternals = {
+  createHydrateCompilerPlugin: () => StartCompilerPlugin;
   createStartCompiler: typeof createStartCompilerType;
   detectKindsInCode: typeof detectKindsInCodeType;
 };
@@ -82,8 +84,14 @@ export async function importStartCompilerInternals(): Promise<StartCompilerInter
   const compiler = await import(
     pathToFileURL(path.join(esmRoot, "compiler.js")).toString()
   );
+  const hydrate = await import(
+    pathToFileURL(
+      path.join(packageRoot, "dist", "esm", "hydrate-when-transform.js"),
+    ).toString()
+  );
 
   return {
+    createHydrateCompilerPlugin: hydrate.createHydrateCompilerPlugin,
     createStartCompiler: host.createStartCompiler,
     detectKindsInCode: compiler.detectKindsInCode,
   };
@@ -262,7 +270,9 @@ function createCompiler({
   root,
   serverFnsById,
   env,
+  compilerPlugins,
 }: StartCompilerInternals & {
+  compilerPlugins: StartCompilerPlugin[];
   env: StartCompilerEnv;
   fileMap: WorkspaceFileMap;
   root: string;
@@ -275,6 +285,7 @@ function createCompiler({
     framework: "react",
     providerEnvName: "ssr",
     mode: "build",
+    compilerPlugins,
     getKnownServerFns: () => serverFnsById,
     onServerFnsById: (nextServerFns) =>
       Object.assign(serverFnsById, nextServerFns),
@@ -327,17 +338,20 @@ export async function transformStartServerFunctions(
   fileMap: WorkspaceFileMap,
   options: { root?: string } = {},
 ): Promise<StartServerFunctionsTransform> {
-  const { createStartCompiler, detectKindsInCode } =
+  const { createHydrateCompilerPlugin, createStartCompiler, detectKindsInCode } =
     await importStartCompilerInternals();
   const root =
     options.root ?? path.join(process.cwd(), ".tmp", "tanstack-start-core");
   const serverFnsById: Record<string, ServerFn> = {};
+  const compilerPlugins = [createHydrateCompilerPlugin()];
   const clientFiles: WorkspaceFileMap = new Map();
   const serverFiles: WorkspaceFileMap = new Map();
   const serverSplits: WorkspaceFileMap = new Map();
   const clientCompiler = createCompiler({
     createStartCompiler,
+    createHydrateCompilerPlugin,
     detectKindsInCode,
+    compilerPlugins,
     fileMap,
     root,
     serverFnsById,
@@ -345,7 +359,9 @@ export async function transformStartServerFunctions(
   });
   const serverCompiler = createCompiler({
     createStartCompiler,
+    createHydrateCompilerPlugin,
     detectKindsInCode,
+    compilerPlugins,
     fileMap,
     root,
     serverFnsById,
@@ -364,7 +380,8 @@ export async function transformStartServerFunctions(
       !code.includes("createMiddleware") &&
       !code.includes("createServerOnlyFn") &&
       !code.includes("createClientOnlyFn") &&
-      !code.includes("createIsomorphicFn")
+      !code.includes("createIsomorphicFn") &&
+      !code.includes("Hydrate")
     ) {
       clientFiles.set(workspacePath, code);
       serverFiles.set(workspacePath, code);
@@ -385,6 +402,39 @@ export async function transformStartServerFunctions(
 
     clientFiles.set(workspacePath, clientResult?.code ?? code);
     serverFiles.set(workspacePath, serverResult?.code ?? code);
+  }
+
+  const pendingHydrateModules = [...clientFiles.entries()];
+  const seenHydrateModules = new Set<string>();
+  for (let index = 0; index < pendingHydrateModules.length; index += 1) {
+    const [, code] = pendingHydrateModules[index] ?? [];
+    if (!code) continue;
+    const hydrateModuleIds = [
+      ...code.matchAll(/["']([^"']+\?[^"']*tss-hydrate=[^"']+)["']/g),
+    ].map((match) => match[1]);
+
+    for (const moduleId of hydrateModuleIds) {
+      if (!moduleId || seenHydrateModules.has(moduleId)) continue;
+      seenHydrateModules.add(moduleId);
+      const virtualResult = compilerPlugins[0]?.loadVirtualModule?.({
+        env: "client",
+        envName: "client",
+        id: moduleId,
+        root,
+      });
+      if (!virtualResult?.code) {
+        throw new Error(`Unable to compile deferred Hydrate module ${moduleId}.`);
+      }
+      const compiledVirtualResult = await clientCompiler.compile({
+        code: virtualResult.code,
+        id: moduleId,
+        detectedKinds: detectKindsInCode(virtualResult.code, "client"),
+      });
+      const workspaceModuleId = toWorkspaceModuleId(root, moduleId);
+      const virtualCode = compiledVirtualResult?.code ?? virtualResult.code;
+      clientFiles.set(workspaceModuleId, virtualCode);
+      pendingHydrateModules.push([workspaceModuleId, virtualCode]);
+    }
   }
 
   for (const serverFn of Object.values(serverFnsById)) {

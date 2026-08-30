@@ -225,6 +225,31 @@ markers use the same path. The Firefox checkpoint proves that a stylesheet
 reachable only from a server component is linked in the first document and
 applied before hydration.
 
+Deferred hydration now uses Start's official `createHydrateCompilerPlugin`
+rather than treating `<Hydrate>` as an ordinary runtime component. The server
+transform assigns stable boundary IDs while the client transform extracts
+default-split children into lazy revision chunks. The Firefox checkpoint proves
+that an interaction boundary preserves its initial SSR HTML, leaves the child
+chunk unloaded, downloads it on the trigger, removes the hydration gate, and is
+interactive afterward.
+
+Environment-specific APIs also run through the official Start compiler for
+both targets. `createIsomorphicFn`, `createServerOnlyFn`, and
+`createClientOnlyFn` retain only the correct implementation and preserve the
+documented wrong-runtime errors. The request compiler loads the workspace's
+production `.env` layers without reading host secrets: server revision code
+receives the complete workspace environment through `process.env`, while
+browser code receives only `VITE_`-prefixed values through `import.meta.env`.
+Automated bundle inspection proves that an unprefixed server secret is absent
+from client HTML and JavaScript.
+
+Build-time import protection now guards every revision graph before workspace
+resolution. Client builds reject `*.server.*`, server-only markers, and
+`@tanstack/react-start/server`; server and RSC builds reject `*.client.*` and
+client-only markers. Type-only imports remain valid because esbuild removes
+them before runtime resolution. Custom deny/include/exclude policy and the
+upstream development mock/log modes remain compatibility work.
+
 RSC server actions use the official `@vitejs/plugin-rsc` transforms and React
 transport. Module-level `"use server"` exports become `createServerReference`
 proxies in browser and SSR revisions while their implementations remain in
@@ -349,12 +374,12 @@ they no longer traverse or emit those framework graphs.
 Run `yarn measure:tanstack-start-kernels` to rebuild and measure the boundary. A
 local two-edit measurement produced these uncompressed minified sizes:
 
-- shared client kernel: 372,410 bytes
-- shared SSR server kernel: 497,573 bytes
-- shared RSC kernel: 104,017 bytes
-- first client/server revision: 3,027 / 4,992 bytes
-- edited client/server revision: 3,025 / 4,992 bytes
-- measured compile durations: 329 ms and 314 ms
+- shared client kernel: 383,825 bytes
+- shared SSR server kernel: 509,439 bytes
+- shared RSC kernel: 105,636 bytes
+- first client/server revision: 3,030 / 4,992 bytes
+- edited client/server revision: 3,028 / 4,992 bytes
+- measured compile durations: 409 ms and 357 ms
 
 Those timings are local diagnostics, not a production latency claim. The
 important result is structural: revision edits do not rebundle the shared
@@ -372,9 +397,10 @@ checks are properties of this execution model; they are not an operating-system
 sandbox, so deployments must apply the appropriate trust and access policy to
 student code.
 
-The next runtime work is compatibility coverage inside that architecture:
-deferred hydration, environment functions/variables, and the broader
-import-protection policy matrix. Deferred loader data, selective SSR,
+The next runtime work inside that architecture is broader deferred-hydration
+strategy coverage plus configurable import-protection policy and development
+mock/log modes. The interaction hydration path, environment
+functions/variables, default import rules, deferred loader data, selective SSR,
 SEO/head metadata, path aliases, custom entry points, and route error/not-found
 UI are covered. The compatibility matrix is the source of truth for that
 sequence.
@@ -386,8 +412,10 @@ the official React Start package exports.
 
 This checkpoint claims router SSR, hydration, streamed document responses,
 matched-route client component chunks, route/server-function ESM chunks,
-route-scoped CSS loading during browser navigation, the covered server-route
-HTTP path, and the tested Flight/client-boundary slice. The covered
+route-scoped CSS loading during browser navigation, interaction-gated deferred
+hydration, environment target transforms, public/secret env separation, the
+default import-protection rules, the covered server-route HTTP path, and the
+tested Flight/client-boundary slice. The covered
 loader-owned `renderServerComponent` path includes initial SSR and hydration;
 Composite Components include nested selections, slots, initial SSR, and
 hydration. Pure-server RSC CSS resources use the official compiler marker path.

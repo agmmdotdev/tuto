@@ -46,6 +46,7 @@ type PreviewCompileResult = {
     sharedClientKernelBytes: number;
     sharedServerKernelBytes: number;
   };
+  diagnostics: Array<{ message: string }>;
   html: string;
   kernelId: string;
   revision: string;
@@ -90,6 +91,165 @@ function compilePreview(files: WorkspaceFileInput[]): PreviewCompileResult {
     throw new Error(child.stderr || child.stdout || "Missing preview result.");
   return JSON.parse(match[1]) as PreviewCompileResult;
 }
+
+function basicClientWorkspace(
+  source: string,
+  extraFiles: WorkspaceFileInput[] = [],
+): WorkspaceFileInput[] {
+  return [
+    {
+      path: "index.html",
+      language: "html",
+      content: '<script type="module" src="./src/main.ts"></script>',
+    },
+    { path: "src/main.ts", language: "ts", content: source },
+    ...extraFiles,
+  ];
+}
+
+test("loads Vite-style public environment variables without leaking server secrets", () => {
+  const files = basicClientWorkspace(
+    `import { readSecret } from './actions';
+globalThis.__publicEnvironment = import.meta.env.VITE_APP_NAME;
+globalThis.__privateEnvironment = import.meta.env.SERVER_SECRET;
+globalThis.__readSecret = readSecret;`,
+    [
+      {
+        path: ".env",
+        language: "md",
+        content:
+          "VITE_APP_NAME=Tuto environment fixture\nSERVER_SECRET=server-environment-secret",
+      },
+      {
+        path: ".env.production.local",
+        language: "md",
+        content: "VITE_APP_NAME=Tuto production override",
+      },
+      {
+        path: "src/actions.ts",
+        language: "ts",
+        content: `import { createServerFn } from '@tanstack/react-start';
+export const readSecret = createServerFn().handler(() => process.env.SERVER_SECRET);`,
+      },
+    ],
+  );
+  const preview = compilePreview(files);
+  const clientSource = `${preview.html}\n${preview.ssrClientBundle}\n${Object.values(preview.ssrClientChunks).join("\n")}`;
+  const serverSource = `${preview.serverBundle}\n${Object.values(preview.serverChunks).join("\n")}`;
+
+  assert.equal(preview.success, true, preview.html);
+  assert.match(clientSource, /Tuto production override/);
+  assert.doesNotMatch(clientSource, /Tuto environment fixture/);
+  assert.doesNotMatch(clientSource, /server-environment-secret/);
+  assert.match(serverSource, /server-environment-secret/);
+});
+
+test("enforces default Start import protection across client and server graphs", () => {
+  const clientViolations: Array<{
+    files?: WorkspaceFileInput[];
+    source: string;
+  }> = [
+    {
+      source: "import { secret } from './secret.server'; console.log(secret);",
+      files: [
+        {
+          path: "src/secret.server.ts",
+          language: "ts",
+          content: "export const secret = 'suffix-secret';",
+        },
+      ],
+    },
+    {
+      source: "import { secret } from './secret'; console.log(secret);",
+      files: [
+        {
+          path: "src/secret.ts",
+          language: "ts",
+          content: `import '@tanstack/react-start/server-only';
+export const secret = 'marker-secret';`,
+        },
+      ],
+    },
+    {
+      source:
+        "import { getRequest } from '@tanstack/react-start/server'; console.log(getRequest);",
+    },
+  ];
+
+  for (const violation of clientViolations) {
+    const preview = compilePreview(
+      basicClientWorkspace(violation.source, violation.files ?? []),
+    );
+    assert.equal(preview.success, false);
+    assert.match(
+      preview.diagnostics.map(({ message }) => message).join("\n"),
+      /\[import-protection\] Import denied in client environment/,
+    );
+  }
+
+  const serverViolation = compilePreview(
+    basicClientWorkspace("import { readBrowserValue } from './actions';", [
+      {
+        path: "src/browser.client.ts",
+        language: "ts",
+        content: "export const browserValue = 'client-only-value';",
+      },
+      {
+        path: "src/actions.ts",
+        language: "ts",
+        content: `import { createServerFn } from '@tanstack/react-start';
+import { browserValue } from './browser.client';
+export const readBrowserValue = createServerFn().handler(() => browserValue);`,
+      },
+    ]),
+  );
+  assert.equal(serverViolation.success, false);
+  assert.match(
+    serverViolation.diagnostics.map(({ message }) => message).join("\n"),
+    /\[import-protection\] Import denied in server environment/,
+  );
+
+  const serverMarkerViolation = compilePreview(
+    basicClientWorkspace("import { readBrowserValue } from './actions';", [
+      {
+        path: "src/browser.ts",
+        language: "ts",
+        content: `import '@tanstack/react-start/client-only';
+export const browserValue = 'client-marker-value';`,
+      },
+      {
+        path: "src/actions.ts",
+        language: "ts",
+        content: `import { createServerFn } from '@tanstack/react-start';
+import { browserValue } from './browser';
+export const readBrowserValue = createServerFn().handler(() => browserValue);`,
+      },
+    ]),
+  );
+  assert.equal(serverMarkerViolation.success, false);
+  assert.match(
+    serverMarkerViolation.diagnostics
+      .map(({ message }) => message)
+      .join("\n"),
+    /Denied by client-only marker/,
+  );
+
+  const typeOnlyImport = compilePreview(
+    basicClientWorkspace(
+      `import type { SecretShape } from './secret.server';
+const value: SecretShape = { safe: true };
+console.log(value.safe);`,
+      [
+        {
+          path: "src/secret.server.ts",
+          language: "ts",
+          content: "export type SecretShape = { safe: boolean };",
+        },
+      ],
+    ),
+  );
+  assert.equal(typeOnlyImport.success, true, typeOnlyImport.html);
+});
 
 test("real Start client and server runtimes round-trip without sending workspace files", async () => {
   const files: WorkspaceFileInput[] = [

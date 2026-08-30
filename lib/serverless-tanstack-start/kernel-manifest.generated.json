@@ -1,7 +1,7 @@
 {
-  "id": "2f3e66b580d5c0e51aa0",
+  "id": "5c0b2fbc63bfd52a04d8",
   "client": {
-    "bytes": 372410,
+    "bytes": 383825,
     "exports": {
       "@tanstack/react-start": [
         "FRAME_HEADER_SIZE",
@@ -47,6 +47,15 @@
       ],
       "@tanstack/react-start/client-rpc": [
         "createClientRpc"
+      ],
+      "@tanstack/react-start/hydration": [
+        "condition",
+        "idle",
+        "interaction",
+        "load",
+        "media",
+        "never",
+        "visible"
       ],
       "@tanstack/react-start/rsc": [
         "CompositeComponent",
@@ -264,6 +273,7 @@
       "@tanstack/react-start",
       "@tanstack/react-start/client",
       "@tanstack/react-start/client-rpc",
+      "@tanstack/react-start/hydration",
       "@tanstack/react-start/rsc",
       "@tanstack/react-router",
       "@vitejs/plugin-rsc/react/browser",
@@ -276,7 +286,7 @@
     "routerKey": "__TUTO_TANSTACK_START_CLIENT_ROUTER_FACTORY__",
     "serverFnBaseKey": "__TUTO_TANSTACK_START_SERVER_FN_BASE__",
     "startInstanceKey": "__TUTO_TANSTACK_START_CLIENT_INSTANCE__",
-    "url": "/api/serverless/tanstack-start/kernel/client?v=2f3e66b580d5c0e51aa0"
+    "url": "/api/serverless/tanstack-start/kernel/client?v=5c0b2fbc63bfd52a04d8"
   },
   "packages": {
     "@tanstack/react-router": "1.170.32",
@@ -436,7 +446,7 @@
     ]
   },
   "server": {
-    "bytes": 497777,
+    "bytes": 509439,
     "exports": {
       "@tanstack/react-router": [
         "Asset",
@@ -577,6 +587,15 @@
         "trackPostProcessPromise",
         "useServerFn",
         "validateFramedProtocolVersion"
+      ],
+      "@tanstack/react-start/hydration": [
+        "condition",
+        "idle",
+        "interaction",
+        "load",
+        "media",
+        "never",
+        "visible"
       ],
       "@tanstack/react-start/rsc": [
         "CompositeComponent",
@@ -722,6 +741,7 @@
     "modules": [
       "@tanstack/react-router",
       "@tanstack/react-start",
+      "@tanstack/react-start/hydration",
       "@tanstack/react-start/rsc",
       "@tanstack/react-start/server",
       "@tanstack/react-start/server-entry",

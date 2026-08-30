@@ -48,6 +48,13 @@ type WorkspaceFileInput = {
 
 type WorkspaceFileMap = Map<string, string>;
 
+type WorkspaceEnvironment = {
+  client: Record<string, string | boolean>;
+  server: Record<string, string>;
+};
+
+type ImportProtectionEnvironment = "client" | "server";
+
 type HtmlEntryPoint = {
   html: string;
   entryPath: string;
@@ -151,6 +158,15 @@ const virtualWorkspaceRoot = "/__tuto_tanstack_start_core__";
 const maxFileCount = 64;
 const maxFileSize = 220_000;
 const maxTotalSize = 1_250_000;
+const environmentFileNames = [
+  ".env",
+  ".env.local",
+  ".env.production",
+  ".env.production.local",
+] as const;
+const environmentFileNameSet = new Set<string>(environmentFileNames);
+const serverOnlyMarker = "@tanstack/react-start/server-only";
+const clientOnlyMarker = "@tanstack/react-start/client-only";
 const tailwindSourceExtensions = new Set([
   "astro",
   "css",
@@ -245,7 +261,8 @@ function sanitizeWorkspaceFiles(files: unknown): WorkspaceFileMap {
     if (
       !normalizedPath ||
       normalizedPath.includes("..") ||
-      normalizedPath.startsWith(".") ||
+      (normalizedPath.startsWith(".") &&
+        !environmentFileNameSet.has(normalizedPath)) ||
       path.isAbsolute(normalizedPath)
     ) {
       throw new Error(`Unsupported file path: ${file.path}`);
@@ -271,6 +288,207 @@ function sanitizeWorkspaceFiles(files: unknown): WorkspaceFileMap {
   }
 
   return map;
+}
+
+function parseEnvironmentFile(
+  source: string,
+  environment: Record<string, string>,
+) {
+  for (const rawLine of source.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const match = line.match(
+      /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/,
+    );
+    if (!match?.[1]) continue;
+    let value = match[2] ?? "";
+    const quote = value[0];
+    if (
+      (quote === '"' || quote === "'" || quote === "`") &&
+      value.endsWith(quote)
+    ) {
+      value = value.slice(1, -1);
+      if (quote === '"') {
+        value = value
+          .replaceAll("\\n", "\n")
+          .replaceAll("\\r", "\r")
+          .replaceAll("\\t", "\t")
+          .replaceAll('\\"', '"')
+          .replaceAll("\\\\", "\\");
+      }
+    } else {
+      value = value.replace(/\s+#.*$/, "").trim();
+    }
+    value = value.replace(
+      /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g,
+      (_full, braced: string | undefined, plain: string | undefined) =>
+        environment[braced ?? plain ?? ""] ?? "",
+    );
+    environment[match[1]] = value;
+  }
+}
+
+function readWorkspaceEnvironment(files: WorkspaceFileMap): WorkspaceEnvironment {
+  const server: Record<string, string> = Object.create(null);
+  for (const fileName of environmentFileNames) {
+    const source = files.get(fileName);
+    if (source !== undefined) parseEnvironmentFile(source, server);
+  }
+  const client: Record<string, string | boolean> = {
+    BASE_URL: "/",
+    DEV: false,
+    MODE: "production",
+    PROD: true,
+    SSR: false,
+  };
+  for (const [key, value] of Object.entries(server)) {
+    if (key.startsWith("VITE_")) client[key] = value;
+  }
+  return { client, server };
+}
+
+function serverEnvironmentDefine(
+  environment: WorkspaceEnvironment,
+  overrides: Record<string, string> = {},
+) {
+  return JSON.stringify({
+    ...environment.server,
+    NODE_ENV: "production",
+    ...overrides,
+  });
+}
+
+function importMetaEnvironmentDefine(
+  environment: WorkspaceEnvironment,
+  ssr: boolean,
+  overrides: Record<string, string | boolean> = {},
+) {
+  return JSON.stringify({ ...environment.client, SSR: ssr, ...overrides });
+}
+
+function isServerOnlyFile(filePath: string) {
+  return /(?:^|\/)[^/]*\.server\.[^/]+$/.test(filePath.split("?")[0] ?? "");
+}
+
+function isClientOnlyFile(filePath: string) {
+  return /(?:^|\/)[^/]*\.client\.[^/]+$/.test(filePath.split("?")[0] ?? "");
+}
+
+function workspaceMarkerRestrictions(files: WorkspaceFileMap) {
+  const serverOnly = new Set<string>();
+  const clientOnly = new Set<string>();
+  for (const [filePath, source] of files) {
+    if (loaderForPath(filePath) === "css") continue;
+    const hasServerMarker = new RegExp(
+      `\\bimport\\s*["']${serverOnlyMarker.replaceAll("/", "\\/")}["']`,
+    ).test(source);
+    const hasClientMarker = new RegExp(
+      `\\bimport\\s*["']${clientOnlyMarker.replaceAll("/", "\\/")}["']`,
+    ).test(source);
+    if (hasServerMarker && hasClientMarker) {
+      throw new Error(
+        `[import-protection] File "${filePath}" has both server-only and client-only markers. This is not allowed.`,
+      );
+    }
+    if (hasServerMarker) serverOnly.add(filePath.split("?")[0] ?? filePath);
+    if (hasClientMarker) clientOnly.add(filePath.split("?")[0] ?? filePath);
+  }
+  return { clientOnly, serverOnly };
+}
+
+function importProtectionError({
+  environment,
+  importer,
+  specifier,
+  resolved,
+  reason,
+}: {
+  environment: ImportProtectionEnvironment;
+  importer: string;
+  specifier: string;
+  resolved?: string;
+  reason: string;
+}) {
+  const resolvedLine = resolved ? `\n  Resolved: ${resolved}` : "";
+  return new Error(
+    `[import-protection] Import denied in ${environment} environment\n\n  ${reason}\n  Importer: ${importer || "entry"}\n  Import: ${JSON.stringify(specifier)}${resolvedLine}`,
+  );
+}
+
+function createImportProtectionPlugin(
+  files: WorkspaceFileMap,
+  environment: ImportProtectionEnvironment,
+  root?: string,
+): Plugin {
+  const restrictions = workspaceMarkerRestrictions(files);
+  const markerNamespace = `tuto-${environment}-environment-marker`;
+
+  return {
+    name: `tuto-tanstack-start-${environment}-import-protection`,
+    setup(buildApi) {
+      buildApi.onResolve({ filter: /.*/ }, (args) => {
+        if (args.path === serverOnlyMarker || args.path === clientOnlyMarker) {
+          const denied =
+            (environment === "client" && args.path === serverOnlyMarker) ||
+            (environment === "server" && args.path === clientOnlyMarker);
+          if (denied) {
+            throw importProtectionError({
+              environment,
+              importer: args.importer,
+              specifier: args.path,
+              reason: `Denied by ${args.path.endsWith("server-only") ? "server-only" : "client-only"} marker`,
+            });
+          }
+          return { path: args.path, namespace: markerNamespace };
+        }
+        if (
+          environment === "client" &&
+          args.path === "@tanstack/react-start/server"
+        ) {
+          throw importProtectionError({
+            environment,
+            importer: args.importer,
+            specifier: args.path,
+            reason: "Denied by protected server specifier",
+          });
+        }
+
+        const rootedModule = root ? toWorkspaceModuleId(root, args.path) : null;
+        const resolved =
+          (rootedModule && files.has(rootedModule) ? rootedModule : null) ??
+          (files.has(args.path) ? args.path : null) ??
+          (args.importer
+            ? resolveWorkspaceImport(files, args.path, args.importer)
+            : null);
+        if (!resolved) return null;
+        const cleanResolved = resolved.split("?")[0] ?? resolved;
+        const deniedByFile =
+          environment === "client"
+            ? isServerOnlyFile(cleanResolved)
+            : isClientOnlyFile(cleanResolved);
+        const deniedByMarker =
+          environment === "client"
+            ? restrictions.serverOnly.has(cleanResolved)
+            : restrictions.clientOnly.has(cleanResolved);
+        if (deniedByFile || deniedByMarker) {
+          throw importProtectionError({
+            environment,
+            importer: args.importer,
+            specifier: args.path,
+            resolved: cleanResolved,
+            reason: deniedByFile
+              ? `Denied by file pattern: **/*.${environment === "client" ? "server" : "client"}.*`
+              : `Denied by ${environment === "client" ? "server-only" : "client-only"} marker`,
+          });
+        }
+        return null;
+      });
+      buildApi.onLoad({ filter: /.*/, namespace: markerNamespace }, () => ({
+        contents: "export {};",
+        loader: "js",
+      }));
+    },
+  };
 }
 
 function loaderForPath(filePath: string): Loader {
@@ -1398,6 +1616,7 @@ function normalizeBuildError(error: unknown): BuildDiagnostic[] {
 async function buildNativeServerBundle({
   clientAssetUrl,
   cssAssetUrl,
+  environment,
   rscClientReferenceDeps,
   rscClientReferences,
   routeManifest,
@@ -1406,6 +1625,7 @@ async function buildNativeServerBundle({
 }: {
   clientAssetUrl: string;
   cssAssetUrl?: string;
+  environment: WorkspaceEnvironment;
   rscClientReferenceDeps: Record<string, RscClientReferenceDeps>;
   rscClientReferences: Record<string, string>;
   routeManifest: Record<string, RouteManifestEntry>;
@@ -1512,10 +1732,10 @@ globalThis.${kernelManifest.server.handlerKey} = (request, requestOptions = {}) 
     bundle: true,
     charset: "utf8",
     define: {
-      "process.env.NODE_ENV": '"production"',
-      "process.env.TSS_SERVER_FN_BASE": JSON.stringify(
-        kernelManifest.server.serverFnBase,
-      ),
+      "import.meta.env": importMetaEnvironmentDefine(environment, true),
+      "process.env": serverEnvironmentDefine(environment, {
+        TSS_SERVER_FN_BASE: kernelManifest.server.serverFnBase,
+      }),
     },
     entryPoints: ["__tuto_server_entry__"],
     format: "esm",
@@ -1528,6 +1748,7 @@ globalThis.${kernelManifest.server.handlerKey} = (request, requestOptions = {}) 
     outdir: "/out",
     platform: "node",
     plugins: [
+      createImportProtectionPlugin(serverFiles, "server", root),
       createKernelExternalPlugin("server"),
       createServerWorkspacePlugin({
         entrySource,
@@ -1708,11 +1929,13 @@ async function buildRscCssResources({
 
 async function buildRscServerBundle({
   clientReferences,
+  environment,
   root,
   styleAssetBase,
   transform,
 }: {
   clientReferences: Record<string, string>;
+  environment: WorkspaceEnvironment;
   root: string;
   styleAssetBase: string;
   transform: StartServerFunctionsTransform;
@@ -1886,9 +2109,10 @@ ${rscHandlerSource}
     charset: "utf8",
     conditions: ["react-server", "module", "import", "default"],
     define: {
-      "import.meta.env.DEV": "false",
-      "import.meta.env.__vite_rsc_build__": "true",
-      "process.env.NODE_ENV": '"production"',
+      "import.meta.env": importMetaEnvironmentDefine(environment, true, {
+        __vite_rsc_build__: true,
+      }),
+      "process.env": serverEnvironmentDefine(environment),
     },
     entryNames: "chunks/rsc-entry",
     entryPoints: ["__tuto_rsc_entry__"],
@@ -1901,6 +2125,7 @@ ${rscHandlerSource}
     outdir: "/out",
     platform: "node",
     plugins: [
+      createImportProtectionPlugin(files, "server", root),
       createKernelExternalPlugin("rsc"),
       createRscWorkspacePlugin({
         clientReferences,
@@ -2219,6 +2444,7 @@ async function buildStaticClientCss({
 
 async function buildSsrClientBundle({
   chunkAssetBase,
+  environment,
   files,
   root,
   serverRouteBase,
@@ -2229,6 +2455,7 @@ async function buildSsrClientBundle({
   rscClientReferences,
 }: {
   chunkAssetBase: string;
+  environment: WorkspaceEnvironment;
   files: WorkspaceFileMap;
   root: string;
   serverRouteBase: string;
@@ -2320,6 +2547,7 @@ ${
     bundle: true,
     charset: "utf8",
     define: {
+      "import.meta.env": importMetaEnvironmentDefine(environment, false),
       "process.env.NODE_ENV": '"production"',
       "process.env.TSS_ROUTER_BASEPATH": '"/"',
       "process.env.TSS_SERVER_FN_BASE": JSON.stringify(serverFnBase),
@@ -2335,6 +2563,7 @@ ${
     platform: "browser",
     publicPath: chunkAssetBase,
     plugins: [
+      createImportProtectionPlugin(entryFiles, "client", root),
       createKernelExternalPlugin("client"),
       createWorkspacePlugin(entryFiles, root, "browser"),
     ],
@@ -2433,6 +2662,7 @@ async function compilePreview(
 
   try {
     const originalFileMap = sanitizeWorkspaceFiles(files);
+    const environment = readWorkspaceEnvironment(originalFileMap);
     const root = nodePath.join(
       absoluteWorkingDirectory,
       ".tmp",
@@ -2460,6 +2690,7 @@ async function compilePreview(
       bundle: true,
       charset: "utf8",
       define: {
+        "import.meta.env": importMetaEnvironmentDefine(environment, false),
         "process.env.NODE_ENV": '"production"',
         "process.env.TSS_SERVER_FN_BASE": JSON.stringify(serverFnBase),
       },
@@ -2474,6 +2705,11 @@ async function compilePreview(
       outdir: "/out",
       platform: "browser",
       plugins: [
+        createImportProtectionPlugin(
+          transformedWithRouteSplits,
+          "client",
+          root,
+        ),
         createKernelExternalPlugin("client"),
         createWorkspacePlugin(transformedWithRouteSplits, root, "browser"),
       ],
@@ -2493,6 +2729,7 @@ async function compilePreview(
 
     const ssrClientBuild = await buildSsrClientBundle({
       chunkAssetBase,
+      environment,
       files: transformed,
       root,
       routeIds: transform.clientRouteIds,
@@ -2505,6 +2742,7 @@ async function compilePreview(
     const serverBuild = await buildNativeServerBundle({
       clientAssetUrl: `${assetBase}client`,
       ...(ssrClientBuild.css ? { cssAssetUrl: `${assetBase}style` } : {}),
+      environment,
       rscClientReferenceDeps: ssrClientBuild.rscClientReferenceDeps,
       rscClientReferences,
       routeManifest: ssrClientBuild.routeManifest,
@@ -2513,6 +2751,7 @@ async function compilePreview(
     });
     const rscBuild = await buildRscServerBundle({
       clientReferences: rscClientReferences,
+      environment,
       root,
       styleAssetBase,
       transform,

@@ -8,6 +8,12 @@ const files: WorkspaceFile[] = [
     path: "index.html",
   },
   {
+    content: `VITE_APP_NAME=Tuto public environment
+SERVER_SECRET=server-environment-secret`,
+    language: "md",
+    path: ".env",
+  },
+  {
     content: "export {};",
     language: "ts",
     path: "src/main.ts",
@@ -35,6 +41,25 @@ const files: WorkspaceFile[] = [
 }`,
     language: "ts",
     path: "src/server/greeting.ts",
+  },
+  {
+    content: `import {
+  createClientOnlyFn,
+  createIsomorphicFn,
+  createServerOnlyFn,
+} from '@tanstack/react-start';
+
+export const getEnvironmentRuntime = createIsomorphicFn()
+  .server(() => 'server-runtime')
+  .client(() => 'client-runtime');
+export const getServerOnlyValue = createServerOnlyFn(
+  () => 'server-only:' + process.env.SERVER_SECRET,
+);
+export const getClientOnlyValue = createClientOnlyFn(
+  () => 'client-only:' + window.location.pathname,
+);`,
+    language: "ts",
+    path: "src/environment.ts",
   },
   {
     content: `import { StartClient } from '@tanstack/react-start/client';
@@ -66,7 +91,8 @@ export default createServerEntry({
   },
   {
     content: `import { Suspense, useState } from 'react';
-import { createMiddleware, createServerFn } from '@tanstack/react-start';
+import { Hydrate, createMiddleware, createServerFn } from '@tanstack/react-start';
+import { interaction } from '@tanstack/react-start/hydration';
 import {
   CompositeComponent,
   createCompositeComponent,
@@ -76,6 +102,11 @@ import {
 import { Link, createFileRoute } from '@tanstack/react-router';
 import { InitialRsc } from '../initial-rsc';
 import { multiplyOnRscServer } from '../rsc-actions';
+import {
+  getClientOnlyValue,
+  getEnvironmentRuntime,
+  getServerOnlyValue,
+} from '../environment';
 import { makeGreeting } from '~/server/greeting';
 
 const addContext = createMiddleware({ type: 'function' }).server(({ next }) =>
@@ -137,12 +168,39 @@ const getInitialRsc = createServerFn({ method: 'GET' }).handler(async () => ({
 }));
 
 export const Route = createFileRoute('/')({
-  loader: () => getInitialRsc(),
+  loader: async () => {
+    let clientOnlyError = 'missing-error';
+    try {
+      getClientOnlyValue();
+    } catch (error) {
+      clientOnlyError = error.message;
+    }
+    return {
+      ...(await getInitialRsc()),
+      environment: {
+        clientOnlyError,
+        runtime: getEnvironmentRuntime(),
+        serverOnly: getServerOnlyValue(),
+      },
+    };
+  },
   component: HomeRoute,
 });
 
+function DeferredHydrationCounter() {
+  const [count, setCount] = useState(0);
+  return (
+    <button
+      data-testid="deferred-hydration-counter"
+      onClick={() => setCount((value) => value + 1)}
+    >
+      Deferred hydration count: {count}
+    </button>
+  );
+}
+
 function HomeRoute() {
-  const { CompositeSrc, InitialRsc } = Route.useLoaderData();
+  const { CompositeSrc, InitialRsc, environment } = Route.useLoaderData();
   const [compositeCount, setCompositeCount] = useState(0);
   const [count, setCount] = useState(0);
   const [serverResult, setServerResult] = useState('idle');
@@ -152,6 +210,7 @@ function HomeRoute() {
   const [redirectResult, setRedirectResult] = useState('idle');
   const [rscTree, setRscTree] = useState(null);
   const [rscActionResult, setRscActionResult] = useState('idle');
+  const [environmentResult, setEnvironmentResult] = useState('idle');
 
   return (
     <main>
@@ -159,6 +218,32 @@ function HomeRoute() {
       <button data-testid="hydrate" onClick={() => setCount((value) => value + 1)}>
         Hydration count: {count}
       </button>
+      <Hydrate when={interaction({ events: 'click' })}>
+        <DeferredHydrationCounter />
+      </Hydrate>
+      <p data-testid="environment-server-result">
+        {environment.runtime}|{environment.serverOnly}|{environment.clientOnlyError}
+      </p>
+      <p data-testid="environment-public-result">
+        {import.meta.env.VITE_APP_NAME}|{String(import.meta.env.SERVER_SECRET)}
+      </p>
+      <button
+        data-testid="environment-client"
+        onClick={() => {
+          let serverOnlyError = 'missing-error';
+          try {
+            getServerOnlyValue();
+          } catch (error) {
+            serverOnlyError = error.message;
+          }
+          setEnvironmentResult(
+            [getEnvironmentRuntime(), getClientOnlyValue(), serverOnlyError].join('|'),
+          );
+        }}
+      >
+        Exercise client environment functions
+      </button>
+      <output data-testid="environment-client-result">{environmentResult}</output>
       <section data-testid="initial-rsc-result">{InitialRsc}</section>
       <CompositeComponent
         src={CompositeSrc.Card}
@@ -816,6 +901,10 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   const initialHtml = await renderResponse!.text();
   expect(renderResponse?.headers()["x-custom-server-entry"]).toBe("active");
   expect(initialHtml).toContain("Initial Flight rendered in SSR");
+  expect(initialHtml).toContain("Deferred hydration count: <!-- -->0");
+  expect(initialHtml).toContain('data-ts-hydrate-when="interaction"');
+  expect(initialHtml).toContain("server-runtime");
+  expect(initialHtml).toContain("server-only:server-environment-secret");
   expect(initialHtml).not.toContain("inline-bound-action:");
   expect(initialHtml).toContain('<article data-testid="composite-card">');
   expect(initialHtml).toContain('<button data-testid="composite-title-slot">');
@@ -824,6 +913,16 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   expect(initialHtml).toContain("data-rsc-css-href");
   expect(initialHtml).toContain("kind=style");
   await expect(page.getByRole("heading", { name: "Browser runtime fixture" })).toBeVisible();
+  await expect(page.getByTestId("environment-server-result")).toContainText(
+    "server-runtime|server-only:server-environment-secret|createClientOnlyFn() functions can only be called on the client!",
+  );
+  await expect(page.getByTestId("environment-public-result")).toHaveText(
+    "Tuto public environment|undefined",
+  );
+  await page.getByTestId("environment-client").click();
+  await expect(page.getByTestId("environment-client-result")).toHaveText(
+    "client-runtime|client-only:/api/serverless/tanstack-start/core-render|createServerOnlyFn() functions can only be called on the server!",
+  );
   expect(
     await page.evaluate(
       () =>
@@ -899,6 +998,29 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
 
   await page.getByTestId("hydrate").click();
   await expect(page.getByTestId("hydrate")).toHaveText("Hydration count: 1");
+
+  const chunksBeforeDeferredHydration = new Set(routeChunks);
+  await expect(page.getByTestId("deferred-hydration-counter")).toHaveText(
+    "Deferred hydration count: 0",
+  );
+  await expect(
+    page
+      .getByTestId("deferred-hydration-counter")
+      .locator("xpath=ancestor::*[@data-ts-hydrate-id][1]"),
+  ).toHaveAttribute("data-ts-hydrate-when", "interaction");
+  await page.getByTestId("deferred-hydration-counter").click();
+  await expect(
+    page
+      .getByTestId("deferred-hydration-counter")
+      .locator("xpath=ancestor::*[@data-ts-hydrate-id][1]"),
+  ).not.toHaveAttribute("data-ts-hydrate-when", "interaction");
+  expect(
+    [...routeChunks].some((url) => !chunksBeforeDeferredHydration.has(url)),
+  ).toBe(true);
+  await page.getByTestId("deferred-hydration-counter").click();
+  await expect(page.getByTestId("deferred-hydration-counter")).toHaveText(
+    "Deferred hydration count: 1",
+  );
 
   const directGatewayResult = await page.evaluate(async () => {
     const gateway = new URL(location.href);

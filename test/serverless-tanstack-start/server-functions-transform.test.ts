@@ -238,6 +238,91 @@ export async function runGreeting() {
   );
 });
 
+test("tree-shakes environment functions for the client and server targets", async () => {
+  const files: WorkspaceFileMap = new Map([
+    [
+      "src/environment.ts",
+      `import {
+  createClientOnlyFn,
+  createIsomorphicFn,
+  createServerOnlyFn,
+} from '@tanstack/react-start';
+
+export const runtime = createIsomorphicFn()
+  .server(() => 'server-implementation-secret')
+  .client(() => 'client-implementation');
+export const serverOnly = createServerOnlyFn(
+  () => 'server-only-secret',
+);
+export const clientOnly = createClientOnlyFn(
+  () => 'client-only-implementation',
+);
+`,
+    ],
+  ]);
+
+  const result = await transformFiles(files, "environment-functions");
+  const clientCode = getFile(result.clientFiles, "src/environment.ts");
+  const serverCode = getFile(result.serverFiles, "src/environment.ts");
+
+  assert.match(clientCode, /client-implementation/);
+  assert.match(clientCode, /client-only-implementation/);
+  assert.doesNotMatch(clientCode, /server-implementation-secret/);
+  assert.doesNotMatch(clientCode, /server-only-secret/);
+  assert.match(clientCode, /can only be called on the server/);
+  assert.match(serverCode, /server-implementation-secret/);
+  assert.match(serverCode, /server-only-secret/);
+  assert.doesNotMatch(serverCode, /client-implementation/);
+  assert.doesNotMatch(serverCode, /client-only-implementation/);
+  assert.match(serverCode, /can only be called on the client/);
+});
+
+test("uses the official Hydrate compiler plugin to emit deferred child modules", async () => {
+  const files: WorkspaceFileMap = new Map([
+    [
+      "src/routes/deferred.tsx",
+      `import { Hydrate } from '@tanstack/react-start';
+import { interaction } from '@tanstack/react-start/hydration';
+
+const label = 'deferred-widget-label';
+function DeferredWidget() {
+  return <button data-deferred-widget>{label}</button>;
+}
+
+export function DeferredPage() {
+  return (
+    <Hydrate when={interaction({ events: 'click' })}>
+      <DeferredWidget />
+    </Hydrate>
+  );
+}
+`,
+    ],
+  ]);
+
+  const result = await transformFiles(files, "deferred-hydration");
+  const clientCode = getFile(
+    result.clientFiles,
+    "src/routes/deferred.tsx",
+  );
+  const serverCode = getFile(
+    result.serverFiles,
+    "src/routes/deferred.tsx",
+  );
+  const deferredEntry = [...result.clientFiles.entries()].find(([filePath]) =>
+    filePath.includes("tss-hydrate="),
+  );
+
+  assert.match(clientCode, /tss-hydrate=/);
+  assert.match(clientCode, /lazyRouteComponent/);
+  assert.doesNotMatch(clientCode, /deferred-widget-label/);
+  assert.ok(deferredEntry, "expected a deferred Hydrate child module");
+  assert.match(deferredEntry[1], /deferred-widget-label/);
+  assert.match(deferredEntry[1], /data-deferred-widget/);
+  assert.match(serverCode, /deferred-widget-label/);
+  assert.match(serverCode, /\bh=["']0_[a-f0-9]{10}["']/);
+});
+
 test("executes inputValidator before the server function handler", async () => {
   const files: WorkspaceFileMap = new Map([
     [

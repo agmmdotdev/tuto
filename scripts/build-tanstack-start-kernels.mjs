@@ -44,6 +44,7 @@ const clientModules = [
   "@tanstack/react-start",
   "@tanstack/react-start/client",
   "@tanstack/react-start/client-rpc",
+  "@tanstack/react-start/hydration",
   "@tanstack/react-start/rsc",
   "@tanstack/react-router",
   "@vitejs/plugin-rsc/react/browser",
@@ -68,6 +69,7 @@ const rscModules = [
 const serverModules = [
   "@tanstack/react-router",
   "@tanstack/react-start",
+  "@tanstack/react-start/hydration",
   "@tanstack/react-start/rsc",
   "@tanstack/react-start/server",
   "@tanstack/react-start/server-entry",
