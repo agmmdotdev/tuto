@@ -15,6 +15,10 @@ The remaining playground work is:
 4. **Configurable Import Protection — complete for the safe config surface:**
    - `tanstack-start.config.json` supports client/server specifier and file globs, `excludeFiles`, global include/exclude/ignored-importer scopes, build/development error or mock behavior, runtime mock diagnostics, log deduplication, and disabling protection.
    - Executable `RegExp` values and `onViolation` callbacks are intentionally not accepted by the declarative request compiler.
+5. **SPA request preview — complete for the interactive path:**
+   - `tanstack-start.config.json` accepts `spa.enabled` and `spa.maskPath`.
+   - The official Start shell marker renders root SSR plus the pending fallback; Firefox proves the child route boots client-side and server functions remain live.
+   - Static `/_shell.html` emission and deployment rewrites remain part of the separate static-output roadmap.
 
 The versioned support contract and its executable evidence live in
 [`TANSTACK_START_COMPATIBILITY.md`](./TANSTACK_START_COMPATIBILITY.md). Static
@@ -30,6 +34,6 @@ Advanced deferred hydration is complete: the Firefox fixture covers `idle`,
 `visible`, `media`, `condition`, `never`, and prefetch behavior while verifying
 that deferred child chunks are not included in route preloads.
 
-The next core-runtime decision is SPA mode. Static prerendering, ISR, and static
-server functions remain separate output-generation decisions rather than
+The next core-runtime decision is static prerendered output. ISR and static
+server functions remain later output-generation decisions rather than
 prerequisites for the interactive request preview.

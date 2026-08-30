@@ -446,10 +446,19 @@
     {
       "id": "spa-mode",
       "area": "Rendering modes",
-      "status": "not-verified",
+      "status": "partial",
       "upstreamSource": "guide/spa-mode.md",
-      "evidence": [],
-      "notes": "The preview host targets Start SSR and has not validated the SPA shell/fallback mode."
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start/client-preview-rpc.test.ts",
+          "test": "the native Start host renders a workspace router with loaders"
+        },
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "boots an official Start SPA shell and keeps server functions live"
+        }
+      ],
+      "notes": "The request preview uses Start's official shell marker: root SSR and pending fallback boot the child route in Firefox while server functions and routes stay live. Static _shell.html emission and deployment rewrites are not generated yet."
     },
     {
       "id": "vite-plugin-ecosystem",

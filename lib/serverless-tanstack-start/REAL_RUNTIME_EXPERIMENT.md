@@ -408,9 +408,11 @@ Deferred hydration covers interaction, idle, media, visible, condition, never,
 and prefetch while keeping its virtual child chunks out of route preloads.
 Environment functions/variables, import rules, deferred loader data, selective
 SSR, SEO/head metadata, path aliases, custom entry points, and route
-error/not-found UI are covered. The next core-runtime decision is SPA mode;
-static-output features remain separate roadmap choices. The compatibility
-matrix is the source of truth for that sequence.
+error/not-found UI are covered. SPA request previews now use Start's official
+shell marker and retain live server functions/routes; static shell-file output
+and hosting rewrites remain unimplemented. The next core-runtime decision is
+static prerendered output, with the compatibility matrix as the source of truth
+for that sequence.
 
 The standalone proof script above still uses its original minimal host adapter
 to isolate the compiler experiment. The integrated playground no longer relies

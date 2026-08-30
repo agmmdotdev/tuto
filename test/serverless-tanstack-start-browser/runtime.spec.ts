@@ -844,15 +844,106 @@ export function getRouter() {
   },
 ];
 
+const spaFiles: WorkspaceFile[] = [
+  {
+    content: JSON.stringify({ spa: { enabled: true, maskPath: "/hello" } }),
+    language: "json",
+    path: "tanstack-start.config.json",
+  },
+  {
+    content: '<script type="module" src="./src/main.ts"></script>',
+    language: "html",
+    path: "index.html",
+  },
+  {
+    content: "export {};",
+    language: "ts",
+    path: "src/main.ts",
+  },
+  {
+    content: `import { useState } from 'react';
+import { createServerFn } from '@tanstack/react-start';
+import { createFileRoute } from '@tanstack/react-router';
+
+const pingServer = createServerFn({ method: 'POST' }).handler(
+  () => 'server-function-live',
+);
+
+export const Route = createFileRoute('/hello')({
+  loader: () => ({ source: typeof window === 'undefined' ? 'server' : 'client' }),
+  component: HelloRoute,
+});
+
+function HelloRoute() {
+  const data = Route.useLoaderData();
+  const [result, setResult] = useState('idle');
+  return <main data-testid="spa-child">
+    <h1>SPA child loaded on the client</h1>
+    <p data-testid="spa-loader">{data.source}</p>
+    <button data-testid="spa-server-function" onClick={async () => setResult(await pingServer())}>
+      Call server
+    </button>
+    <output data-testid="spa-server-result">{result}</output>
+  </main>;
+}`,
+    language: "tsx",
+    path: "src/routes/hello.tsx",
+  },
+  {
+    content: `import {
+  Outlet,
+  Scripts,
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  useRouter,
+} from '@tanstack/react-router';
+import { Route as helloRouteImport } from './routes/hello';
+
+const rootRoute = createRootRoute({
+  component: () => <html lang="en"><head><title>SPA shell fixture</title></head><body>
+    <p data-spa-shell={String(useRouter().isShell())}>root shell</p>
+    <Outlet />
+    <Scripts />
+  </body></html>,
+});
+const helloRoute = helloRouteImport.update({
+  getParentRoute: () => rootRoute,
+  id: '/hello',
+  path: '/hello',
+});
+const routeTree = rootRoute.addChildren([helloRoute]);
+
+export function getRouter() {
+  return createRouter({
+    defaultPendingComponent: () => <p data-spa-pending="true">Loading SPA route</p>,
+    history: createMemoryHistory({
+      initialEntries: [
+        typeof window === 'undefined'
+          ? '/'
+          : new URL(window.location.href).searchParams.get('path') || '/',
+      ],
+    }),
+    routeTree,
+  });
+}`,
+    language: "tsx",
+    path: "src/router.tsx",
+  },
+];
+
 type CompileResult = {
   diagnostics?: Array<{ message: string }>;
   html: string | null;
   success: boolean;
 };
 
-async function compilePreview(request: APIRequestContext) {
+async function compilePreview(
+  request: APIRequestContext,
+  workspaceFiles: WorkspaceFile[] = files,
+) {
   const response = await request.post("/api/serverless/compile", {
-    data: { files, mode: "tanstackstart" },
+    data: { files: workspaceFiles, mode: "tanstackstart" },
     timeout: 120_000,
   });
   const result = (await response.json()) as CompileResult;
@@ -1400,5 +1491,35 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   expect(
     [...routeStyles].some((url) => !stylesBeforeNavigation.has(url)),
   ).toBe(true);
+  expect(browserErrors).toEqual([]);
+});
+
+test("boots an official Start SPA shell and keeps server functions live", async ({
+  page,
+  request,
+  baseURL,
+}) => {
+  const browserErrors = collectBrowserErrors(page);
+  const renderPath = await compilePreview(request, spaFiles);
+  const renderUrl = new URL(renderPath, "http://tuto.local");
+  expect(renderUrl.searchParams.get("path")).toBe("/hello");
+  expect(renderUrl.searchParams.get("shell")).toBe("true");
+
+  const shellResponse = await request.get(renderPath);
+  const shellHtml = await shellResponse.text();
+  expect(shellResponse.status()).toBe(200);
+  expect(shellHtml).toContain('data-spa-shell="true"');
+  expect(shellHtml).toContain('data-spa-pending="true"');
+  expect(shellHtml).not.toContain('data-testid="spa-child"');
+  expect(shellHtml).not.toContain("server-function-live");
+
+  const navigation = await page.goto(new URL(renderPath, baseURL).href);
+  expect(navigation?.status()).toBe(200);
+  await expect(page.getByTestId("spa-child")).toBeVisible();
+  await expect(page.getByTestId("spa-loader")).toHaveText("client");
+  await page.getByTestId("spa-server-function").click();
+  await expect(page.getByTestId("spa-server-result")).toHaveText(
+    "server-function-live",
+  );
   expect(browserErrors).toEqual([]);
 });

@@ -79,6 +79,10 @@ type ImportProtectionRun = {
   policy: ImportProtectionPolicy;
   seenViolations: Set<string>;
 };
+type SpaPolicy = {
+  enabled: boolean;
+  maskPath: string;
+};
 
 type HtmlEntryPoint = {
   html: string;
@@ -581,6 +585,54 @@ function readImportProtectionPolicy(files: WorkspaceFileMap) {
     };
   }
   return policy;
+}
+
+function readSpaPolicy(files: WorkspaceFileMap): SpaPolicy {
+  const source = files.get(importProtectionConfigFile);
+  if (source === undefined) return { enabled: false, maskPath: "/" };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch (error) {
+    throw new Error(
+      `[spa] ${importProtectionConfigFile} is not valid JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const config = importProtectionObject(parsed, importProtectionConfigFile);
+  if (config.spa === undefined) return { enabled: false, maskPath: "/" };
+  const options = importProtectionObject(
+    config.spa,
+    `${importProtectionConfigFile} spa`,
+  );
+  if (options.enabled !== undefined && typeof options.enabled !== "boolean") {
+    throw new Error("[spa] enabled must be a boolean.");
+  }
+  if (options.maskPath !== undefined && typeof options.maskPath !== "string") {
+    throw new Error("[spa] maskPath must be a string.");
+  }
+
+  const maskPath = (options.maskPath as string | undefined) ?? "/";
+  if (
+    !maskPath.startsWith("/") ||
+    maskPath.startsWith("//") ||
+    maskPath.length > 2_048
+  ) {
+    throw new Error(
+      "[spa] maskPath must be a same-origin path beginning with a single slash.",
+    );
+  }
+  const maskUrl = new URL(maskPath, "http://localhost");
+  if (maskUrl.origin !== "http://localhost") {
+    throw new Error("[spa] maskPath must remain on the preview origin.");
+  }
+
+  return {
+    enabled: options.enabled !== false,
+    maskPath: `${maskUrl.pathname}${maskUrl.search}${maskUrl.hash}`,
+  };
 }
 
 const importProtectionGlobCache = new Map<string, (value: string) => boolean>();
@@ -1929,10 +1981,16 @@ function buildFailurePreview(diagnostics: BuildDiagnostic[]) {
   return `<!doctype html><html><head><meta charset="utf-8" /><style>body{margin:0;padding:24px;background:#1e1e1e;color:#f5f5f5;font:14px/1.5 Consolas,monospace}article{border-top:1px solid #333;padding:16px}strong{color:#9cdcfe}pre{white-space:pre-wrap}</style></head><body>${body}</body></html>`;
 }
 
-function buildSsrPreviewRedirect(revision: string, rpcToken: string) {
+function buildSsrPreviewRedirect(
+  revision: string,
+  rpcToken: string,
+  spaPolicy: SpaPolicy,
+) {
   const renderUrl = `/api/serverless/tanstack-start/core-render?revision=${encodeURIComponent(
     revision,
-  )}&token=${encodeURIComponent(rpcToken)}&path=%2F`;
+  )}&token=${encodeURIComponent(rpcToken)}&path=${encodeURIComponent(
+    spaPolicy.enabled ? spaPolicy.maskPath : "/",
+  )}${spaPolicy.enabled ? "&shell=true" : ""}`;
   return `<!doctype html><html><head><meta charset="utf-8"><title>Loading Start preview</title></head><body><script>location.replace(${JSON.stringify(
     renderUrl,
   )})</script></body></html>`;
@@ -3034,6 +3092,7 @@ async function compilePreview(
 
   try {
     const originalFileMap = sanitizeWorkspaceFiles(files);
+    const spaPolicy = readSpaPolicy(originalFileMap);
     activeImportProtectionRun = {
       diagnostics: importProtectionDiagnostics,
       policy: readImportProtectionPolicy(originalFileMap),
@@ -3175,7 +3234,7 @@ async function compilePreview(
       buildMetrics,
       success: true,
       html: ssrClientBuild.code
-        ? buildSsrPreviewRedirect(revision, rpcToken)
+        ? buildSsrPreviewRedirect(revision, rpcToken, spaPolicy)
         : injectPreviewAssets({
             html,
             cssText: cssOutput?.text ?? "",
@@ -3185,7 +3244,7 @@ async function compilePreview(
         ...importProtectionDiagnostics,
         createDiagnostic(
           "info",
-          `TanStack Start core preview compiled ${Object.keys(serverFnsById).length} server function(s) and ${rscBuild.code ? 1 : 0} RSC entry in ${durationMs}ms. Revision bundles: ${buildMetrics.clientRevisionBytes} client bytes and ${buildMetrics.serverRevisionBytes} server bytes; shared kernel ${kernelManifest.id}.`,
+          `TanStack Start core preview compiled ${Object.keys(serverFnsById).length} server function(s) and ${rscBuild.code ? 1 : 0} RSC entry${spaPolicy.enabled ? ` with SPA shell path ${spaPolicy.maskPath}` : ""} in ${durationMs}ms. Revision bundles: ${buildMetrics.clientRevisionBytes} client bytes and ${buildMetrics.serverRevisionBytes} server bytes; shared kernel ${kernelManifest.id}.`,
         ),
       ],
       durationMs,

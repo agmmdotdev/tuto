@@ -64,7 +64,7 @@ or Markdown drift.
 | `import-protection` | Compiler protection | **partial** | [Import protection](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/import-protection.md) | Defaults plus declarative custom specifier/file/scope rules, build/development behavior, mock access, and log deduplication work. Executable RegExp and `onViolation` callbacks remain outside the safe config surface. |
 | `custom-entry-points` | Compiler configuration | **verified** | [Client entry](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/client-entry-point.md) / [server entry](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/server-entry-point.md) | Optional `src/client` hydration and `src/server` fetch wrappers preserve the Tuto bootstrap. |
 | `path-aliases` | Compiler configuration | **verified** | [Path aliases](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/path-aliases.md) | Root tsconfig/jsconfig aliases resolve across route, client, and server graphs. |
-| `spa-mode` | Rendering modes | **not-verified** | [SPA mode](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/spa-mode.md) | SSR is the current target; SPA shell behavior is untested. |
+| `spa-mode` | Rendering modes | **partial** | [SPA mode](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/spa-mode.md) | Official shell/root SSR and pending fallback boot the child route in Firefox while server functions/routes stay live. Static `/_shell.html` output and deployment rewrites remain unimplemented. |
 | `vite-plugin-ecosystem` | Compiler configuration | **partial** | [CSS](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/css-styling.md) | CSS and platform Tailwind work; arbitrary Vite plugins are not promised. |
 | `vite-dev-server-hmr` | Development server | **out-of-scope** | [Execution model](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/execution-model.md) | Tuto recompiles content revisions with esbuild; no per-student Vite watcher. |
 | `non-node-hosting-adapters` | Deployment | **out-of-scope** | [Hosting](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/hosting.md) | Tuto targets its Node 22 request host, not third-party adapter parity. |
@@ -85,9 +85,22 @@ process or allowing config callbacks to execute in the compiler host. Because
 JSON cannot represent executable `RegExp` and `onViolation` values, the matrix
 keeps the broader upstream row partial.
 
+## SPA preview configuration
+
+An optional `spa` object in `tanstack-start.config.json` enables Start's
+official shell request path. `enabled` defaults to `true` when the object is
+present, and `maskPath` defaults to `/`. Tuto renders the root route and the
+configured pending fallback with Start's shell marker, then the browser boots
+the matched child route. Server functions and server routes continue through
+the same reusable Node worker and remain live.
+
+This is request-preview compatibility, not static deployment output. Tuto does
+not yet emit the upstream `/_shell.html` artifact or generate hosting rewrite
+rules, so the broader SPA-mode row remains partial.
+
 ## Next compatibility slice
 
-The next core-runtime decision is SPA mode. Static prerendering, ISR, and static
-server functions remain separate output-generation decisions. All of this
-stays inside the request-based Node/esbuild architecture; it does not require a
+The next core-runtime decision is static prerendered output. ISR and static
+server functions remain later output-generation decisions. All of this stays
+inside the request-based Node/esbuild architecture; it does not require a
 watcher, container, or microVM.

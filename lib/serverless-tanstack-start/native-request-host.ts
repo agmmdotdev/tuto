@@ -76,7 +76,7 @@ function rewriteSameOriginRedirect(
 
 export async function executeNativeArtifactRequest(
   request: Request,
-  options: { acceptHtml?: boolean } = {},
+  options: { acceptHtml?: boolean; shell?: boolean } = {},
 ) {
   const requestUrl = new URL(request.url);
   const targetUrl = resolveTargetUrl(requestUrl);
@@ -115,6 +115,11 @@ export async function executeNativeArtifactRequest(
 
   const requestHeaders = new Headers(request.headers);
   if (options.acceptHtml) requestHeaders.set("accept", "text/html");
+  if (options.shell) {
+    requestHeaders.set("x-tss_shell", "true");
+  } else {
+    requestHeaders.delete("x-tss_shell");
+  }
   requestHeaders.set("origin", targetUrl.origin);
   requestHeaders.set("sec-fetch-site", "same-origin");
   requestHeaders.delete("content-length");

@@ -468,6 +468,21 @@ test("validates declarative import-protection configuration", () => {
     preview.diagnostics.map(({ message }) => message).join("\n"),
     /client\.files must be an array of glob strings/,
   );
+
+  const invalidSpa = compilePreview(
+    basicClientWorkspace("console.log('spa config');", [
+      {
+        path: "tanstack-start.config.json",
+        language: "json",
+        content: JSON.stringify({ spa: { maskPath: "https://example.com" } }),
+      },
+    ]),
+  );
+  assert.equal(invalidSpa.success, false);
+  assert.match(
+    invalidSpa.diagnostics.map(({ message }) => message).join("\n"),
+    /maskPath must be a same-origin path/,
+  );
 });
 
 test("real Start client and server runtimes round-trip without sending workspace files", async () => {
@@ -955,6 +970,13 @@ globalThis.__tutoPreviewPromise = inspectRequest()
 test("the native Start host renders a workspace router with loaders", async () => {
   const files: WorkspaceFileInput[] = [
     {
+      path: "tanstack-start.config.json",
+      language: "json",
+      content: JSON.stringify({
+        spa: { enabled: true, maskPath: "/hello" },
+      }),
+    },
+    {
       path: "index.html",
       language: "html",
       content: '<script type="module" src="./src/main.ts"></script>',
@@ -1024,6 +1046,7 @@ import {
   Scripts,
   createRootRoute,
   createRouter,
+  useRouter,
 } from '@tanstack/react-router';
 import { Route as apiRouteImport } from './routes/api.hello';
 import { Route as helloRouteImport } from './routes/hello';
@@ -1032,7 +1055,10 @@ const rootRoute = createRootRoute({
   component: () => (
     <html lang="en">
       <head><title>Native Start SSR</title></head>
-      <body><main><Outlet /></main><Scripts /></body>
+      <body>
+        <p data-shell={String(useRouter().isShell())}>root document</p>
+        <main><Outlet /></main><Scripts />
+      </body>
     </html>
   ),
 });
@@ -1052,13 +1078,19 @@ const apiRoute = apiRouteImport.update({
 const routeTree = rootRoute.addChildren([helloRoute, apiRoute]);
 
 export function getRouter() {
-  return createRouter({ routeTree });
+  return createRouter({
+    routeTree,
+    defaultPendingComponent: () => (
+      <p data-spa-pending="true">Loading SPA route</p>
+    ),
+  });
 }`,
     },
   ];
   const preview = compilePreview(files);
 
   assert.equal(preview.success, true, preview.html);
+  assert.match(preview.html, /path=%2Fhello&shell=true/);
   assert.deepEqual(preview.serverFnIds, []);
   assert.ok(preview.serverBundle.length > 0);
   assert.ok(Object.keys(preview.serverChunks).length > 0);
@@ -1123,6 +1155,20 @@ export function getRouter() {
     assert.match(html, /kind=chunk/);
     assert.match(html, /kind=style/);
     assert.match(html, /tuto-serverless-preview-log/);
+
+    const shellResponse = await handleNativeRender(
+      new Request(
+        `http://tuto.local/api/serverless/tanstack-start/core-render?revision=${preview.revision}&token=${preview.rpcToken}&path=%2Fhello&shell=true`,
+      ),
+    );
+    const shellHtml = await shellResponse.text();
+    assert.equal(shellResponse.status, 200, shellHtml);
+    assert.match(shellHtml, /data-shell="true"/);
+    assert.match(shellHtml, /data-spa-pending="true"/);
+    assert.match(shellHtml, /Loading SPA route/);
+    assert.doesNotMatch(shellHtml, /data-ssr="true"/);
+    assert.doesNotMatch(shellHtml, /loader rendered on the server/);
+    assert.match(shellHtml, /tanstack-start\/kernel\/client/);
 
     const routeResponse = await handleNativeRoutePost(
       new Request(

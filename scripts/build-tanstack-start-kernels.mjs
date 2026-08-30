@@ -862,7 +862,11 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
       charset: "utf8",
       define: {
         "process.env.NODE_ENV": '"production"',
+        // Start only honors X-TSS_SHELL in a prerender-aware server build.
+        // Without that private request header, the normal SSR path is unchanged.
+        "process.env.TSS_PRERENDERING": '"true"',
         "process.env.TSS_SERVER_FN_BASE": JSON.stringify(serverFnInternalBase),
+        "process.env.TSS_SHELL": '"false"',
       },
       format: "esm",
       legalComments: "none",

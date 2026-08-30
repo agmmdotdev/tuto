@@ -29,8 +29,10 @@ const previewBridgeScript = `<script>
 </script>`;
 
 export async function GET(request: Request) {
+  const requestUrl = new URL(request.url);
   const response = await executeNativeArtifactRequest(request, {
     acceptHtml: true,
+    shell: requestUrl.searchParams.get("shell") === "true",
   });
   if (
     !response.body ||
