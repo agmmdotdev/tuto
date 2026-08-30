@@ -352,11 +352,72 @@ function HomeRoute() {
       <Link data-testid="error-link" to="/error">Open route error fixture</Link>
       <Link data-testid="not-found-link" to="/missing">Open not-found fixture</Link>
       <Link data-testid="about-link" to="/about">Open lazy route</Link>
+      <Link data-testid="advanced-hydration-link" to="/hydration">Open hydration strategy fixtures</Link>
     </main>
   );
 }`,
     language: "tsx",
     path: "src/routes/index.tsx",
+  },
+  {
+    content: `import { useState } from 'react';
+import { Hydrate } from '@tanstack/react-start';
+import {
+  condition,
+  idle,
+  interaction,
+  media,
+  never,
+  visible,
+} from '@tanstack/react-start/hydration';
+import { Link, createFileRoute } from '@tanstack/react-router';
+
+export const Route = createFileRoute('/hydration')({
+  component: HydrationStrategiesRoute,
+});
+
+function StrategyCounter({ label, testId }) {
+  const [count, setCount] = useState(0);
+  return (
+    <button data-testid={testId} onClick={() => setCount((value) => value + 1)}>
+      {label} hydration count: {count}
+    </button>
+  );
+}
+
+function HydrationStrategiesRoute() {
+  return (
+    <main>
+      <h1>Advanced hydration strategy fixtures</h1>
+      <Hydrate when={idle({ timeout: 5_000 })}>
+        <StrategyCounter label="Idle" testId="idle-hydration-counter" />
+      </Hydrate>
+      <Hydrate when={media('(min-width: 1400px)')}>
+        <StrategyCounter label="Media" testId="media-hydration-counter" />
+      </Hydrate>
+      <div style={{ position: 'absolute', top: 10_000 }}>
+        <Hydrate when={visible({ rootMargin: '0px', threshold: 0 })}>
+          <StrategyCounter label="Visible" testId="visible-hydration-counter" />
+        </Hydrate>
+      </div>
+      <Hydrate when={condition(true)}>
+        <StrategyCounter label="Condition" testId="condition-hydration-counter" />
+      </Hydrate>
+      <Hydrate when={never()}>
+        <StrategyCounter label="Never" testId="never-hydration-counter" />
+      </Hydrate>
+      <Hydrate
+        when={interaction({ events: 'click' })}
+        prefetch={interaction({ events: 'mouseenter' })}
+      >
+        <StrategyCounter label="Prefetch" testId="prefetch-hydration-counter" />
+      </Hydrate>
+      <Link data-testid="advanced-hydration-home" to="/">Return home</Link>
+    </main>
+  );
+}`,
+    language: "tsx",
+    path: "src/routes/hydration.tsx",
   },
   {
     content: `'use server';
@@ -684,6 +745,7 @@ import { Route as aboutRouteImport } from './routes/about';
 import { Route as apiEchoRouteImport } from './routes/api.echo';
 import { Route as deferredRouteImport } from './routes/deferred';
 import { Route as errorRouteImport } from './routes/error';
+import { Route as hydrationRouteImport } from './routes/hydration';
 import { Route as indexRouteImport } from './routes/index';
 import { Route as missingRouteImport } from './routes/missing';
 import { Route as ssrClientOnlyRouteImport } from './routes/ssr-client-only';
@@ -720,6 +782,11 @@ const errorRoute = errorRouteImport.update({
   id: '/error',
   path: '/error',
 });
+const hydrationRoute = hydrationRouteImport.update({
+  getParentRoute: () => rootRoute,
+  id: '/hydration',
+  path: '/hydration',
+});
 const deferredRoute = deferredRouteImport.update({
   getParentRoute: () => rootRoute,
   id: '/deferred',
@@ -752,6 +819,7 @@ const routeTree = rootRoute.addChildren([
   apiEchoRoute,
   deferredRoute,
   errorRoute,
+  hydrationRoute,
   missingRoute,
   ssrFullRoute,
   ssrDataOnlyRoute,
@@ -761,7 +829,13 @@ const routeTree = rootRoute.addChildren([
 export function getRouter() {
   return createRouter({
     defaultPreload: false,
-    history: createMemoryHistory({ initialEntries: ['/'] }),
+    history: createMemoryHistory({
+      initialEntries: [
+        typeof window === 'undefined'
+          ? '/'
+          : new URL(window.location.href).searchParams.get('path') || '/',
+      ],
+    }),
     routeTree,
   });
 }`,
@@ -896,6 +970,22 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   );
   expect(aboutSsrHtml).toContain('type="application/ld+json"');
 
+  const hydrationSsrResponse = await request.get(
+    renderRoutePath(renderPath, "/hydration"),
+  );
+  const hydrationSsrHtml = await hydrationSsrResponse.text();
+  expect(hydrationSsrResponse.status()).toBe(200);
+  expect(hydrationSsrHtml).toContain("Idle<!-- --> hydration count: <!-- -->0");
+  expect(hydrationSsrHtml).toContain('data-ts-hydrate-when="idle"');
+  expect(hydrationSsrHtml).toContain("Media<!-- --> hydration count: <!-- -->0");
+  expect(hydrationSsrHtml).toContain('data-ts-hydrate-when="media"');
+  expect(hydrationSsrHtml).toContain("Visible<!-- --> hydration count: <!-- -->0");
+  expect(hydrationSsrHtml).toContain("Condition<!-- --> hydration count: <!-- -->0");
+  expect(hydrationSsrHtml).toContain('data-ts-hydrate-when="condition"');
+  expect(hydrationSsrHtml).toContain("Never<!-- --> hydration count: <!-- -->0");
+  expect(hydrationSsrHtml).toContain('data-ts-hydrate-when="never"');
+  expect(hydrationSsrHtml).toContain("Prefetch<!-- --> hydration count: <!-- -->0");
+
   const renderResponse = await page.goto(new URL(renderPath, baseURL).href);
   expect(renderResponse?.status()).toBe(200);
   const initialHtml = await renderResponse!.text();
@@ -1021,6 +1111,153 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   await expect(page.getByTestId("deferred-hydration-counter")).toHaveText(
     "Deferred hydration count: 1",
   );
+
+  await page.addInitScript(() => {
+    const schedule = globalThis as unknown as {
+      __tutoFlushIdleHydration?: () => void;
+      cancelIdleCallback?: (handle: number) => void;
+      requestIdleCallback?: (
+        callback: IdleRequestCallback,
+        options?: IdleRequestOptions,
+      ) => number;
+    };
+    const originalRequest = schedule.requestIdleCallback?.bind(globalThis);
+    const originalCancel = schedule.cancelIdleCallback?.bind(globalThis);
+    let nextHandle = -1;
+    const callbacks = new Map<number, IdleRequestCallback>();
+    schedule.requestIdleCallback = (callback, options) => {
+      if (options?.timeout === 5_000) {
+        const handle = nextHandle--;
+        callbacks.set(handle, callback);
+        return handle;
+      }
+      return originalRequest
+        ? originalRequest(callback, options)
+        : window.setTimeout(
+            () => callback({ didTimeout: false, timeRemaining: () => 50 }),
+            0,
+          );
+    };
+    schedule.cancelIdleCallback = (handle) => {
+      if (callbacks.delete(handle)) return;
+      if (originalCancel) originalCancel(handle);
+      else window.clearTimeout(handle);
+    };
+    schedule.__tutoFlushIdleHydration = () => {
+      const pending = [...callbacks.values()];
+      callbacks.clear();
+      if (originalRequest) schedule.requestIdleCallback = originalRequest;
+      else delete schedule.requestIdleCallback;
+      if (originalCancel) schedule.cancelIdleCallback = originalCancel;
+      else delete schedule.cancelIdleCallback;
+      delete schedule.__tutoFlushIdleHydration;
+      for (const callback of pending) {
+        callback({ didTimeout: false, timeRemaining: () => 50 });
+      }
+    };
+  });
+  const hydrationRenderResponse = await page.goto(
+    new URL(renderRoutePath(renderPath, "/hydration"), baseURL).href,
+  );
+  expect(hydrationRenderResponse?.status()).toBe(200);
+  await expect(
+    page.getByRole("heading", { name: "Advanced hydration strategy fixtures" }),
+  ).toBeVisible();
+  const hydrationMarker = (testId: string) =>
+    page
+      .getByTestId(testId)
+      .locator("xpath=ancestor::*[@data-ts-hydrate-id][1]");
+
+  await expect(hydrationMarker("condition-hydration-counter")).not.toHaveAttribute(
+    "data-ts-hydrate-when",
+    "condition",
+  );
+  await page.getByTestId("condition-hydration-counter").click();
+  await expect(page.getByTestId("condition-hydration-counter")).toHaveText(
+    "Condition hydration count: 1",
+  );
+
+  await expect(hydrationMarker("idle-hydration-counter")).toHaveAttribute(
+    "data-ts-hydrate-when",
+    "idle",
+  );
+  const chunksBeforeIdleHydration = routeChunks.size;
+  await page.evaluate(() => {
+    (
+      globalThis as typeof globalThis & {
+        __tutoFlushIdleHydration: () => void;
+      }
+    ).__tutoFlushIdleHydration();
+  });
+  await expect(hydrationMarker("idle-hydration-counter")).not.toHaveAttribute(
+    "data-ts-hydrate-when",
+    "idle",
+  );
+  await expect.poll(() => routeChunks.size).toBeGreaterThan(chunksBeforeIdleHydration);
+  await page.getByTestId("idle-hydration-counter").click();
+  await expect(page.getByTestId("idle-hydration-counter")).toHaveText(
+    "Idle hydration count: 1",
+  );
+
+  await expect(hydrationMarker("media-hydration-counter")).toHaveAttribute(
+    "data-ts-hydrate-when",
+    "media",
+  );
+  const chunksBeforeMediaHydration = routeChunks.size;
+  await page.setViewportSize({ height: 720, width: 1500 });
+  await expect(hydrationMarker("media-hydration-counter")).not.toHaveAttribute(
+    "data-ts-hydrate-when",
+    "media",
+  );
+  await expect.poll(() => routeChunks.size).toBeGreaterThan(chunksBeforeMediaHydration);
+  await page.getByTestId("media-hydration-counter").click();
+  await expect(page.getByTestId("media-hydration-counter")).toHaveText(
+    "Media hydration count: 1",
+  );
+
+  const chunksBeforeVisibleHydration = routeChunks.size;
+  await page.getByTestId("visible-hydration-counter").scrollIntoViewIfNeeded();
+  await expect.poll(() => routeChunks.size).toBeGreaterThan(chunksBeforeVisibleHydration);
+  await page.getByTestId("visible-hydration-counter").click();
+  await expect(page.getByTestId("visible-hydration-counter")).toHaveText(
+    "Visible hydration count: 1",
+  );
+
+  await expect(hydrationMarker("never-hydration-counter")).toHaveAttribute(
+    "data-ts-hydrate-when",
+    "never",
+  );
+  const chunksBeforeNeverInteraction = routeChunks.size;
+  await page.getByTestId("never-hydration-counter").click();
+  await page.waitForTimeout(250);
+  await expect(page.getByTestId("never-hydration-counter")).toHaveText(
+    "Never hydration count: 0",
+  );
+  expect(routeChunks.size).toBe(chunksBeforeNeverInteraction);
+
+  await expect(hydrationMarker("prefetch-hydration-counter")).toHaveAttribute(
+    "data-ts-hydrate-when",
+    "interaction",
+  );
+  const chunksBeforePrefetch = routeChunks.size;
+  await page.getByTestId("prefetch-hydration-counter").hover();
+  await expect.poll(() => routeChunks.size).toBeGreaterThan(chunksBeforePrefetch);
+  await expect(hydrationMarker("prefetch-hydration-counter")).toHaveAttribute(
+    "data-ts-hydrate-when",
+    "interaction",
+  );
+  await page.getByTestId("prefetch-hydration-counter").click();
+  await expect(hydrationMarker("prefetch-hydration-counter")).not.toHaveAttribute(
+    "data-ts-hydrate-when",
+    "interaction",
+  );
+  await page.getByTestId("prefetch-hydration-counter").click();
+  await expect(page.getByTestId("prefetch-hydration-counter")).toHaveText(
+    "Prefetch hydration count: 1",
+  );
+  const homeRenderResponse = await page.goto(new URL(renderPath, baseURL).href);
+  expect(homeRenderResponse?.status()).toBe(200);
+  await expect(page.getByTestId("hydrate")).toBeVisible();
 
   const directGatewayResult = await page.evaluate(async () => {
     const gateway = new URL(location.href);

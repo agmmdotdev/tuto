@@ -397,9 +397,10 @@ checks are properties of this execution model; they are not an operating-system
 sandbox, so deployments must apply the appropriate trust and access policy to
 student code.
 
-The next runtime work inside that architecture is broader deferred-hydration
-strategy coverage plus configurable import-protection policy and development
-mock/log modes. The interaction hydration path, environment
+The next runtime work inside that architecture is configurable
+import-protection policy and development mock/log modes. Deferred hydration now
+covers interaction, idle, media, visible, condition, never, and prefetch while
+keeping its virtual child chunks out of route preloads. Environment
 functions/variables, default import rules, deferred loader data, selective SSR,
 SEO/head metadata, path aliases, custom entry points, and route error/not-found
 UI are covered. The compatibility matrix is the source of truth for that
@@ -412,8 +413,8 @@ the official React Start package exports.
 
 This checkpoint claims router SSR, hydration, streamed document responses,
 matched-route client component chunks, route/server-function ESM chunks,
-route-scoped CSS loading during browser navigation, interaction-gated deferred
-hydration, environment target transforms, public/secret env separation, the
+route-scoped CSS loading during browser navigation, strategy-gated deferred
+hydration and prefetch, environment target transforms, public/secret env separation, the
 default import-protection rules, the covered server-route HTTP path, and the
 tested Flight/client-boundary slice. The covered
 loader-owned `renderServerComponent` path includes initial SSR and hydration;

@@ -2213,8 +2213,12 @@ function createClientOutputPreloadCollector({
       output,
     ]),
   );
-  const chunkImportPattern = new RegExp(
-    `${chunkAssetBase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\/?([^"'\\s;]+)`,
+  const escapedChunkAssetBase = chunkAssetBase.replace(
+    /[.*+?^${}()|[\]\\]/g,
+    "\\$&",
+  );
+  const staticChunkImportPattern = new RegExp(
+    `(?:\\bfrom|\\bimport)\\s*["']${escapedChunkAssetBase}\\/?([^"'\\s;]+)["']`,
     "g",
   );
 
@@ -2240,15 +2244,17 @@ function createClientOutputPreloadCollector({
     seen.add(outputName);
     const output = outputByName.get(outputName);
     if (!output) return [];
-    const emittedImports = [
-      ...(chunks[outputName] ?? "").matchAll(chunkImportPattern),
+    const emittedStaticImports = [
+      ...(chunks[outputName] ?? "").matchAll(staticChunkImportPattern),
     ]
       .map((match) => decodeURIComponent(match[1] ?? ""))
       .filter((name) => outputByName.has(name));
 
     return [
       routeChunkUrl(chunkAssetBase, outputName),
-      ...emittedImports.flatMap((name) => collectPreloads(name, seen)),
+      ...emittedStaticImports.flatMap((name) =>
+        collectPreloads(name, seen),
+      ),
       ...output.imports.flatMap((entry) => {
         if (
           entry.kind === "dynamic-import" ||
@@ -2292,7 +2298,10 @@ function buildClientRouteManifest({
       continue;
     const routePath = Object.keys(routeIds).find((workspacePath) =>
       Object.keys(output.inputs).some((inputPath) =>
-        inputPath.includes(`${workspacePath}?tsr-split=`),
+        inputPath.includes(`${workspacePath}?tsr-split=`) &&
+        // Hydrate virtual modules are dynamic child entries, not route entry
+        // dependencies. Preloading them would defeat every deferred strategy.
+        !inputPath.includes("tss-hydrate="),
       ),
     );
     if (!routePath) continue;

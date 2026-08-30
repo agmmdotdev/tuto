@@ -319,7 +319,7 @@
           "test": "hydrates and exercises the native Start browser runtime"
         }
       ],
-      "notes": "Initial SSR HTML remains visible while an interaction boundary defers hydration and its default child chunk; the trigger loads the chunk and enables interaction."
+      "notes": "Initial SSR HTML remains visible across interaction, idle, media, visible, condition, and never strategies. Deferred child chunks are excluded from route preloads, strategy triggers load and hydrate them, prefetch loads without hydrating, and never neither loads nor hydrates its child."
     },
     {
       "id": "seo-head-metadata",

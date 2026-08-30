@@ -54,7 +54,7 @@ or Markdown drift.
 | `error-boundary-ui` | Routing and SSR | **verified** | [Error boundaries](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/error-boundaries.md) | Firefox route `errorComponent`, `notFoundComponent`, and recovery navigation. |
 | `deferred-loader-data` | Streaming | **verified** | [Routing](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/routing.md) | Immediate/promised loader values, streamed SSR, Await/Suspense, hydration, and interaction. |
 | `selective-ssr` | Rendering modes | **verified** | [Selective SSR](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/selective-ssr.md) | Full, data-only, and client-only initial renders plus client navigation. |
-| `deferred-hydration` | Rendering modes | **verified** | [Deferred hydration](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/deferred-hydration.md) | SSR preservation, interaction-gated hydration, default child splitting, delayed chunk loading, and post-hydration interaction. |
+| `deferred-hydration` | Rendering modes | **verified** | [Deferred hydration](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/deferred-hydration.md) | SSR preservation; interaction, idle, media, visible, condition, and never strategies; delayed child chunks; prefetch without hydration; post-hydration interaction. |
 | `seo-head-metadata` | Document output | **verified** | [SEO](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/seo.md) | Loader-derived title/meta/Open Graph/canonical/JSON-LD in SSR and navigation. |
 | `static-prerendering` | Build output | **not-verified** | [Static prerendering](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/static-prerendering.md) | Current host is request-time, not static-output generation. |
 | `incremental-static-regeneration` | Build output | **not-verified** | [ISR](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/isr.md) | No preview-host regeneration contract yet. |
@@ -72,9 +72,8 @@ or Markdown drift.
 
 ## Next compatibility slice
 
-The next compatibility work is the advanced deferred-hydration strategy matrix
-(`idle`, `visible`, `media`, `condition`, `never`, and prefetch) plus configurable
-import-protection rules and development mock/log modes. After that, SPA mode and
-static-output features remain separate roadmap decisions. All of this stays
-inside the request-based Node/esbuild architecture; it does not require a
-watcher, container, or microVM.
+The next compatibility work is configurable import-protection rules and
+development mock/log modes. After that, SPA mode and static-output features
+remain separate roadmap decisions. All of this stays inside the request-based
+Node/esbuild architecture; it does not require a watcher, container, or
+microVM.
