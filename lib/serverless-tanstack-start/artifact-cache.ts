@@ -34,6 +34,7 @@ export type TanstackStartArtifact = {
   serverBundle: string;
   serverChunks: Record<string, string>;
   serverFnIds: string[];
+  staticServerFunctions?: Record<string, string>;
   success: boolean;
 };
 
@@ -94,6 +95,10 @@ function artifactBytes(artifact: TanstackStartArtifact) {
     Buffer.byteLength(artifact.serverBundle) +
     Buffer.byteLength(artifact.ssrClientBundle) +
     Buffer.byteLength(artifact.ssrCss) +
+    Object.values(artifact.staticServerFunctions ?? {}).reduce(
+      (bytes, result) => bytes + Buffer.byteLength(result),
+      0,
+    ) +
     Object.values(artifact.prerendered?.documents ?? {}).reduce(
       (bytes, document) => bytes + Buffer.byteLength(document),
       0,

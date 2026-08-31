@@ -894,16 +894,34 @@ function HelloRoute() {
     path: "src/routes/hello.tsx",
   },
   {
-    content: `import { createFileRoute } from '@tanstack/react-router';
+    content: `import { useState } from 'react';
+import { createServerFn } from '@tanstack/react-start';
+import { createFileRoute } from '@tanstack/react-router';
+import { staticFunctionMiddleware } from '@tanstack/start-static-server-functions';
+
+const readStaticMessage = createServerFn({ method: 'GET' })
+  .middleware([staticFunctionMiddleware])
+  .inputValidator((data) => ({ scope: String(data.scope) }))
+  .handler(({ data }) => 'static-function-build-result:' + data.scope);
 
 export const Route = createFileRoute('/static')({
-  loader: () => ({ source: typeof window === 'undefined' ? 'static-server' : 'client' }),
+  loader: async () => ({
+    source: typeof window === 'undefined' ? 'static-server' : 'client',
+    staticMessage: await readStaticMessage({ data: { scope: 'browser-fixture' } }),
+  }),
   component: StaticRoute,
 });
 
 function StaticRoute() {
   const data = Route.useLoaderData();
-  return <main data-testid="static-child">Static route rendered by {data.source}</main>;
+  const [result, setResult] = useState('idle');
+  return <main data-testid="static-child">
+    Static route rendered by {data.source}: {data.staticMessage}
+    <button data-testid="static-server-function" onClick={async () => setResult(await readStaticMessage({ data: { scope: 'browser-fixture' } }))}>
+      Read static server function
+    </button>
+    <output data-testid="static-server-function-result">{result}</output>
+  </main>;
 }`,
     language: "tsx",
     path: "src/routes/static.tsx",
@@ -1554,6 +1572,29 @@ test("boots an official Start SPA shell and keeps server functions live", async 
   );
   expect(staticResponse.headers()["x-tuto-worker-id"]).toBeUndefined();
   expect(staticHtml).toContain("Static route rendered by <!-- -->static-server");
+  expect(staticHtml).toContain("static-function-build-result:browser-fixture");
+
+  const staticNavigation = await page.goto(
+    new URL(renderRoutePath(renderPath, "/static"), baseURL).href,
+  );
+  expect(staticNavigation?.status()).toBe(200);
+  await expect(page.getByTestId("static-child")).toContainText(
+    "static-function-build-result:browser-fixture",
+  );
+  const [staticFunctionResponse] = await Promise.all([
+    page.waitForResponse((response) =>
+      response.url().includes("kind=static-server-function"),
+    ),
+    page.getByTestId("static-server-function").click(),
+  ]);
+  expect(staticFunctionResponse.status()).toBe(200);
+  expect(staticFunctionResponse.headers()["cache-control"]).toBe(
+    "private, max-age=31536000, immutable",
+  );
+  expect(staticFunctionResponse.headers()["x-tuto-worker-id"]).toBeUndefined();
+  await expect(page.getByTestId("static-server-function-result")).toHaveText(
+    "static-function-build-result:browser-fixture",
+  );
 
   const navigation = await page.goto(new URL(renderPath, baseURL).href);
   expect(navigation?.status()).toBe(200);

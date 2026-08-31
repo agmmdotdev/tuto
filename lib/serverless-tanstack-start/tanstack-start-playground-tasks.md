@@ -23,6 +23,10 @@ The remaining playground work is:
    - Top-level `pages` and `prerender` configuration emit bounded, content-addressed HTML documents from the official Start handler.
    - Exact static routes are served before the SPA shell with private immutable caching; server functions and server routes remain dynamic.
    - Executable filters/hooks, automatic filesystem route discovery, and third-party deployment packaging are intentionally not run by the shared compiler.
+7. **Static server functions — complete:**
+   - The documented `staticFunctionMiddleware` import works as the final middleware on GET server functions.
+   - Prerendering executes validators and handlers in the existing worker, persists the upstream Seroval result under its function-ID/payload-derived key, and embeds it in static HTML.
+   - Later browser calls fetch the authenticated immutable JSON artifact without running live RPC; ordinary server functions and routes stay dynamic.
 
 The versioned support contract and its executable evidence live in
 [`TANSTACK_START_COMPATIBILITY.md`](./TANSTACK_START_COMPATIBILITY.md). ISR,
@@ -37,6 +41,6 @@ Advanced deferred hydration is complete: the Firefox fixture covers `idle`,
 `visible`, `media`, `condition`, `never`, and prefetch behavior while verifying
 that deferred child chunks are not included in route preloads.
 
-The next core-runtime slice is static server-function result generation. ISR
-and regeneration locking follow it; neither is a prerequisite for the
-interactive request preview.
+The next core-runtime slice is ISR with bounded regeneration locking and
+revision-safe publication. It is not a prerequisite for the interactive
+request preview.

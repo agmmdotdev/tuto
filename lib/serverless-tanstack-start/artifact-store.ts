@@ -46,6 +46,7 @@ type ArtifactSourceManifest = {
   ssrClientChunks: Record<string, ArtifactBlobDescriptor>;
   ssrCss: ArtifactBlobDescriptor;
   ssrCssChunks: Record<string, ArtifactBlobDescriptor>;
+  staticServerFunctions?: Record<string, ArtifactBlobDescriptor>;
 };
 
 type TanstackStartPrerenderedMetadata = Omit<
@@ -63,6 +64,7 @@ type ArtifactManifest = Omit<
   | "ssrClientChunks"
   | "ssrCss"
   | "ssrCssChunks"
+  | "staticServerFunctions"
 > & {
   prerendered?: TanstackStartPrerenderedMetadata;
   sources: ArtifactSourceManifest;
@@ -78,6 +80,7 @@ export type TanstackStartArtifactMetadata = Omit<
   | "ssrClientChunks"
   | "ssrCss"
   | "ssrCssChunks"
+  | "staticServerFunctions"
 > & {
   prerendered?: TanstackStartPrerenderedMetadata;
 };
@@ -90,6 +93,7 @@ export type TanstackStartArtifactDocumentResult = {
 export type TanstackStartArtifactAsset =
   | { kind: "client" }
   | { kind: "client-chunk"; name: string }
+  | { kind: "static-server-function"; name: string }
   | { kind: "style" }
   | { kind: "style-chunk"; name: string };
 
@@ -350,6 +354,25 @@ function prerenderedRoutePathIsValid(value: string) {
   }
 }
 
+function staticServerFunctionPathIsValid(value: string) {
+  return /^\/__tsr\/staticServerFnCache\/[a-f0-9]{40}\.json$/.test(value);
+}
+
+function staticServerFunctionsAreValid(value: unknown) {
+  if (value === undefined) return true;
+  if (value === null || typeof value !== "object") return false;
+  const entries = Object.entries(value);
+  return (
+    entries.length <= 64 &&
+    entries.every(
+      ([cachePath, body]) =>
+        staticServerFunctionPathIsValid(cachePath) &&
+        typeof body === "string" &&
+        Buffer.byteLength(body) <= 3_000_000,
+    )
+  );
+}
+
 function prerenderedOutputIsValid(value: unknown) {
   if (value === undefined) return true;
   if (value === null || typeof value !== "object") return false;
@@ -441,6 +464,7 @@ function artifactIsValid(
     serverChunksAreValid &&
     routeManifestIsValid &&
     prerenderedOutputIsValid(candidate.prerendered) &&
+    staticServerFunctionsAreValid(candidate.staticServerFunctions) &&
     typeof candidate.ssrCss === "string" &&
     typeof candidate.serverBundle === "string" &&
     Array.isArray(candidate.serverFnIds) &&
@@ -483,6 +507,8 @@ function artifactAssetBody(
       return artifact.ssrClientBundle;
     case "client-chunk":
       return artifact.ssrClientChunks[asset.name] ?? null;
+    case "static-server-function":
+      return artifact.staticServerFunctions?.[asset.name] ?? null;
     case "style":
       return artifact.ssrCss;
     case "style-chunk":
@@ -499,6 +525,8 @@ function artifactAssetDescriptor(
       return manifest.sources.ssrClientBundle;
     case "client-chunk":
       return manifest.sources.ssrClientChunks[asset.name] ?? null;
+    case "static-server-function":
+      return manifest.sources.staticServerFunctions?.[asset.name] ?? null;
     case "style":
       return manifest.sources.ssrCss;
     case "style-chunk":
@@ -556,6 +584,7 @@ function createArtifactManifest(artifact: TanstackStartArtifact) {
     ssrClientChunks,
     ssrCss,
     ssrCssChunks,
+    staticServerFunctions,
     ...metadata
   } = artifact;
   const blobs = new Map<string, string>();
@@ -594,6 +623,9 @@ function createArtifactManifest(artifact: TanstackStartArtifact) {
         ssrClientChunks: describeRecord(ssrClientChunks),
         ssrCss: describe(ssrCss),
         ssrCssChunks: describeRecord(ssrCssChunks),
+        ...(staticServerFunctions
+          ? { staticServerFunctions: describeRecord(staticServerFunctions) }
+          : {}),
       },
     } satisfies ArtifactManifest,
   };
@@ -627,7 +659,17 @@ function artifactManifestIsValid(
     !descriptorIsValid(sources.ssrClientBundle) ||
     !descriptorRecordIsValid(sources.ssrClientChunks, "js") ||
     !descriptorIsValid(sources.ssrCss) ||
-    !descriptorRecordIsValid(sources.ssrCssChunks, "css")
+    !descriptorRecordIsValid(sources.ssrCssChunks, "css") ||
+    (sources.staticServerFunctions !== undefined &&
+      !(
+        sources.staticServerFunctions !== null &&
+        typeof sources.staticServerFunctions === "object" &&
+        Object.entries(sources.staticServerFunctions).every(
+          ([cachePath, descriptor]) =>
+            staticServerFunctionPathIsValid(cachePath) &&
+            descriptorIsValid(descriptor),
+        )
+      ))
   ) {
     return false;
   }
@@ -663,6 +705,16 @@ function artifactManifestIsValid(
       ssrCssChunks: Object.fromEntries(
         Object.keys(sources.ssrCssChunks).map((name) => [name, ""]),
       ),
+      ...(sources.staticServerFunctions
+        ? {
+            staticServerFunctions: Object.fromEntries(
+              Object.keys(sources.staticServerFunctions).map((name) => [
+                name,
+                "",
+              ]),
+            ),
+          }
+        : {}),
     },
     revision,
   );
@@ -679,6 +731,7 @@ function artifactDescriptors(manifest: ArtifactManifest) {
     ...Object.values(sources.ssrClientChunks),
     sources.ssrCss,
     ...Object.values(sources.ssrCssChunks),
+    ...Object.values(sources.staticServerFunctions ?? {}),
   ];
 }
 
@@ -714,6 +767,11 @@ function reconstructArtifact(
     ssrClientChunks: sourceRecord(sources.ssrClientChunks),
     ssrCss: source(sources.ssrCss),
     ssrCssChunks: sourceRecord(sources.ssrCssChunks),
+    ...(sources.staticServerFunctions
+      ? {
+          staticServerFunctions: sourceRecord(sources.staticServerFunctions),
+        }
+      : {}),
   } satisfies TanstackStartArtifact;
 }
 

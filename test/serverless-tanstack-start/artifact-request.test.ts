@@ -46,6 +46,10 @@ const artifact: TanstackStartArtifact = {
   serverBundle: "",
   serverChunks: {},
   serverFnIds: [],
+  staticServerFunctions: {
+    [`/__tsr/staticServerFnCache/${"a".repeat(40)}.json`]:
+      '{"static":"result"}',
+  },
   ssrClientBundle: "client source",
   ssrClientChunks: {},
   ssrCss: "",
@@ -134,6 +138,43 @@ test("fails closed when the artifact identity changes after authorization", asyn
       status: 503,
     },
   );
+});
+
+test("rejects an invalid capability before reading a static server-function blob", async () => {
+  let assetReads = 0;
+  const cachePath = `/__tsr/staticServerFnCache/${"a".repeat(40)}.json`;
+  setTanstackStartArtifactStoreForTests({
+    async get() {
+      throw new Error("full artifact should not be read");
+    },
+    async getAsset() {
+      assetReads += 1;
+      return {
+        artifact: getTanstackStartArtifactMetadata(artifact),
+        body: artifact.staticServerFunctions?.[cachePath] ?? null,
+      };
+    },
+    async getMetadata() {
+      return getTanstackStartArtifactMetadata(artifact);
+    },
+    async put() {},
+  });
+
+  const denied = await resolveArtifactAssetRequest(
+    new Request(
+      `http://tuto.local/asset?revision=${revision}&token=${"x".repeat(43)}`,
+    ),
+    { kind: "static-server-function", name: cachePath },
+  );
+  assert.equal(denied.ok, false);
+  assert.equal(assetReads, 0);
+
+  const allowed = await resolveArtifactAssetRequest(
+    new Request(`http://tuto.local/asset?revision=${revision}&token=${token}`),
+    { kind: "static-server-function", name: cachePath },
+  );
+  assert.equal(allowed.ok && allowed.body, '{"static":"result"}');
+  assert.equal(assetReads, 1);
 });
 
 test("resolves a deferred server runtime without invoking its source loaders", async () => {

@@ -15,7 +15,12 @@ export async function GET(request: Request) {
         ? requestedChunk
           ? { kind: "style-chunk", name: requestedChunk }
           : { kind: "style" }
-        : kind === "chunk" && requestedChunk
+        : kind === "static-server-function" && requestedChunk
+          ? {
+              kind: "static-server-function",
+              name: `/${requestedChunk}`,
+            }
+          : kind === "chunk" && requestedChunk
           ? { kind: "client-chunk", name: requestedChunk }
           : null;
   if (!asset) {
@@ -48,9 +53,14 @@ export async function GET(request: Request) {
   return new Response(body, {
     headers: {
       "access-control-allow-origin": "*",
-      "cache-control": "private, no-store",
+      "cache-control":
+        kind === "static-server-function"
+          ? "private, max-age=31536000, immutable"
+          : "private, no-store",
       "content-type":
-        kind === "client" || kind === "chunk"
+        kind === "static-server-function"
+          ? "application/json; charset=utf-8"
+          : kind === "client" || kind === "chunk"
           ? "text/javascript; charset=utf-8"
           : "text/css; charset=utf-8",
       "x-content-type-options": "nosniff",

@@ -17,6 +17,8 @@ type NativeHandler = (
 
 const handlerKey = "__TUTO_TANSTACK_START_NATIVE_HANDLER__";
 const rscHandlerKey = "__TUTO_TANSTACK_START_RSC_HANDLER__";
+const staticServerFunctionCollectorKey =
+  "__TUTO_TANSTACK_START_STATIC_SERVER_FUNCTION_COLLECTOR__";
 const activeStreams = new Map<
   string,
   {
@@ -51,6 +53,9 @@ async function cleanup() {
   ];
   delete (globalThis as typeof globalThis & Record<string, unknown>)[
     rscHandlerKey
+  ];
+  delete (globalThis as typeof globalThis & Record<string, unknown>)[
+    staticServerFunctionCollectorKey
   ];
   delete (globalThis as typeof globalThis & Record<string, unknown>)[
     kernelManifest.rsc.globalKey
@@ -219,6 +224,40 @@ async function execute(
   if (command.request.streamResponse) {
     activeStreams.set(command.id, { abortController });
   }
+  const staticServerFunctionCache: Record<string, string> = {};
+  let staticServerFunctionBytes = 0;
+  (
+    globalThis as typeof globalThis & Record<string, unknown>
+  )[staticServerFunctionCollectorKey] = ({
+    body,
+    url,
+  }: {
+    body: string;
+    url: string;
+  }) => {
+    if (!/^\/__tsr\/staticServerFnCache\/[a-f0-9]{40}\.json$/.test(url)) {
+      throw new Error("Invalid static server function cache path.");
+    }
+    const existing = staticServerFunctionCache[url];
+    if (existing !== undefined && existing !== body) {
+      throw new Error(
+        `Static server function cache collision for ${url}.`,
+      );
+    }
+    if (existing !== undefined) return;
+    if (Object.keys(staticServerFunctionCache).length >= 64) {
+      throw new Error("Too many static server function results.");
+    }
+    const bytes = Buffer.byteLength(body);
+    if (
+      bytes > maxResponseBytes ||
+      staticServerFunctionBytes + bytes > maxResponseBytes
+    ) {
+      throw new Error("Static server function results are too large.");
+    }
+    staticServerFunctionBytes += bytes;
+    staticServerFunctionCache[url] = body;
+  };
   let response: Response;
   try {
     response = await handler(
@@ -229,6 +268,9 @@ async function execute(
     );
   } catch (error) {
     activeStreams.delete(command.id);
+    delete (globalThis as typeof globalThis & Record<string, unknown>)[
+      staticServerFunctionCollectorKey
+    ];
     throw error;
   }
   const responseHead = {
@@ -267,16 +309,29 @@ async function execute(
     } finally {
       activeStreams.delete(command.id);
       reader.releaseLock();
+      delete (globalThis as typeof globalThis & Record<string, unknown>)[
+        staticServerFunctionCollectorKey
+      ];
     }
     return;
   }
 
-  const responseBuffer = Buffer.from(await response.arrayBuffer());
+  let responseBuffer: Buffer;
+  try {
+    responseBuffer = Buffer.from(await response.arrayBuffer());
+  } finally {
+    delete (globalThis as typeof globalThis & Record<string, unknown>)[
+      staticServerFunctionCollectorKey
+    ];
+  }
   if (responseBuffer.byteLength > maxResponseBytes) {
     throw new Error("TanStack server function response is too large.");
   }
   const result: NativeRpcResult = {
     bodyBase64: responseBuffer.toString("base64"),
+    ...(Object.keys(staticServerFunctionCache).length > 0
+      ? { staticServerFunctionCache }
+      : {}),
     ...responseHead,
   };
   send({ id: command.id, result, type: "result" });

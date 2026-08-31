@@ -58,7 +58,7 @@ or Markdown drift.
 | `seo-head-metadata` | Document output | **verified** | [SEO](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/seo.md) | Loader-derived title/meta/Open Graph/canonical/JSON-LD in SSR and navigation. |
 | `static-prerendering` | Build output | **partial** | [Static prerendering](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/static-prerendering.md) | Declarative pages, bounded crawling/concurrency/retries, output paths, and the SPA shell emit revision-pinned HTML blobs through the official handler. Executable filters/hooks, automatic route-generator discovery, and third-party deployment packaging remain outside the safe compiler surface. |
 | `incremental-static-regeneration` | Build output | **not-verified** | [ISR](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/isr.md) | No preview-host regeneration contract yet. |
-| `static-server-functions` | Build output | **not-verified** | [Static server functions](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/static-server-functions.md) | No build-time result generation in request previews. |
+| `static-server-functions` | Build output | **verified** | [Static server functions](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/static-server-functions.md) | The documented final `staticFunctionMiddleware` executes during prerender, keys Seroval results by function ID and validated payload, stores immutable JSON blobs, and replaces later browser RPC with an authenticated asset fetch. |
 | `environment-functions` | Compiler protection | **verified** | [Environment functions](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/environment-functions.md) | Isomorphic/server-only/client-only branch selection, tree-shaking, and wrong-runtime errors. |
 | `environment-variables` | Compiler protection | **verified** | [Environment variables](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/environment-variables.md) | Production `.env` layering, server `process.env`, public `VITE_` client values, and secret non-leakage. |
 | `import-protection` | Compiler protection | **partial** | [Import protection](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/import-protection.md) | Defaults plus declarative custom specifier/file/scope rules, build/development behavior, mock access, and log deduplication work. Executable RegExp and `onViolation` callbacks remain outside the safe config surface. |
@@ -120,9 +120,24 @@ does not run the upstream filesystem route-generator discovery pass. Executable
 `filter` and `onSuccess` callbacks are likewise outside the JSON config surface.
 Declare pages directly or enable bounded link crawling instead.
 
+## Static server functions
+
+Student code imports `staticFunctionMiddleware` from the documented
+`@tanstack/start-static-server-functions` specifier and places it last in a
+GET server function's middleware list. During static document generation, the
+normal server function, validators, and preceding middleware run in the
+revision-pinned Node worker. Tuto captures the upstream Seroval payload and
+SHA-1-derived `/__tsr/staticServerFnCache/*.json` key as a content-addressed
+artifact instead of letting student middleware write to the host filesystem.
+
+The prerendered page embeds the result normally. A later browser invocation
+uses the middleware's documented static-cache fetch, which Tuto maps to a
+capability-checked immutable artifact read. It does not dispatch the function
+to a runtime worker. Server functions without the static middleware and all
+server routes remain live.
+
 ## Next compatibility slice
 
-The next core-runtime slice is static server-function result generation. ISR
-and regeneration locking follow it. All of this stays inside the request-based
-Node/esbuild architecture; it does not require a watcher, container, or
-microVM.
+The next core-runtime slice is ISR with bounded regeneration locking and
+revision-safe publication. This stays inside the request-based Node/esbuild
+architecture; it does not require a watcher, container, or microVM.

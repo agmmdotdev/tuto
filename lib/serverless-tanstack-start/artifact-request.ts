@@ -178,6 +178,8 @@ function hotAsset(
       return artifact.ssrClientBundle;
     case "client-chunk":
       return artifact.ssrClientChunks[asset.name] ?? null;
+    case "static-server-function":
+      return artifact.staticServerFunctions?.[asset.name] ?? null;
     case "style":
       return artifact.ssrCss;
     case "style-chunk":

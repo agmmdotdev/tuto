@@ -15,6 +15,7 @@ export type NativeRpcResponseHead = {
 
 export type NativeRpcResult = NativeRpcResponseHead & {
   bodyBase64: string;
+  staticServerFunctionCache?: Record<string, string>;
 };
 
 export type NativeWorkerCommand =

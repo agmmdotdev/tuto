@@ -12,6 +12,7 @@ import {
 import { compileServerlessTanstackStartWorkspace } from "../../lib/serverless-tanstack-start/compiler";
 import { clearNativeRpcWorkerPoolForTests } from "../../lib/serverless-tanstack-start/native-rpc-worker-pool";
 import { GET as handleNativeRender } from "../../app/api/serverless/tanstack-start/core-render/route";
+import { GET as handleNativeAsset } from "../../app/api/serverless/tanstack-start/core-asset/route";
 
 afterEach(async () => {
   clearTanstackStartArtifactCache();
@@ -141,13 +142,26 @@ test("emits revision-pinned static documents and serves exact routes before the 
     {
       path: "src/routes/static.tsx",
       content: `import { createFileRoute } from '@tanstack/react-router';
+import { createServerFn } from '@tanstack/react-start';
+import { staticFunctionMiddleware } from '@tanstack/start-static-server-functions';
+
+const readStaticMessage = createServerFn({ method: 'GET' })
+  .middleware([staticFunctionMiddleware])
+  .inputValidator((data) => ({ scope: String(data.scope) }))
+  .handler(({ data }) => ({ message: 'static-function-build-result:' + data.scope }));
+
 export const Route = createFileRoute('/static')({
-  loader: () => ({ source: typeof window === 'undefined' ? 'static-server' : 'client' }),
+  loader: async () => ({
+    source: typeof window === 'undefined' ? 'static-server' : 'client',
+    staticMessage: (await readStaticMessage({ data: { scope: 'fixture' } })).message,
+  }),
   component: StaticRoute,
 });
 function StaticRoute() {
   const data = Route.useLoaderData();
-  return <main data-testid="static-child">Static route rendered by {data.source}</main>;
+  return <main data-testid="static-child">
+    Static route rendered by {data.source}: {data.staticMessage}
+  </main>;
 }`,
       language: "tsx" as const,
     },
@@ -197,7 +211,7 @@ export function getRouter() {
   assert.equal(artifact.prerendered.shell, "/_shell.html");
   assert.match(
     artifact.prerendered.documents["/static/index.html"] ?? "",
-    /Static route rendered by.*static-server/,
+    /Static route rendered by.*static-server.*static-function-build-result:.*fixture/,
   );
   assert.match(
     artifact.prerendered.documents["/_shell.html"] ?? "",
@@ -229,4 +243,29 @@ export function getRouter() {
   assert.equal(shell.headers.get("x-tuto-prerender-kind"), "shell");
   assert.equal(shell.headers.get("x-tuto-prerender-output"), "/_shell.html");
   assert.equal(shell.headers.get("x-tuto-worker-id"), null);
+
+  const staticEntries = Object.entries(artifact.staticServerFunctions ?? {});
+  assert.equal(staticEntries.length, 1);
+  const [[cachePath, cacheBody]] = staticEntries;
+  assert.match(
+    cachePath,
+    /^\/__tsr\/staticServerFnCache\/[a-f0-9]{40}\.json$/,
+  );
+  assert.match(cacheBody, /static-function-build-result:fixture/);
+
+  const assetUrl = new URL(
+    "http://tuto.local/api/serverless/tanstack-start/core-asset",
+  );
+  assetUrl.searchParams.set("revision", result.revision);
+  assetUrl.searchParams.set("token", artifact.rpcToken);
+  assetUrl.searchParams.set("kind", "static-server-function");
+  assetUrl.searchParams.set("name", cachePath);
+  const cachedResult = await handleNativeAsset(new Request(assetUrl));
+  assert.equal(cachedResult.status, 200);
+  assert.equal(await cachedResult.text(), cacheBody);
+  assert.equal(
+    cachedResult.headers.get("cache-control"),
+    "private, max-age=31536000, immutable",
+  );
+  assert.equal(cachedResult.headers.get("x-tuto-worker-id"), null);
 });

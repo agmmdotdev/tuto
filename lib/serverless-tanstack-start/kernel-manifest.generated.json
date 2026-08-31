@@ -1,7 +1,7 @@
 {
-  "id": "2edec83cac6c764a9a53",
+  "id": "e9e10f58289eeab6c449",
   "client": {
-    "bytes": 383825,
+    "bytes": 413300,
     "exports": {
       "@tanstack/react-start": [
         "FRAME_HEADER_SIZE",
@@ -168,6 +168,9 @@
         "useSearch",
         "useTags"
       ],
+      "@tanstack/start-static-server-functions": [
+        "staticFunctionMiddleware"
+      ],
       "@vitejs/plugin-rsc/react/browser": [
         "callServer",
         "createFromFetch",
@@ -276,6 +279,7 @@
       "@tanstack/react-start/hydration",
       "@tanstack/react-start/rsc",
       "@tanstack/react-router",
+      "@tanstack/start-static-server-functions",
       "@vitejs/plugin-rsc/react/browser",
       "react",
       "react/jsx-runtime",
@@ -286,7 +290,7 @@
     "routerKey": "__TUTO_TANSTACK_START_CLIENT_ROUTER_FACTORY__",
     "serverFnBaseKey": "__TUTO_TANSTACK_START_SERVER_FN_BASE__",
     "startInstanceKey": "__TUTO_TANSTACK_START_CLIENT_INSTANCE__",
-    "url": "/api/serverless/tanstack-start/kernel/client?v=2edec83cac6c764a9a53"
+    "url": "/api/serverless/tanstack-start/kernel/client?v=e9e10f58289eeab6c449"
   },
   "packages": {
     "@tanstack/react-router": "1.170.32",
@@ -301,7 +305,7 @@
   "rsc": {
     "actionInternalPath": "/__tuto_rsc_action",
     "actionEncryptionKeyGlobalKey": "__TUTO_TANSTACK_START_RSC_ACTION_ENCRYPTION_KEY__",
-    "bytes": 105636,
+    "bytes": 135208,
     "clientReferences": {
       "tanstack-rsc-252f26fd0ab9bc6db98c": "#tanstack-rsc-client-reference/tanstack-rsc-252f26fd0ab9bc6db98c",
       "tanstack-rsc-fc1e778174128760058a": "#tanstack-rsc-client-reference/tanstack-rsc-fc1e778174128760058a"
@@ -313,6 +317,11 @@
         "createMiddleware",
         "createServerFn",
         "createServerOnlyFn"
+      ],
+      "@tanstack/start-static-server-functions": [
+        "staticFunctionMiddleware",
+        "staticServerFunctionCachePrefix",
+        "staticServerFunctionCollectorKey"
       ],
       "@tanstack/react-start/rsc": [
         "CompositeComponent",
@@ -434,6 +443,7 @@
     "internalPath": "/__tuto_rsc",
     "modules": [
       "@tanstack/react-start",
+      "@tanstack/start-static-server-functions",
       "@tanstack/react-start/rsc",
       "@tanstack/react-start/server",
       "@tanstack/react-start/server-rpc",
@@ -446,7 +456,7 @@
     ]
   },
   "server": {
-    "bytes": 509376,
+    "bytes": 538848,
     "exports": {
       "@tanstack/react-router": [
         "Asset",
@@ -549,6 +559,9 @@
         "useRouterState",
         "useSearch",
         "useTags"
+      ],
+      "@tanstack/start-static-server-functions": [
+        "staticFunctionMiddleware"
       ],
       "@tanstack/react-start": [
         "FRAME_HEADER_SIZE",
@@ -740,6 +753,7 @@
     "handlerKey": "__TUTO_TANSTACK_START_NATIVE_HANDLER__",
     "modules": [
       "@tanstack/react-router",
+      "@tanstack/start-static-server-functions",
       "@tanstack/react-start",
       "@tanstack/react-start/hydration",
       "@tanstack/react-start/rsc",

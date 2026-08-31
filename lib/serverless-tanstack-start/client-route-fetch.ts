@@ -7,6 +7,7 @@ export function createTanstackStartRouteFetch(
   nativeFetch: typeof fetch,
   previewLocation: PreviewLocation,
   serverRouteBase: string,
+  staticServerFunctionBase = "",
 ): typeof fetch {
   const readBody = async (request: Request) => {
     const blob = await request.blob();
@@ -25,6 +26,16 @@ export function createTanstackStartRouteFetch(
       url.origin === previewLocation.origin &&
       !url.pathname.startsWith("/api/serverless/tanstack-start/")
     ) {
+      if (url.pathname.startsWith("/__tsr/staticServerFnCache/")) {
+        return nativeFetch(
+          staticServerFunctionBase + encodeURIComponent(url.pathname),
+          {
+            credentials: "include",
+            method: "GET",
+            signal: init?.signal,
+          },
+        );
+      }
       const inheritedBody =
         isRequest &&
         init?.body === undefined &&

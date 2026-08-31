@@ -62,6 +62,9 @@ const inFlightBuildsKey = Symbol.for("tuto.tanstack-start.in-flight-builds.v1");
 const maxPrerenderedDocuments = 64;
 const maxPrerenderedDocumentBytes = 3_000_000;
 const maxPrerenderedTotalBytes = 6_000_000;
+const maxStaticServerFunctionResults = 64;
+const maxStaticServerFunctionResultBytes = 3_000_000;
+const maxStaticServerFunctionTotalBytes = 6_000_000;
 
 function getInFlightBuilds() {
   const globals = globalThis as typeof globalThis & {
@@ -215,10 +218,12 @@ async function prerenderArtifact(
   const startedAt = Date.now();
   const documents: Record<string, string> = {};
   const routes: Record<string, string> = {};
+  const staticServerFunctions: Record<string, string> = {};
   const warnings: BuildDiagnostic[] = [];
   const pending: PrerenderPagePlan[] = [];
   const seen = new Set<string>();
   let totalBytes = 0;
+  let staticServerFunctionBytes = 0;
   let shell: string | undefined;
 
   const enqueue = (page: PrerenderPagePlan) => {
@@ -278,6 +283,46 @@ async function prerenderArtifact(
       return [] as PrerenderPagePlan[];
     }
 
+    for (const [cachePath, body] of Object.entries(
+      response.staticServerFunctionCache ?? {},
+    )) {
+      if (
+        !/^\/__tsr\/staticServerFnCache\/[a-f0-9]{40}\.json$/.test(
+          cachePath,
+        )
+      ) {
+        throw new Error(`Invalid static server function cache path: ${cachePath}.`);
+      }
+      const existing = staticServerFunctions[cachePath];
+      if (existing !== undefined) {
+        if (existing !== body) {
+          throw new Error(
+            `Static server function cache collision for ${cachePath}.`,
+          );
+        }
+        continue;
+      }
+      if (
+        Object.keys(staticServerFunctions).length >=
+        maxStaticServerFunctionResults
+      ) {
+        throw new Error(
+          `Static server function output exceeded ${maxStaticServerFunctionResults} results.`,
+        );
+      }
+      const bytes = Buffer.byteLength(body);
+      if (bytes > maxStaticServerFunctionResultBytes) {
+        throw new Error(`Static server function result ${cachePath} is too large.`);
+      }
+      staticServerFunctionBytes += bytes;
+      if (staticServerFunctionBytes > maxStaticServerFunctionTotalBytes) {
+        throw new Error(
+          "Static server function results exceed the revision size limit.",
+        );
+      }
+      staticServerFunctions[cachePath] = body;
+    }
+
     const html = Buffer.from(response.bodyBase64, "base64").toString("utf8");
     const bytes = Buffer.byteLength(html);
     if (bytes > maxPrerenderedDocumentBytes) {
@@ -316,7 +361,7 @@ async function prerenderArtifact(
       {
         id: randomUUID(),
         level: "info",
-        message: `TanStack Start emitted ${Object.keys(documents).length} static HTML document(s) in ${Date.now() - startedAt}ms.`,
+        message: `TanStack Start emitted ${Object.keys(documents).length} static HTML document(s) and ${Object.keys(staticServerFunctions).length} static server-function result(s) in ${Date.now() - startedAt}ms.`,
         timestamp: new Date().toISOString(),
       },
     ],
@@ -326,6 +371,9 @@ async function prerenderArtifact(
       routes,
       ...(shell ? { shell } : {}),
     },
+    ...(Object.keys(staticServerFunctions).length > 0
+      ? { staticServerFunctions }
+      : {}),
   };
 }
 

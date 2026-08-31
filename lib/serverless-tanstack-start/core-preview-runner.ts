@@ -3183,6 +3183,7 @@ async function buildSsrClientBundle({
   root,
   serverRouteBase,
   serverFnBase,
+  staticServerFunctionBase,
   styleAssetBase,
   routeIds,
   routeSplits,
@@ -3194,6 +3195,7 @@ async function buildSsrClientBundle({
   root: string;
   serverRouteBase: string;
   serverFnBase: string;
+  staticServerFunctionBase: string;
   styleAssetBase: string;
   routeIds: Record<string, string>;
   routeSplits: WorkspaceFileMap;
@@ -3261,6 +3263,7 @@ globalThis.fetch = createRouteFetch(
   nativeFetch,
   globalThis.location,
   ${JSON.stringify(serverRouteBase)},
+  ${JSON.stringify(staticServerFunctionBase)},
 );
 
 ${
@@ -3394,6 +3397,7 @@ async function compilePreview(
   )}&token=${encodeURIComponent(rpcToken)}&path=`;
   const chunkAssetBase = `${assetBase}chunk&name=`;
   const styleAssetBase = `${assetBase}style&name=`;
+  const staticServerFunctionBase = `${assetBase}static-server-function&name=`;
 
   try {
     const originalFileMap = sanitizeWorkspaceFiles(files);
@@ -3479,6 +3483,7 @@ async function compilePreview(
       rscClientReferences,
       serverRouteBase,
       serverFnBase,
+      staticServerFunctionBase,
       styleAssetBase,
     });
     const serverBuild = await buildNativeServerBundle({

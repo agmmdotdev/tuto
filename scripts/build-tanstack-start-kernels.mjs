@@ -39,6 +39,11 @@ const rscActionEncryptionKeyGlobalKey =
   "__TUTO_TANSTACK_START_RSC_ACTION_ENCRYPTION_KEY__";
 const rscInternalPath = "/__tuto_rsc";
 const rscActionInternalPath = "/__tuto_rsc_action";
+const staticServerFunctionsSpecifier =
+  "@tanstack/start-static-server-functions";
+const staticServerFunctionsRuntimePath = path.resolve(
+  "lib/serverless-tanstack-start/static-server-functions-runtime.ts",
+);
 
 const clientModules = [
   "@tanstack/react-start",
@@ -47,6 +52,7 @@ const clientModules = [
   "@tanstack/react-start/hydration",
   "@tanstack/react-start/rsc",
   "@tanstack/react-router",
+  staticServerFunctionsSpecifier,
   "@vitejs/plugin-rsc/react/browser",
   "react",
   "react/jsx-runtime",
@@ -56,6 +62,7 @@ const clientModules = [
 ];
 const rscModules = [
   "@tanstack/react-start",
+  staticServerFunctionsSpecifier,
   "@tanstack/react-start/rsc",
   "@tanstack/react-start/server",
   "@tanstack/react-start/server-rpc",
@@ -68,6 +75,7 @@ const rscModules = [
 ];
 const serverModules = [
   "@tanstack/react-router",
+  staticServerFunctionsSpecifier,
   "@tanstack/react-start",
   "@tanstack/react-start/hydration",
   "@tanstack/react-start/rsc",
@@ -82,6 +90,7 @@ const serverModules = [
   "react-dom/server",
 ];
 const moduleExportOverrides = {
+  [staticServerFunctionsSpecifier]: ["staticFunctionMiddleware"],
   "@vitejs/plugin-rsc/react/browser": [
     "callServer",
     "createFromFetch",
@@ -101,6 +110,18 @@ const moduleExportOverrides = {
     "setRequireModule",
   ],
 };
+
+function createStaticServerFunctionsPlugin() {
+  return {
+    name: "tuto-static-server-functions-runtime",
+    setup(buildApi) {
+      buildApi.onResolve(
+        { filter: /^@tanstack\/start-static-server-functions$/ },
+        () => ({ path: staticServerFunctionsRuntimePath }),
+      );
+    },
+  };
+}
 
 function createStartEnvironmentPlugin(env) {
   let compilerPromise;
@@ -724,6 +745,7 @@ import {
   createServerOnlyFn,
 } from '@tanstack/react-start';
 import * as rscStart from '@tanstack/react-start/rsc';
+import * as rscStaticServerFunctions from '@tanstack/start-static-server-functions';
 import * as rscStartServer from '@tanstack/react-start/server';
 import * as rscServerRpc from '@tanstack/react-start/server-rpc';
 import * as rscStorageContext from '@tanstack/start-storage-context';
@@ -743,6 +765,7 @@ globalThis.${rscGlobalKey} = Object.freeze({
       createServerOnlyFn,
     }),
     '@tanstack/react-start/rsc': rscStart,
+    '@tanstack/start-static-server-functions': rscStaticServerFunctions,
     '@tanstack/react-start/server': rscStartServer,
     '@tanstack/react-start/server-rpc': rscServerRpc,
     '@tanstack/start-storage-context': rscStorageContext,
@@ -772,6 +795,7 @@ globalThis.${rscGlobalKey} = Object.freeze({
     outfile: rscKernelPath,
     platform: "node",
     plugins: [
+      createStaticServerFunctionsPlugin(),
       createRscEntriesPlugin({
         "@tanstack/react-start/server":
           serverExports["@tanstack/react-start/server"],
@@ -840,6 +864,7 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
       outfile: clientKernelPath,
       platform: "browser",
       plugins: [
+        createStaticServerFunctionsPlugin(),
         createClientEntriesPlugin(),
         createRscWebpackRuntimePlugin(),
         createStartEnvironmentPlugin("client"),
@@ -875,6 +900,7 @@ globalThis.${serverHandlerKey} = (request, requestOptions = {}) =>
       outfile: serverKernelPath,
       platform: "node",
       plugins: [
+        createStaticServerFunctionsPlugin(),
         createServerResolverPlugin(),
         createServerEntriesPlugin(),
         createRscWebpackRuntimePlugin(),

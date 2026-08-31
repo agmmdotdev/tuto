@@ -366,10 +366,23 @@
     {
       "id": "static-server-functions",
       "area": "Build output",
-      "status": "not-verified",
+      "status": "verified",
       "upstreamSource": "guide/static-server-functions.md",
-      "evidence": [],
-      "notes": "Build-time server-function result generation is not part of the request-time compiler path."
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start/compiler-cache.test.ts",
+          "test": "emits revision-pinned static documents and serves exact routes before the SPA shell"
+        },
+        {
+          "file": "test/serverless-tanstack-start/client-route-fetch.test.ts",
+          "test": "maps static server-function cache URLs to authenticated immutable assets"
+        },
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "boots an official Start SPA shell and keeps server functions live"
+        }
+      ],
+      "notes": "The documented final staticFunctionMiddleware executes during prerender. Results use the upstream function-ID plus validated-payload SHA-1 key and Seroval format, persist as content-addressed immutable JSON, and later browser invocations fetch the authenticated artifact without dispatching live RPC."
     },
     {
       "id": "environment-functions",

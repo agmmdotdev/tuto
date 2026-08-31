@@ -415,8 +415,12 @@ persists their HTML as revision-pinned content-addressed artifacts. Exact
 documents are selected before shell fallback without starting another runtime,
 process, container, or VM. Executable prerender callbacks, automatic
 route-generator discovery, and hosting-specific rewrite packaging remain
-outside the safe shared-compiler surface. Static server-function result
-generation is the next slice, followed by ISR and regeneration locking.
+outside the safe shared-compiler surface. Static server functions now use the
+documented final middleware contract: prerender executes the function in the
+existing worker, captures the upstream Seroval result under its
+function-ID/payload-derived key, and persists immutable JSON beside the HTML.
+Later browser calls fetch that authenticated artifact without live RPC. ISR
+with bounded regeneration locking and revision-safe publication is next.
 
 The standalone proof script above still uses its original minimal host adapter
 to isolate the compiler experiment. The integrated playground no longer relies
