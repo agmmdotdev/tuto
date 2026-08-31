@@ -38,6 +38,16 @@ function artifact(revision: string): TanstackStartArtifact {
     durationMs: 1,
     html: "<p>durable</p>",
     kernelId: kernelManifest.id,
+    prerendered: {
+      documents: {
+        "/_shell.html": "<!doctype html><p>shell</p>",
+        "/about/index.html": "<!doctype html><p>static about</p>",
+      },
+      routes: {
+        "/about": "/about/index.html",
+      },
+      shell: "/_shell.html",
+    },
     revision,
     routeManifest: {
       "/hello": {
@@ -175,7 +185,7 @@ test("writes signed v4 manifests and deduplicates blobs across revisions", async
   assert.match(envelope.artifact.sources.serverBundle.hash, /^[a-f0-9]{64}$/);
   assert.equal(
     (await readdir(path.join(artifactRoot(root), "blobs"))).length,
-    6,
+    8,
   );
 });
 
@@ -244,7 +254,7 @@ test("fetches only absent verified blobs after a cold manifest read", async () =
 
   backend.reads.length = 0;
   assert.deepEqual(await reader.get(revision), artifact(revision));
-  assert.equal(backend.reads.filter((key) => key.endsWith(".blob")).length, 6);
+  assert.equal(backend.reads.filter((key) => key.endsWith(".blob")).length, 8);
 
   backend.reads.length = 0;
   assert.deepEqual(await reader.get(revision), artifact(revision));
@@ -267,6 +277,10 @@ test("selectively reads metadata, one asset, and server runtime blobs", async ()
   backend.reads.length = 0;
   const metadata = await reader.getMetadata!(revision);
   assert.equal(metadata?.rpcToken, artifact(revision).rpcToken);
+  assert.deepEqual(metadata?.prerendered, {
+    routes: { "/about": "/about/index.html" },
+    shell: "/_shell.html",
+  });
   assert.deepEqual(
     backend.reads.map((key) => path.posix.basename(key)),
     [`${revision}.json`],
@@ -282,6 +296,18 @@ test("selectively reads metadata, one asset, and server runtime blobs", async ()
     artifact(revision).ssrClientChunks["chunks/hello-ABC123.js"],
   );
   assert.equal(backend.reads.length, 1);
+
+  backend.reads.length = 0;
+  const document = await reader.getPrerenderedDocument!(
+    revision,
+    "/about/index.html",
+  );
+  assert.equal(
+    document?.body,
+    artifact(revision).prerendered?.documents["/about/index.html"],
+  );
+  assert.equal(backend.reads.length, 1);
+  assert.match(backend.reads[0]!, /\.blob$/);
   assert.match(backend.reads[0]!, /\.blob$/);
 
   backend.reads.length = 0;

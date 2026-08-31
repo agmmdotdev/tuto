@@ -82,6 +82,23 @@ type ImportProtectionRun = {
 type SpaPolicy = {
   enabled: boolean;
   maskPath: string;
+  outputPath: string;
+};
+type PrerenderPagePlan = {
+  autoSubfolderIndex: boolean;
+  crawlLinks: boolean;
+  headers: Record<string, string>;
+  outputPath?: string;
+  path: string;
+  retryCount: number;
+  retryDelay: number;
+  shell?: boolean;
+};
+type PrerenderPlan = {
+  concurrency: number;
+  failOnError: boolean;
+  maxRedirects: number;
+  pages: PrerenderPagePlan[];
 };
 
 type HtmlEntryPoint = {
@@ -143,6 +160,7 @@ type ServerlessPreviewResult = {
   success: boolean;
   html: string;
   kernelId: string;
+  prerenderPlan?: PrerenderPlan;
   diagnostics: BuildDiagnostic[];
   durationMs: number;
   revision: string;
@@ -589,7 +607,9 @@ function readImportProtectionPolicy(files: WorkspaceFileMap) {
 
 function readSpaPolicy(files: WorkspaceFileMap): SpaPolicy {
   const source = files.get(importProtectionConfigFile);
-  if (source === undefined) return { enabled: false, maskPath: "/" };
+  if (source === undefined) {
+    return { enabled: false, maskPath: "/", outputPath: "/_shell" };
+  }
 
   let parsed: unknown;
   try {
@@ -602,7 +622,9 @@ function readSpaPolicy(files: WorkspaceFileMap): SpaPolicy {
     );
   }
   const config = importProtectionObject(parsed, importProtectionConfigFile);
-  if (config.spa === undefined) return { enabled: false, maskPath: "/" };
+  if (config.spa === undefined) {
+    return { enabled: false, maskPath: "/", outputPath: "/_shell" };
+  }
   const options = importProtectionObject(
     config.spa,
     `${importProtectionConfigFile} spa`,
@@ -612,6 +634,19 @@ function readSpaPolicy(files: WorkspaceFileMap): SpaPolicy {
   }
   if (options.maskPath !== undefined && typeof options.maskPath !== "string") {
     throw new Error("[spa] maskPath must be a string.");
+  }
+  const prerenderOptions =
+    options.prerender === undefined
+      ? {}
+      : importProtectionObject(
+          options.prerender,
+          `${importProtectionConfigFile} spa.prerender`,
+        );
+  if (
+    prerenderOptions.outputPath !== undefined &&
+    typeof prerenderOptions.outputPath !== "string"
+  ) {
+    throw new Error("[spa] prerender.outputPath must be a string.");
   }
 
   const maskPath = (options.maskPath as string | undefined) ?? "/";
@@ -632,6 +667,276 @@ function readSpaPolicy(files: WorkspaceFileMap): SpaPolicy {
   return {
     enabled: options.enabled !== false,
     maskPath: `${maskUrl.pathname}${maskUrl.search}${maskUrl.hash}`,
+    outputPath:
+      (prerenderOptions.outputPath as string | undefined) ?? "/_shell",
+  };
+}
+
+function prerenderConfigInteger(
+  value: unknown,
+  fallback: number,
+  label: string,
+  maximum: number,
+) {
+  if (value === undefined) return fallback;
+  if (
+    !Number.isSafeInteger(value) ||
+    (value as number) < 0 ||
+    (value as number) > maximum
+  ) {
+    throw new Error(
+      `[prerender] ${label} must be an integer between 0 and ${maximum}.`,
+    );
+  }
+  return value as number;
+}
+
+function prerenderConfigBoolean(
+  value: unknown,
+  fallback: boolean,
+  label: string,
+) {
+  if (value === undefined) return fallback;
+  if (typeof value !== "boolean") {
+    throw new Error(`[prerender] ${label} must be a boolean.`);
+  }
+  return value;
+}
+
+function normalizePrerenderPath(value: unknown, label: string) {
+  if (typeof value !== "string" || value.length > 2_048) {
+    throw new Error(`[prerender] ${label} must be a path string.`);
+  }
+  let url: URL;
+  try {
+    url = new URL(value, "http://localhost");
+  } catch (error) {
+    throw new Error(`[prerender] ${label} must be a relative URL path.`, {
+      cause: error,
+    });
+  }
+  if (url.origin !== "http://localhost" || url.hash) {
+    throw new Error(
+      `[prerender] ${label} must be a same-origin path without a fragment.`,
+    );
+  }
+  return `${decodeURIComponent(url.pathname)}${url.search}`;
+}
+
+function normalizePrerenderOutputPath(value: unknown, label: string) {
+  if (typeof value !== "string" || value.length > 2_048) {
+    throw new Error(`[prerender] ${label} must be a path string.`);
+  }
+  let url: URL;
+  try {
+    url = new URL(value, "http://localhost");
+  } catch (error) {
+    throw new Error(`[prerender] ${label} must be a relative output path.`, {
+      cause: error,
+    });
+  }
+  const segments = decodeURIComponent(url.pathname).split("/");
+  if (
+    url.origin !== "http://localhost" ||
+    url.search ||
+    url.hash ||
+    segments.includes("..")
+  ) {
+    throw new Error(
+      `[prerender] ${label} must be a same-origin output path without traversal, query, or fragment.`,
+    );
+  }
+  return decodeURIComponent(url.pathname);
+}
+
+function prerenderHeaders(value: unknown, label: string) {
+  if (value === undefined) return {};
+  const headers = importProtectionObject(value, label);
+  if (
+    Object.keys(headers).length > 32 ||
+    Object.entries(headers).some(
+      ([name, headerValue]) =>
+        !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) ||
+        typeof headerValue !== "string" ||
+        headerValue.length > 4_096,
+    )
+  ) {
+    throw new Error(
+      `[prerender] ${label} must contain at most 32 valid string headers.`,
+    );
+  }
+  return Object.fromEntries(
+    Object.entries(headers).map(([name, headerValue]) => [
+      name,
+      headerValue as string,
+    ]),
+  );
+}
+
+function readPrerenderPlan(
+  files: WorkspaceFileMap,
+  spaPolicy: SpaPolicy,
+): PrerenderPlan | undefined {
+  const source = files.get(importProtectionConfigFile);
+  if (source === undefined) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch (error) {
+    throw new Error(
+      `[prerender] ${importProtectionConfigFile} is not valid JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const config = importProtectionObject(parsed, importProtectionConfigFile);
+  const globalOptions =
+    config.prerender === undefined
+      ? {}
+      : importProtectionObject(
+          config.prerender,
+          `${importProtectionConfigFile} prerender`,
+        );
+  if (
+    globalOptions.enabled !== undefined &&
+    typeof globalOptions.enabled !== "boolean"
+  ) {
+    throw new Error("[prerender] enabled must be a boolean.");
+  }
+  if (
+    globalOptions.autoStaticPathsDiscovery !== undefined &&
+    globalOptions.autoStaticPathsDiscovery !== false
+  ) {
+    throw new Error(
+      "[prerender] autoStaticPathsDiscovery is not available in the virtual workspace compiler; declare pages or enable link crawling.",
+    );
+  }
+  const rawPages = config.pages ?? [];
+  if (!Array.isArray(rawPages) || rawPages.length > 32) {
+    throw new Error("[prerender] pages must be an array with at most 32 entries.");
+  }
+
+  const pageEntries = rawPages.map((rawPage, index) => {
+    if (typeof rawPage === "string") {
+      return { path: rawPage, prerender: {} as Record<string, unknown> };
+    }
+    const page = importProtectionObject(rawPage, `pages[${index}]`);
+    const pageOptions =
+      page.prerender === undefined
+        ? {}
+        : importProtectionObject(page.prerender, `pages[${index}].prerender`);
+    if (
+      pageOptions.enabled !== undefined &&
+      typeof pageOptions.enabled !== "boolean"
+    ) {
+      throw new Error(
+        `[prerender] pages[${index}].prerender.enabled must be a boolean.`,
+      );
+    }
+    return { path: page.path, prerender: pageOptions };
+  });
+  const enabledByPage = pageEntries.some(
+    ({ prerender }) => prerender.enabled === true,
+  );
+  const enabled =
+    spaPolicy.enabled ||
+    (globalOptions.enabled !== false &&
+      (globalOptions.enabled === true || enabledByPage));
+  if (!enabled) return undefined;
+
+  const resolvePage = (
+    rawPath: unknown,
+    pageOptions: Record<string, unknown>,
+    label: string,
+  ): PrerenderPagePlan | null => {
+    if (pageOptions.enabled === false) return null;
+    const merged = { ...globalOptions, ...pageOptions };
+    return {
+      autoSubfolderIndex: prerenderConfigBoolean(
+        merged.autoSubfolderIndex,
+        true,
+        `${label}.autoSubfolderIndex`,
+      ),
+      crawlLinks: prerenderConfigBoolean(
+        merged.crawlLinks,
+        true,
+        `${label}.crawlLinks`,
+      ),
+      headers: {
+        ...prerenderHeaders(globalOptions.headers, "prerender.headers"),
+        ...prerenderHeaders(pageOptions.headers, `${label}.headers`),
+      },
+      ...(merged.outputPath === undefined
+        ? {}
+        : {
+            outputPath: normalizePrerenderOutputPath(
+              merged.outputPath,
+              `${label}.outputPath`,
+            ),
+          }),
+      path: normalizePrerenderPath(rawPath, `${label}.path`),
+      retryCount: prerenderConfigInteger(
+        merged.retryCount,
+        0,
+        `${label}.retryCount`,
+        3,
+      ),
+      retryDelay: prerenderConfigInteger(
+        merged.retryDelay,
+        500,
+        `${label}.retryDelay`,
+        2_000,
+      ),
+    };
+  };
+
+  const pages = pageEntries
+    .map(({ path: pagePath, prerender }, index) =>
+      resolvePage(pagePath, prerender, `pages[${index}].prerender`),
+    )
+    .filter((page): page is PrerenderPagePlan => page !== null);
+  if (spaPolicy.enabled) {
+    pages.push({
+      autoSubfolderIndex: false,
+      crawlLinks: false,
+      headers: { "X-TSS_SHELL": "true" },
+      outputPath: normalizePrerenderOutputPath(
+        spaPolicy.outputPath,
+        "spa.prerender.outputPath",
+      ),
+      path: normalizePrerenderPath(spaPolicy.maskPath, "spa.maskPath"),
+      retryCount: 0,
+      retryDelay: 500,
+      shell: true,
+    });
+  }
+  if (pages.length === 0) {
+    const root = resolvePage("/", {}, "prerender");
+    if (root) pages.push(root);
+  }
+
+  return {
+    concurrency: Math.max(
+      1,
+      prerenderConfigInteger(
+        globalOptions.concurrency,
+        4,
+        "concurrency",
+        4,
+      ),
+    ),
+    failOnError: prerenderConfigBoolean(
+      globalOptions.failOnError,
+      true,
+      "failOnError",
+    ),
+    maxRedirects: prerenderConfigInteger(
+      globalOptions.maxRedirects,
+      5,
+      "maxRedirects",
+      10,
+    ),
+    pages,
   };
 }
 
@@ -3093,6 +3398,7 @@ async function compilePreview(
   try {
     const originalFileMap = sanitizeWorkspaceFiles(files);
     const spaPolicy = readSpaPolicy(originalFileMap);
+    const prerenderPlan = readPrerenderPlan(originalFileMap, spaPolicy);
     activeImportProtectionRun = {
       diagnostics: importProtectionDiagnostics,
       policy: readImportProtectionPolicy(originalFileMap),
@@ -3244,11 +3550,12 @@ async function compilePreview(
         ...importProtectionDiagnostics,
         createDiagnostic(
           "info",
-          `TanStack Start core preview compiled ${Object.keys(serverFnsById).length} server function(s) and ${rscBuild.code ? 1 : 0} RSC entry${spaPolicy.enabled ? ` with SPA shell path ${spaPolicy.maskPath}` : ""} in ${durationMs}ms. Revision bundles: ${buildMetrics.clientRevisionBytes} client bytes and ${buildMetrics.serverRevisionBytes} server bytes; shared kernel ${kernelManifest.id}.`,
+          `TanStack Start core preview compiled ${Object.keys(serverFnsById).length} server function(s) and ${rscBuild.code ? 1 : 0} RSC entry${prerenderPlan ? ` with ${prerenderPlan.pages.length} prerender target(s)` : ""}${spaPolicy.enabled ? ` including SPA shell path ${spaPolicy.maskPath}` : ""} in ${durationMs}ms. Revision bundles: ${buildMetrics.clientRevisionBytes} client bytes and ${buildMetrics.serverRevisionBytes} server bytes; shared kernel ${kernelManifest.id}.`,
         ),
       ],
       durationMs,
       kernelId: kernelManifest.id,
+      ...(prerenderPlan ? { prerenderPlan } : {}),
       revision,
       routeManifest: ssrClientBuild.routeManifest,
       rpcToken,

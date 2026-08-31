@@ -409,10 +409,14 @@ and prefetch while keeping its virtual child chunks out of route preloads.
 Environment functions/variables, import rules, deferred loader data, selective
 SSR, SEO/head metadata, path aliases, custom entry points, and route
 error/not-found UI are covered. SPA request previews now use Start's official
-shell marker and retain live server functions/routes; static shell-file output
-and hosting rewrites remain unimplemented. The next core-runtime decision is
-static prerendered output, with the compatibility matrix as the source of truth
-for that sequence.
+shell marker and retain live server functions/routes. The compiler also renders
+configured pages and the SPA shell through that official request handler, then
+persists their HTML as revision-pinned content-addressed artifacts. Exact
+documents are selected before shell fallback without starting another runtime,
+process, container, or VM. Executable prerender callbacks, automatic
+route-generator discovery, and hosting-specific rewrite packaging remain
+outside the safe shared-compiler surface. Static server-function result
+generation is the next slice, followed by ISR and regeneration locking.
 
 The standalone proof script above still uses its original minimal host adapter
 to isolate the compiler experiment. The integrated playground no longer relies

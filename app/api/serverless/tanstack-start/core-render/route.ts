@@ -1,4 +1,5 @@
 import { executeNativeArtifactRequest } from "../../../../../lib/serverless-tanstack-start/native-request-host";
+import { resolveArtifactDocumentRequest } from "../../../../../lib/serverless-tanstack-start/artifact-request";
 
 export const runtime = "nodejs";
 
@@ -30,10 +31,30 @@ const previewBridgeScript = `<script>
 
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
-  const response = await executeNativeArtifactRequest(request, {
-    acceptHtml: true,
-    shell: requestUrl.searchParams.get("shell") === "true",
-  });
+  const targetPath = requestUrl.searchParams.get("path") ?? "/";
+  const prerendered = await resolveArtifactDocumentRequest(request, targetPath);
+  let response: Response;
+  if (!prerendered.ok) {
+    response = new Response(prerendered.message, {
+      headers: { "cache-control": "no-store" },
+      status: prerendered.status,
+    });
+  } else if (prerendered.body !== null) {
+    response = new Response(prerendered.body, {
+      headers: {
+        "cache-control": "private, max-age=31536000, immutable",
+        "content-type": "text/html; charset=utf-8",
+        "x-tuto-artifact-cache": prerendered.artifactCache,
+        "x-tuto-prerender-kind": prerendered.kind ?? "route",
+        "x-tuto-prerender-output": prerendered.outputPath ?? "",
+      },
+    });
+  } else {
+    response = await executeNativeArtifactRequest(request, {
+      acceptHtml: true,
+      shell: requestUrl.searchParams.get("shell") === "true",
+    });
+  }
   if (
     !response.body ||
     !response.headers.get("content-type")?.includes("text/html")

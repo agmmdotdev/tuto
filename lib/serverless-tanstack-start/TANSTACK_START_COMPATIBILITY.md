@@ -56,7 +56,7 @@ or Markdown drift.
 | `selective-ssr` | Rendering modes | **verified** | [Selective SSR](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/selective-ssr.md) | Full, data-only, and client-only initial renders plus client navigation. |
 | `deferred-hydration` | Rendering modes | **verified** | [Deferred hydration](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/deferred-hydration.md) | SSR preservation; interaction, idle, media, visible, condition, and never strategies; delayed child chunks; prefetch without hydration; post-hydration interaction. |
 | `seo-head-metadata` | Document output | **verified** | [SEO](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/seo.md) | Loader-derived title/meta/Open Graph/canonical/JSON-LD in SSR and navigation. |
-| `static-prerendering` | Build output | **not-verified** | [Static prerendering](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/static-prerendering.md) | Current host is request-time, not static-output generation. |
+| `static-prerendering` | Build output | **partial** | [Static prerendering](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/static-prerendering.md) | Declarative pages, bounded crawling/concurrency/retries, output paths, and the SPA shell emit revision-pinned HTML blobs through the official handler. Executable filters/hooks, automatic route-generator discovery, and third-party deployment packaging remain outside the safe compiler surface. |
 | `incremental-static-regeneration` | Build output | **not-verified** | [ISR](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/isr.md) | No preview-host regeneration contract yet. |
 | `static-server-functions` | Build output | **not-verified** | [Static server functions](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/static-server-functions.md) | No build-time result generation in request previews. |
 | `environment-functions` | Compiler protection | **verified** | [Environment functions](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/environment-functions.md) | Isomorphic/server-only/client-only branch selection, tree-shaking, and wrong-runtime errors. |
@@ -64,7 +64,7 @@ or Markdown drift.
 | `import-protection` | Compiler protection | **partial** | [Import protection](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/import-protection.md) | Defaults plus declarative custom specifier/file/scope rules, build/development behavior, mock access, and log deduplication work. Executable RegExp and `onViolation` callbacks remain outside the safe config surface. |
 | `custom-entry-points` | Compiler configuration | **verified** | [Client entry](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/client-entry-point.md) / [server entry](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/server-entry-point.md) | Optional `src/client` hydration and `src/server` fetch wrappers preserve the Tuto bootstrap. |
 | `path-aliases` | Compiler configuration | **verified** | [Path aliases](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/path-aliases.md) | Root tsconfig/jsconfig aliases resolve across route, client, and server graphs. |
-| `spa-mode` | Rendering modes | **partial** | [SPA mode](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/spa-mode.md) | Official shell/root SSR and pending fallback boot the child route in Firefox while server functions/routes stay live. Static `/_shell.html` output and deployment rewrites remain unimplemented. |
+| `spa-mode` | Rendering modes | **partial** | [SPA mode](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/spa-mode.md) | Official shell/root SSR and pending fallback boot the child route in Firefox while server functions/routes stay live. The compiler now stores `/_shell.html` and uses it for unmatched document paths; third-party deployment rewrites remain unimplemented. |
 | `vite-plugin-ecosystem` | Compiler configuration | **partial** | [CSS](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/css-styling.md) | CSS and platform Tailwind work; arbitrary Vite plugins are not promised. |
 | `vite-dev-server-hmr` | Development server | **out-of-scope** | [Execution model](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/execution-model.md) | Tuto recompiles content revisions with esbuild; no per-student Vite watcher. |
 | `non-node-hosting-adapters` | Deployment | **out-of-scope** | [Hosting](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/hosting.md) | Tuto targets its Node 22 request host, not third-party adapter parity. |
@@ -94,13 +94,35 @@ configured pending fallback with Start's shell marker, then the browser boots
 the matched child route. Server functions and server routes continue through
 the same reusable Node worker and remain live.
 
-This is request-preview compatibility, not static deployment output. Tuto does
-not yet emit the upstream `/_shell.html` artifact or generate hosting rewrite
-rules, so the broader SPA-mode row remains partial.
+When enabled, the compiler also renders the shell through that official marker
+and stores it at `spa.prerender.outputPath` (default `/_shell.html`). Exact
+static documents win first; unmatched document paths receive the stored shell.
+Hosting-specific rewrite files are not generated, so the broader SPA-mode row
+remains partial.
+
+## Static output configuration
+
+Top-level `pages` and `prerender` fields in `tanstack-start.config.json` select
+build-time documents. The safe declarative surface supports per-page
+`enabled`, `outputPath`, `autoSubfolderIndex`, `crawlLinks`, `retryCount`,
+`retryDelay`, and string `headers`, plus global `concurrency`, `failOnError`,
+and `maxRedirects`. Tuto caps concurrency, retries, document counts, and total
+HTML bytes.
+
+The compiler renders these pages with the same official Start request handler
+inside the existing revision-pinned reusable Node worker pool. It then stores
+each HTML document as a content-addressed durable artifact and serves exact
+routes with private immutable caching. Server functions and server routes are
+not frozen; they continue through the live request gateway.
+
+`autoStaticPathsDiscovery` must be `false` because the virtual esbuild compiler
+does not run the upstream filesystem route-generator discovery pass. Executable
+`filter` and `onSuccess` callbacks are likewise outside the JSON config surface.
+Declare pages directly or enable bounded link crawling instead.
 
 ## Next compatibility slice
 
-The next core-runtime decision is static prerendered output. ISR and static
-server functions remain later output-generation decisions. All of this stays
-inside the request-based Node/esbuild architecture; it does not require a
-watcher, container, or microVM.
+The next core-runtime slice is static server-function result generation. ISR
+and regeneration locking follow it. All of this stays inside the request-based
+Node/esbuild architecture; it does not require a watcher, container, or
+microVM.

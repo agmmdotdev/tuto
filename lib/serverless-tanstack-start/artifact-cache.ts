@@ -11,12 +11,19 @@ export type TanstackStartBuildMetrics = {
   sharedServerKernelBytes: number;
 };
 
+export type TanstackStartPrerenderedOutput = {
+  documents: Record<string, string>;
+  routes: Record<string, string>;
+  shell?: string;
+};
+
 export type TanstackStartArtifact = {
   buildMetrics: TanstackStartBuildMetrics;
   diagnostics: BuildDiagnostic[];
   durationMs: number;
   html: string;
   kernelId: string;
+  prerendered?: TanstackStartPrerenderedOutput;
   revision: string;
   routeManifest: Record<string, { css?: string[]; preloads: string[] }>;
   rpcToken: string;
@@ -87,6 +94,10 @@ function artifactBytes(artifact: TanstackStartArtifact) {
     Buffer.byteLength(artifact.serverBundle) +
     Buffer.byteLength(artifact.ssrClientBundle) +
     Buffer.byteLength(artifact.ssrCss) +
+    Object.values(artifact.prerendered?.documents ?? {}).reduce(
+      (bytes, document) => bytes + Buffer.byteLength(document),
+      0,
+    ) +
     Object.values(artifact.serverChunks).reduce(
       (bytes, chunk) => bytes + Buffer.byteLength(chunk),
       0,

@@ -16,7 +16,10 @@ import {
 import path from "node:path";
 import { AwsClient } from "aws4fetch";
 import kernelManifest from "./kernel-manifest.generated.json";
-import type { TanstackStartArtifact } from "./artifact-cache";
+import type {
+  TanstackStartArtifact,
+  TanstackStartPrerenderedOutput,
+} from "./artifact-cache";
 import type {
   ServerRuntimeArtifact,
   ServerRuntimeSource,
@@ -36,6 +39,7 @@ type ArtifactBlobDescriptor = {
 
 type ArtifactSourceManifest = {
   html: ArtifactBlobDescriptor;
+  prerenderedDocuments?: Record<string, ArtifactBlobDescriptor>;
   serverBundle: ArtifactBlobDescriptor;
   serverChunks: Record<string, ArtifactBlobDescriptor>;
   ssrClientBundle: ArtifactBlobDescriptor;
@@ -44,9 +48,15 @@ type ArtifactSourceManifest = {
   ssrCssChunks: Record<string, ArtifactBlobDescriptor>;
 };
 
+type TanstackStartPrerenderedMetadata = Omit<
+  TanstackStartPrerenderedOutput,
+  "documents"
+>;
+
 type ArtifactManifest = Omit<
   TanstackStartArtifact,
   | "html"
+  | "prerendered"
   | "serverBundle"
   | "serverChunks"
   | "ssrClientBundle"
@@ -54,19 +64,28 @@ type ArtifactManifest = Omit<
   | "ssrCss"
   | "ssrCssChunks"
 > & {
+  prerendered?: TanstackStartPrerenderedMetadata;
   sources: ArtifactSourceManifest;
 };
 
 export type TanstackStartArtifactMetadata = Omit<
   TanstackStartArtifact,
   | "html"
+  | "prerendered"
   | "serverBundle"
   | "serverChunks"
   | "ssrClientBundle"
   | "ssrClientChunks"
   | "ssrCss"
   | "ssrCssChunks"
->;
+> & {
+  prerendered?: TanstackStartPrerenderedMetadata;
+};
+
+export type TanstackStartArtifactDocumentResult = {
+  artifact: TanstackStartArtifactMetadata;
+  body: string | null;
+};
 
 export type TanstackStartArtifactAsset =
   | { kind: "client" }
@@ -123,6 +142,10 @@ export type TanstackStartArtifactStore = {
     asset: TanstackStartArtifactAsset,
   ): Promise<TanstackStartArtifactAssetResult | null>;
   getMetadata?(revision: string): Promise<TanstackStartArtifactMetadata | null>;
+  getPrerenderedDocument?(
+    revision: string,
+    outputPath: string,
+  ): Promise<TanstackStartArtifactDocumentResult | null>;
   getServer?(
     revision: string,
   ): Promise<TanstackStartArtifactServerResult | null>;
@@ -301,6 +324,68 @@ function blobObjectKey(prefix: string, hash: string) {
   return `${prefix}/${kernelManifest.id}/blobs/${hash}.blob`;
 }
 
+function prerenderedOutputPathIsValid(value: string) {
+  return (
+    value.startsWith("/") &&
+    !value.startsWith("//") &&
+    value.endsWith(".html") &&
+    value.length <= 2_048 &&
+    !value.split("/").includes("..")
+  );
+}
+
+function prerenderedRoutePathIsValid(value: string) {
+  if (
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    value.includes("#") ||
+    value.length > 2_048
+  ) {
+    return false;
+  }
+  try {
+    return new URL(value, "http://localhost").origin === "http://localhost";
+  } catch {
+    return false;
+  }
+}
+
+function prerenderedOutputIsValid(value: unknown) {
+  if (value === undefined) return true;
+  if (value === null || typeof value !== "object") return false;
+  const output = value as TanstackStartPrerenderedOutput;
+  if (
+    output.documents === null ||
+    typeof output.documents !== "object" ||
+    output.routes === null ||
+    typeof output.routes !== "object"
+  ) {
+    return false;
+  }
+  const documents = Object.entries(output.documents);
+  const routes = Object.entries(output.routes);
+  if (documents.length > 64 || routes.length > 64) return false;
+  if (
+    !documents.every(
+      ([outputPath, html]) =>
+        prerenderedOutputPathIsValid(outputPath) && typeof html === "string",
+    ) ||
+    !routes.every(
+      ([routePath, outputPath]) =>
+        prerenderedRoutePathIsValid(routePath) &&
+        prerenderedOutputPathIsValid(outputPath) &&
+        Object.hasOwn(output.documents, outputPath),
+    )
+  ) {
+    return false;
+  }
+  return (
+    output.shell === undefined ||
+    (prerenderedOutputPathIsValid(output.shell) &&
+      Object.hasOwn(output.documents, output.shell))
+  );
+}
+
 function artifactIsValid(
   artifact: unknown,
   revision: string,
@@ -355,6 +440,7 @@ function artifactIsValid(
     cssChunksAreValid &&
     serverChunksAreValid &&
     routeManifestIsValid &&
+    prerenderedOutputIsValid(candidate.prerendered) &&
     typeof candidate.ssrCss === "string" &&
     typeof candidate.serverBundle === "string" &&
     Array.isArray(candidate.serverFnIds) &&
@@ -370,6 +456,16 @@ function artifactMetadata(
     diagnostics: artifact.diagnostics,
     durationMs: artifact.durationMs,
     kernelId: artifact.kernelId,
+    ...(artifact.prerendered
+      ? {
+          prerendered: {
+            routes: artifact.prerendered.routes,
+            ...(artifact.prerendered.shell
+              ? { shell: artifact.prerendered.shell }
+              : {}),
+          },
+        }
+      : {}),
     revision: artifact.revision,
     routeManifest: artifact.routeManifest,
     rpcToken: artifact.rpcToken,
@@ -453,6 +549,7 @@ function descriptorRecordIsValid(
 function createArtifactManifest(artifact: TanstackStartArtifact) {
   const {
     html,
+    prerendered,
     serverBundle,
     serverChunks,
     ssrClientBundle,
@@ -478,8 +575,19 @@ function createArtifactManifest(artifact: TanstackStartArtifact) {
     blobs,
     manifest: {
       ...metadata,
+      ...(prerendered
+        ? {
+            prerendered: {
+              routes: prerendered.routes,
+              ...(prerendered.shell ? { shell: prerendered.shell } : {}),
+            },
+          }
+        : {}),
       sources: {
         html: describe(html),
+        ...(prerendered
+          ? { prerenderedDocuments: describeRecord(prerendered.documents) }
+          : {}),
         serverBundle: describe(serverBundle),
         serverChunks: describeRecord(serverChunks),
         ssrClientBundle: describe(ssrClientBundle),
@@ -501,7 +609,19 @@ function artifactManifestIsValid(
   if (
     sources === null ||
     typeof sources !== "object" ||
+    Boolean(manifest.prerendered) !==
+      Boolean(sources.prerenderedDocuments) ||
     !descriptorIsValid(sources.html) ||
+    (sources.prerenderedDocuments !== undefined &&
+      !(
+        sources.prerenderedDocuments !== null &&
+        typeof sources.prerenderedDocuments === "object" &&
+        Object.entries(sources.prerenderedDocuments).every(
+          ([outputPath, descriptor]) =>
+            prerenderedOutputPathIsValid(outputPath) &&
+            descriptorIsValid(descriptor),
+        )
+      )) ||
     !descriptorIsValid(sources.serverBundle) ||
     !descriptorRecordIsValid(sources.serverChunks, "js") ||
     !descriptorIsValid(sources.ssrClientBundle) ||
@@ -519,6 +639,18 @@ function artifactManifestIsValid(
     {
       ...metadata,
       html: "",
+      ...(manifest.prerendered
+        ? {
+            prerendered: {
+              ...manifest.prerendered,
+              documents: Object.fromEntries(
+                Object.keys(sources.prerenderedDocuments ?? {}).map(
+                  (outputPath) => [outputPath, ""],
+                ),
+              ),
+            },
+          }
+        : {}),
       serverBundle: "",
       serverChunks: Object.fromEntries(
         Object.keys(sources.serverChunks).map((name) => [name, ""]),
@@ -540,6 +672,7 @@ function artifactDescriptors(manifest: ArtifactManifest) {
   const sources = manifest.sources;
   return [
     sources.html,
+    ...Object.values(sources.prerenderedDocuments ?? {}),
     sources.serverBundle,
     ...Object.values(sources.serverChunks),
     sources.ssrClientBundle,
@@ -554,6 +687,7 @@ function reconstructArtifact(
   blobs: Map<string, string>,
 ) {
   const { sources, ...metadata } = manifest;
+  const { prerendered, ...artifactMetadata } = metadata;
   const source = (descriptor: ArtifactBlobDescriptor) => blobs.get(descriptor.hash)!;
   const sourceRecord = (record: Record<string, ArtifactBlobDescriptor>) =>
     Object.fromEntries(
@@ -564,8 +698,16 @@ function reconstructArtifact(
     );
 
   return {
-    ...metadata,
+    ...artifactMetadata,
     html: source(sources.html),
+    ...(prerendered
+      ? {
+          prerendered: {
+            ...prerendered,
+            documents: sourceRecord(sources.prerenderedDocuments ?? {}),
+          },
+        }
+      : {}),
     serverBundle: source(sources.serverBundle),
     serverChunks: sourceRecord(sources.serverChunks),
     ssrClientBundle: source(sources.ssrClientBundle),
@@ -825,6 +967,23 @@ export function createTanstackStartArtifactStore({
     async getMetadata(revision) {
       const payload = await loadManifest(revision);
       return payload ? artifactMetadata(payload.artifact) : null;
+    },
+
+    async getPrerenderedDocument(revision, outputPath) {
+      const payload = await loadManifest(revision);
+      if (!payload) return null;
+      if (payload.version === 3) {
+        return {
+          artifact: artifactMetadata(payload.artifact),
+          body: payload.artifact.prerendered?.documents[outputPath] ?? null,
+        };
+      }
+      const descriptor =
+        payload.artifact.sources.prerenderedDocuments?.[outputPath];
+      return {
+        artifact: artifactMetadata(payload.artifact),
+        body: descriptor ? await loadBlob(descriptor) : null,
+      };
     },
 
     async getServer(revision) {
@@ -1190,6 +1349,24 @@ export async function getDurableTanstackStartArtifactMetadata(
   if (store.getMetadata) return store.getMetadata(revision);
   const artifact = await store.get(revision);
   return artifact ? artifactMetadata(artifact) : null;
+}
+
+export async function getDurableTanstackStartPrerenderedDocument(
+  revision: string,
+  outputPath: string,
+) {
+  const store = getStore();
+  if (!store) return null;
+  if (store.getPrerenderedDocument) {
+    return store.getPrerenderedDocument(revision, outputPath);
+  }
+  const artifact = await store.get(revision);
+  return artifact
+    ? {
+        artifact: artifactMetadata(artifact),
+        body: artifact.prerendered?.documents[outputPath] ?? null,
+      }
+    : null;
 }
 
 export async function getDurableTanstackStartServerArtifact(revision: string) {

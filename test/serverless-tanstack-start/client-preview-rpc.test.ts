@@ -49,6 +49,21 @@ type PreviewCompileResult = {
   diagnostics: Array<{ message: string }>;
   html: string;
   kernelId: string;
+  prerenderPlan?: {
+    concurrency: number;
+    failOnError: boolean;
+    maxRedirects: number;
+    pages: Array<{
+      autoSubfolderIndex: boolean;
+      crawlLinks: boolean;
+      headers: Record<string, string>;
+      outputPath?: string;
+      path: string;
+      retryCount: number;
+      retryDelay: number;
+      shell?: boolean;
+    }>;
+  };
   revision: string;
   routeManifest: Record<string, { css?: string[]; preloads: string[] }>;
   rpcToken: string;
@@ -482,6 +497,97 @@ test("validates declarative import-protection configuration", () => {
   assert.match(
     invalidSpa.diagnostics.map(({ message }) => message).join("\n"),
     /maskPath must be a same-origin path/,
+  );
+});
+
+test("builds a bounded declarative static-output plan", () => {
+  const preview = compilePreview(
+    basicClientWorkspace("console.log('prerender config');", [
+      {
+        path: "tanstack-start.config.json",
+        language: "json",
+        content: JSON.stringify({
+          pages: [
+            "/",
+            {
+              path: "/about?source=static",
+              prerender: {
+                autoSubfolderIndex: false,
+                crawlLinks: false,
+                headers: { "x-prerender-fixture": "active" },
+                outputPath: "/about-static",
+                retryCount: 2,
+                retryDelay: 25,
+              },
+            },
+          ],
+          prerender: {
+            autoStaticPathsDiscovery: false,
+            concurrency: 2,
+            enabled: true,
+            maxRedirects: 3,
+          },
+          spa: {
+            enabled: true,
+            maskPath: "/app",
+            prerender: { outputPath: "/app-shell" },
+          },
+        }),
+      },
+    ]),
+  );
+
+  assert.equal(preview.success, true, preview.html);
+  assert.deepEqual(preview.prerenderPlan, {
+    concurrency: 2,
+    failOnError: true,
+    maxRedirects: 3,
+    pages: [
+      {
+        autoSubfolderIndex: true,
+        crawlLinks: true,
+        headers: {},
+        path: "/",
+        retryCount: 0,
+        retryDelay: 500,
+      },
+      {
+        autoSubfolderIndex: false,
+        crawlLinks: false,
+        headers: { "x-prerender-fixture": "active" },
+        outputPath: "/about-static",
+        path: "/about?source=static",
+        retryCount: 2,
+        retryDelay: 25,
+      },
+      {
+        autoSubfolderIndex: false,
+        crawlLinks: false,
+        headers: { "X-TSS_SHELL": "true" },
+        outputPath: "/app-shell",
+        path: "/app",
+        retryCount: 0,
+        retryDelay: 500,
+        shell: true,
+      },
+    ],
+  });
+
+  const unsupportedDiscovery = compilePreview(
+    basicClientWorkspace("console.log('discovery config');", [
+      {
+        path: "tanstack-start.config.json",
+        language: "json",
+        content: JSON.stringify({
+          prerender: { autoStaticPathsDiscovery: true, enabled: true },
+        }),
+      },
+    ]),
+  );
+  assert.equal(unsupportedDiscovery.success, false);
+  assert.match(
+    unsupportedDiscovery.diagnostics.map(({ message }) => message).join("\n"),
+    /autoStaticPathsDiscovery is not available.*declare pages/i,
   );
 });
 

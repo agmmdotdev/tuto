@@ -8,6 +8,7 @@ import {
   getDurableTanstackStartArtifact,
   getDurableTanstackStartArtifactAsset,
   getDurableTanstackStartArtifactMetadata,
+  getDurableTanstackStartPrerenderedDocument,
   getDurableTanstackStartServerRuntimeArtifact,
   getTanstackStartArtifactMetadata,
   type TanstackStartArtifactAsset,
@@ -48,6 +49,21 @@ export type ArtifactServerRequestResolution =
       artifactCache: "durable" | "hot";
       ok: true;
       runtime: ServerRuntimeArtifact;
+    }
+  | {
+      message: string;
+      ok: false;
+      status: number;
+    };
+
+export type ArtifactDocumentRequestResolution =
+  | {
+      artifact: TanstackStartArtifactMetadata;
+      artifactCache: "durable" | "hot";
+      body: string | null;
+      kind: "route" | "shell" | null;
+      ok: true;
+      outputPath: string | null;
     }
   | {
       message: string;
@@ -262,4 +278,88 @@ export async function resolveArtifactServerRequest(
     return changedArtifact();
   const { runtime, ...artifact } = selected;
   return { artifact, artifactCache: "durable", ok: true, runtime };
+}
+
+export async function resolveArtifactDocumentRequest(
+  request: Request,
+  routePath: string,
+): Promise<ArtifactDocumentRequestResolution> {
+  const authorization = await authorizeArtifactRequest(request);
+  if (!authorization.ok) return authorization;
+  const prerendered = authorization.metadata.prerendered;
+  if (!prerendered) {
+    return {
+      artifact: authorization.metadata,
+      artifactCache: authorization.artifactCache,
+      body: null,
+      kind: null,
+      ok: true,
+      outputPath: null,
+    };
+  }
+
+  let routeUrl: URL;
+  try {
+    routeUrl = new URL(routePath, "http://localhost");
+  } catch {
+    return { message: "Invalid preview request path.", ok: false, status: 400 };
+  }
+  if (routeUrl.origin !== "http://localhost") {
+    return { message: "Invalid preview request path.", ok: false, status: 400 };
+  }
+  const exactPath = `${routeUrl.pathname}${routeUrl.search}`;
+  const routeOutput =
+    prerendered.routes[exactPath] ?? prerendered.routes[routeUrl.pathname];
+  const outputPath = routeOutput ?? prerendered.shell ?? null;
+  const kind = routeOutput ? "route" : outputPath ? "shell" : null;
+  if (!outputPath) {
+    return {
+      artifact: authorization.metadata,
+      artifactCache: authorization.artifactCache,
+      body: null,
+      kind: null,
+      ok: true,
+      outputPath: null,
+    };
+  }
+
+  if (authorization.hotArtifact) {
+    const body =
+      authorization.hotArtifact.prerendered?.documents[outputPath] ?? null;
+    return body === null
+      ? durableStoreFailure(new Error("Stored prerendered document is missing."))
+      : {
+          artifact: authorization.metadata,
+          artifactCache: "hot",
+          body,
+          kind,
+          ok: true,
+          outputPath,
+        };
+  }
+
+  let selected;
+  try {
+    selected = await getDurableTanstackStartPrerenderedDocument(
+      authorization.revision,
+      outputPath,
+    );
+  } catch (error) {
+    return durableStoreFailure(error);
+  }
+  if (!selected) return missingArtifact();
+  if (!artifactIdentityMatches(authorization.metadata, selected.artifact)) {
+    return changedArtifact();
+  }
+  if (selected.body === null) {
+    return durableStoreFailure(new Error("Stored prerendered document is missing."));
+  }
+  return {
+    artifact: selected.artifact,
+    artifactCache: "durable",
+    body: selected.body,
+    kind,
+    ok: true,
+    outputPath,
+  };
 }

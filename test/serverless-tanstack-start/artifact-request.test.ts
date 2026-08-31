@@ -3,10 +3,12 @@ import { createHash } from "node:crypto";
 import { afterEach, test } from "vitest";
 import {
   clearTanstackStartArtifactCache,
+  putTanstackStartArtifact,
   type TanstackStartArtifact,
 } from "../../lib/serverless-tanstack-start/artifact-cache";
 import {
   resolveArtifactAssetRequest,
+  resolveArtifactDocumentRequest,
   resolveArtifactServerRequest,
 } from "../../lib/serverless-tanstack-start/artifact-request";
 import {
@@ -30,6 +32,14 @@ const artifact: TanstackStartArtifact = {
   durationMs: 1,
   html: "",
   kernelId: kernelManifest.id,
+  prerendered: {
+    documents: {
+      "/_shell.html": "<!doctype html><p>shell document</p>",
+      "/about/index.html": "<!doctype html><p>about document</p>",
+    },
+    routes: { "/about": "/about/index.html" },
+    shell: "/_shell.html",
+  },
   revision,
   routeManifest: {},
   rpcToken: token,
@@ -169,4 +179,70 @@ test("resolves a deferred server runtime without invoking its source loaders", a
   assert.equal(resolution.ok, true);
   assert.equal(sourceLoads, 0);
   assert.ok(resolution.ok && resolution.runtime.serverSources);
+});
+
+test("serves exact prerendered routes before the SPA shell from a hot revision", async () => {
+  putTanstackStartArtifact(artifact);
+
+  const exact = await resolveArtifactDocumentRequest(
+    new Request(`http://tuto.local/render?revision=${revision}&token=${token}`),
+    "/about",
+  );
+  assert.deepEqual(exact, {
+    artifact: getTanstackStartArtifactMetadata(artifact),
+    artifactCache: "hot",
+    body: artifact.prerendered?.documents["/about/index.html"],
+    kind: "route",
+    ok: true,
+    outputPath: "/about/index.html",
+  });
+
+  const fallback = await resolveArtifactDocumentRequest(
+    new Request(`http://tuto.local/render?revision=${revision}&token=${token}`),
+    "/unmatched?tab=one",
+  );
+  assert.deepEqual(fallback, {
+    artifact: getTanstackStartArtifactMetadata(artifact),
+    artifactCache: "hot",
+    body: artifact.prerendered?.documents["/_shell.html"],
+    kind: "shell",
+    ok: true,
+    outputPath: "/_shell.html",
+  });
+});
+
+test("authorizes before selectively reading a durable prerendered document", async () => {
+  let documentReads = 0;
+  setTanstackStartArtifactStoreForTests({
+    async get() {
+      throw new Error("full artifact should not be read");
+    },
+    async getMetadata() {
+      return getTanstackStartArtifactMetadata(artifact);
+    },
+    async getPrerenderedDocument(_revision, outputPath) {
+      documentReads += 1;
+      return {
+        artifact: getTanstackStartArtifactMetadata(artifact),
+        body: artifact.prerendered?.documents[outputPath] ?? null,
+      };
+    },
+    async put() {},
+  });
+
+  const denied = await resolveArtifactDocumentRequest(
+    new Request(
+      `http://tuto.local/render?revision=${revision}&token=${"x".repeat(43)}`,
+    ),
+    "/about",
+  );
+  assert.equal(denied.ok, false);
+  assert.equal(documentReads, 0);
+
+  const allowed = await resolveArtifactDocumentRequest(
+    new Request(`http://tuto.local/render?revision=${revision}&token=${token}`),
+    "/about",
+  );
+  assert.equal(allowed.ok && allowed.body, "<!doctype html><p>about document</p>");
+  assert.equal(documentReads, 1);
 });

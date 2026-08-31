@@ -846,7 +846,11 @@ export function getRouter() {
 
 const spaFiles: WorkspaceFile[] = [
   {
-    content: JSON.stringify({ spa: { enabled: true, maskPath: "/hello" } }),
+    content: JSON.stringify({
+      pages: [{ path: "/static", prerender: { crawlLinks: false } }],
+      prerender: { autoStaticPathsDiscovery: false, enabled: true },
+      spa: { enabled: true, maskPath: "/hello" },
+    }),
     language: "json",
     path: "tanstack-start.config.json",
   },
@@ -890,6 +894,21 @@ function HelloRoute() {
     path: "src/routes/hello.tsx",
   },
   {
+    content: `import { createFileRoute } from '@tanstack/react-router';
+
+export const Route = createFileRoute('/static')({
+  loader: () => ({ source: typeof window === 'undefined' ? 'static-server' : 'client' }),
+  component: StaticRoute,
+});
+
+function StaticRoute() {
+  const data = Route.useLoaderData();
+  return <main data-testid="static-child">Static route rendered by {data.source}</main>;
+}`,
+    language: "tsx",
+    path: "src/routes/static.tsx",
+  },
+  {
     content: `import {
   Outlet,
   Scripts,
@@ -899,6 +918,7 @@ function HelloRoute() {
   useRouter,
 } from '@tanstack/react-router';
 import { Route as helloRouteImport } from './routes/hello';
+import { Route as staticRouteImport } from './routes/static';
 
 const rootRoute = createRootRoute({
   component: () => <html lang="en"><head><title>SPA shell fixture</title></head><body>
@@ -912,7 +932,12 @@ const helloRoute = helloRouteImport.update({
   id: '/hello',
   path: '/hello',
 });
-const routeTree = rootRoute.addChildren([helloRoute]);
+const staticRoute = staticRouteImport.update({
+  getParentRoute: () => rootRoute,
+  id: '/static',
+  path: '/static',
+});
+const routeTree = rootRoute.addChildren([helloRoute, staticRoute]);
 
 export function getRouter() {
   return createRouter({
@@ -1508,10 +1533,27 @@ test("boots an official Start SPA shell and keeps server functions live", async 
   const shellResponse = await request.get(renderPath);
   const shellHtml = await shellResponse.text();
   expect(shellResponse.status()).toBe(200);
+  expect(shellResponse.headers()["x-tuto-prerender-kind"]).toBe("shell");
+  expect(shellResponse.headers()["x-tuto-prerender-output"]).toBe(
+    "/_shell.html",
+  );
+  expect(shellResponse.headers()["x-tuto-worker-id"]).toBeUndefined();
   expect(shellHtml).toContain('data-spa-shell="true"');
   expect(shellHtml).toContain('data-spa-pending="true"');
   expect(shellHtml).not.toContain('data-testid="spa-child"');
   expect(shellHtml).not.toContain("server-function-live");
+
+  const staticResponse = await request.get(
+    renderRoutePath(renderPath, "/static"),
+  );
+  const staticHtml = await staticResponse.text();
+  expect(staticResponse.status()).toBe(200);
+  expect(staticResponse.headers()["x-tuto-prerender-kind"]).toBe("route");
+  expect(staticResponse.headers()["x-tuto-prerender-output"]).toBe(
+    "/static/index.html",
+  );
+  expect(staticResponse.headers()["x-tuto-worker-id"]).toBeUndefined();
+  expect(staticHtml).toContain("Static route rendered by <!-- -->static-server");
 
   const navigation = await page.goto(new URL(renderPath, baseURL).href);
   expect(navigation?.status()).toBe(200);

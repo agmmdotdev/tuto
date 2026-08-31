@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-08-30",
+  "updatedAt": "2026-08-31",
   "upstream": {
     "repository": "TanStack/router",
     "commit": "0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5",
@@ -337,10 +337,23 @@
     {
       "id": "static-prerendering",
       "area": "Build output",
-      "status": "not-verified",
+      "status": "partial",
       "upstreamSource": "guide/static-prerendering.md",
-      "evidence": [],
-      "notes": "Tuto currently compiles and serves request-time previews rather than emitting a static site."
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start/compiler-cache.test.ts",
+          "test": "emits revision-pinned static documents and serves exact routes before the SPA shell"
+        },
+        {
+          "file": "test/serverless-tanstack-start/artifact-store.test.ts",
+          "test": "selectively reads metadata, one asset, and server runtime blobs"
+        },
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "boots an official Start SPA shell and keeps server functions live"
+        }
+      ],
+      "notes": "Declarative pages, bounded crawling/concurrency/retries, output paths, and the SPA shell render through the official Start handler and persist as revision-pinned content-addressed HTML. Executable filters/hooks, automatic route-generator discovery, and third-party deployment packaging are not supported."
     },
     {
       "id": "incremental-static-regeneration",
@@ -458,7 +471,7 @@
           "test": "boots an official Start SPA shell and keeps server functions live"
         }
       ],
-      "notes": "The request preview uses Start's official shell marker: root SSR and pending fallback boot the child route in Firefox while server functions and routes stay live. Static _shell.html emission and deployment rewrites are not generated yet."
+      "notes": "The request preview uses Start's official shell marker: root SSR and pending fallback boot the child route in Firefox while server functions and routes stay live. The compiler stores _shell.html and serves it for unmatched document paths; third-party deployment rewrites are not generated."
     },
     {
       "id": "vite-plugin-ecosystem",

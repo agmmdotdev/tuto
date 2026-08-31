@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "vitest";
 import {
   clearTanstackStartArtifactCache,
+  getTanstackStartArtifact,
   type TanstackStartArtifact,
 } from "../../lib/serverless-tanstack-start/artifact-cache";
 import {
@@ -9,9 +10,12 @@ import {
   setTanstackStartArtifactStoreForTests,
 } from "../../lib/serverless-tanstack-start/artifact-store";
 import { compileServerlessTanstackStartWorkspace } from "../../lib/serverless-tanstack-start/compiler";
+import { clearNativeRpcWorkerPoolForTests } from "../../lib/serverless-tanstack-start/native-rpc-worker-pool";
+import { GET as handleNativeRender } from "../../app/api/serverless/tanstack-start/core-render/route";
 
-afterEach(() => {
+afterEach(async () => {
   clearTanstackStartArtifactCache();
+  await clearNativeRpcWorkerPoolForTests();
   setTanstackStartArtifactStoreForTests(undefined);
 });
 
@@ -111,4 +115,118 @@ test("a durable artifact prevents recompilation after a hot-cache miss", async (
   assert.equal(restored.html, first.html);
   assert.equal(summaryReads, 2);
   assert.equal(fullReads, 0);
+});
+
+test("emits revision-pinned static documents and serves exact routes before the SPA shell", async () => {
+  const files = [
+    {
+      path: "tanstack-start.config.json",
+      content: JSON.stringify({
+        pages: [{ path: "/static", prerender: { crawlLinks: false } }],
+        prerender: { autoStaticPathsDiscovery: false, enabled: true },
+        spa: { enabled: true, maskPath: "/static" },
+      }),
+      language: "json" as const,
+    },
+    {
+      path: "index.html",
+      content: '<script type="module" src="./src/main.ts"></script>',
+      language: "html" as const,
+    },
+    {
+      path: "src/main.ts",
+      content: "export {};",
+      language: "ts" as const,
+    },
+    {
+      path: "src/routes/static.tsx",
+      content: `import { createFileRoute } from '@tanstack/react-router';
+export const Route = createFileRoute('/static')({
+  loader: () => ({ source: typeof window === 'undefined' ? 'static-server' : 'client' }),
+  component: StaticRoute,
+});
+function StaticRoute() {
+  const data = Route.useLoaderData();
+  return <main data-testid="static-child">Static route rendered by {data.source}</main>;
+}`,
+      language: "tsx" as const,
+    },
+    {
+      path: "src/router.tsx",
+      content: `import {
+  Outlet,
+  Scripts,
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  useRouter,
+} from '@tanstack/react-router';
+import { Route as staticRouteImport } from './routes/static';
+
+const rootRoute = createRootRoute({
+  component: () => <html><head><title>Static output fixture</title></head><body>
+    <p data-spa-shell={String(useRouter().isShell())}>root shell</p>
+    <Outlet />
+    <Scripts />
+  </body></html>,
+});
+const staticRoute = staticRouteImport.update({
+  getParentRoute: () => rootRoute,
+  id: '/static',
+  path: '/static',
+});
+const routeTree = rootRoute.addChildren([staticRoute]);
+export function getRouter() {
+  return createRouter({
+    defaultPendingComponent: () => <p data-spa-pending="true">Loading SPA route</p>,
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+    routeTree,
+  });
+}`,
+      language: "tsx" as const,
+    },
+  ];
+
+  const result = await compileServerlessTanstackStartWorkspace(files);
+  assert.equal(result.success, true, JSON.stringify(result.diagnostics, null, 2));
+  const artifact = getTanstackStartArtifact(result.revision);
+  assert.ok(artifact?.prerendered);
+  assert.deepEqual(artifact.prerendered.routes, {
+    "/static": "/static/index.html",
+  });
+  assert.equal(artifact.prerendered.shell, "/_shell.html");
+  assert.match(
+    artifact.prerendered.documents["/static/index.html"] ?? "",
+    /Static route rendered by.*static-server/,
+  );
+  assert.match(
+    artifact.prerendered.documents["/_shell.html"] ?? "",
+    /data-spa-shell="true"/,
+  );
+
+  const renderUrl = new URL(
+    "http://tuto.local/api/serverless/tanstack-start/core-render",
+  );
+  renderUrl.searchParams.set("revision", result.revision);
+  renderUrl.searchParams.set("token", artifact.rpcToken);
+  renderUrl.searchParams.set("path", "/static");
+  const exact = await handleNativeRender(new Request(renderUrl));
+  assert.equal(exact.status, 200);
+  assert.equal(exact.headers.get("x-tuto-prerender-kind"), "route");
+  assert.equal(
+    exact.headers.get("x-tuto-prerender-output"),
+    "/static/index.html",
+  );
+  assert.equal(
+    exact.headers.get("cache-control"),
+    "private, max-age=31536000, immutable",
+  );
+  assert.equal(exact.headers.get("x-tuto-worker-id"), null);
+
+  renderUrl.searchParams.set("path", "/unmatched");
+  const shell = await handleNativeRender(new Request(renderUrl));
+  assert.equal(shell.status, 200);
+  assert.equal(shell.headers.get("x-tuto-prerender-kind"), "shell");
+  assert.equal(shell.headers.get("x-tuto-prerender-output"), "/_shell.html");
+  assert.equal(shell.headers.get("x-tuto-worker-id"), null);
 });
