@@ -358,10 +358,27 @@
     {
       "id": "incremental-static-regeneration",
       "area": "Build output",
-      "status": "not-verified",
+      "status": "verified",
       "upstreamSource": "guide/isr.md",
-      "evidence": [],
-      "notes": "ISR headers and regeneration behavior are not implemented in the preview host."
+      "evidence": [
+        {
+          "file": "test/serverless-tanstack-start/compiler-cache.test.ts",
+          "test": "regenerates stale pages once and merges concurrent route publications"
+        },
+        {
+          "file": "test/serverless-tanstack-start/artifact-request.test.ts",
+          "test": "serves an ISR document stale while scheduling one background regeneration"
+        },
+        {
+          "file": "test/serverless-tanstack-start/isr-policy.test.ts",
+          "test": "uses shared max-age and preserves stale-while-revalidate"
+        },
+        {
+          "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
+          "test": "boots an official Start SPA shell and keeps server functions live"
+        }
+      ],
+      "notes": "Eligible prerendered route cache headers drive bounded stale-while-revalidate and blocking regeneration through the revision worker. Route single-flight plus revision-serialized merging publish HTML and static server-function results together."
     },
     {
       "id": "static-server-functions",

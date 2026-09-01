@@ -13,8 +13,20 @@ export type TanstackStartBuildMetrics = {
 
 export type TanstackStartPrerenderedOutput = {
   documents: Record<string, string>;
+  isr?: Record<string, TanstackStartIsrDocument>;
   routes: Record<string, string>;
   shell?: string;
+};
+
+export type TanstackStartIsrDocument = {
+  cacheControl: string;
+  generatedAt: number;
+  maxRedirects: number;
+  requestHeaders: Record<string, string>;
+  revalidateSeconds: number;
+  routePath: string;
+  staticServerFunctionPaths: string[];
+  staleWhileRevalidateSeconds: number;
 };
 
 export type TanstackStartArtifact = {

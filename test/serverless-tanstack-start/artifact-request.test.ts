@@ -15,6 +15,7 @@ import {
   getTanstackStartArtifactMetadata,
   setTanstackStartArtifactStoreForTests,
 } from "../../lib/serverless-tanstack-start/artifact-store";
+import { resolveIncrementalStaticRegeneration } from "../../lib/serverless-tanstack-start/isr-runtime";
 import kernelManifest from "../../lib/serverless-tanstack-start/kernel-manifest.generated.json";
 
 const revision = "6".repeat(64);
@@ -36,6 +37,18 @@ const artifact: TanstackStartArtifact = {
     documents: {
       "/_shell.html": "<!doctype html><p>shell document</p>",
       "/about/index.html": "<!doctype html><p>about document</p>",
+    },
+    isr: {
+      "/about/index.html": {
+        cacheControl: "public, s-maxage=60, stale-while-revalidate=300",
+        generatedAt: 1_000,
+        maxRedirects: 5,
+        requestHeaders: {},
+        revalidateSeconds: 60,
+        routePath: "/about",
+        staticServerFunctionPaths: [],
+        staleWhileRevalidateSeconds: 300,
+      },
     },
     routes: { "/about": "/about/index.html" },
     shell: "/_shell.html",
@@ -250,6 +263,46 @@ test("serves exact prerendered routes before the SPA shell from a hot revision",
     ok: true,
     outputPath: "/_shell.html",
   });
+});
+
+test("serves an ISR document stale while scheduling one background regeneration", async () => {
+  putTanstackStartArtifact(artifact);
+  const request = new Request(
+    `http://tuto.local/render?revision=${revision}&token=${token}`,
+  );
+  const selected = await resolveArtifactDocumentRequest(request, "/about");
+  assert.equal(selected.ok, true);
+  if (
+    !selected.ok ||
+    selected.body === null ||
+    selected.kind !== "route" ||
+    selected.outputPath === null
+  ) {
+    throw new Error("Expected an exact prerendered route.");
+  }
+  let scheduled = 0;
+  const resolved = await resolveIncrementalStaticRegeneration(
+    request,
+    {
+      ...selected,
+      body: selected.body,
+      kind: "route",
+      outputPath: selected.outputPath,
+    },
+    {
+      now: 62_000,
+      schedule() {
+        scheduled += 1;
+      },
+    },
+  );
+  assert.deepEqual(resolved, {
+    body: "<!doctype html><p>about document</p>",
+    cacheControl: "private, no-store",
+    generatedAt: 1_000,
+    status: "stale",
+  });
+  assert.equal(scheduled, 1);
 });
 
 test("authorizes before selectively reading a durable prerendered document", async () => {

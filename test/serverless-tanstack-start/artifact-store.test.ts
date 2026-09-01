@@ -43,6 +43,20 @@ function artifact(revision: string): TanstackStartArtifact {
         "/_shell.html": "<!doctype html><p>shell</p>",
         "/about/index.html": "<!doctype html><p>static about</p>",
       },
+      isr: {
+        "/about/index.html": {
+          cacheControl: "public, s-maxage=60, stale-while-revalidate=300",
+          generatedAt: 1_700_000_000_000,
+          maxRedirects: 5,
+          requestHeaders: { "x-prerender": "true" },
+          revalidateSeconds: 60,
+          routePath: "/about",
+          staticServerFunctionPaths: [
+            `/__tsr/staticServerFnCache/${"a".repeat(40)}.json`,
+          ],
+          staleWhileRevalidateSeconds: 300,
+        },
+      },
       routes: {
         "/about": "/about/index.html",
       },
@@ -282,6 +296,7 @@ test("selectively reads metadata, one asset, and server runtime blobs", async ()
   const metadata = await reader.getMetadata!(revision);
   assert.equal(metadata?.rpcToken, artifact(revision).rpcToken);
   assert.deepEqual(metadata?.prerendered, {
+    isr: artifact(revision).prerendered?.isr,
     routes: { "/about": "/about/index.html" },
     shell: "/_shell.html",
   });

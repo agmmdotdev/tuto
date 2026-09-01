@@ -419,8 +419,13 @@ outside the safe shared-compiler surface. Static server functions now use the
 documented final middleware contract: prerender executes the function in the
 existing worker, captures the upstream Seroval result under its
 function-ID/payload-derived key, and persists immutable JSON beside the HTML.
-Later browser calls fetch that authenticated artifact without live RPC. ISR
-with bounded regeneration locking and revision-safe publication is next.
+Later browser calls fetch that authenticated artifact without live RPC. ISR now
+records the official route cache policy during prerender, serves stale content
+without recaching it, and regenerates through the same bounded revision worker.
+Route-level single-flight and revision-level serialized merging publish HTML
+and static server-function results together without overwriting concurrent
+route updates. Safe automatic prerender discovery, declarative filtering, and
+deployment output metadata are next.
 
 The standalone proof script above still uses its original minimal host adapter
 to isolate the compiler experiment. The integrated playground no longer relies

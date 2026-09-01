@@ -1,5 +1,7 @@
+import { after } from "next/server";
 import { executeNativeArtifactRequest } from "../../../../../lib/serverless-tanstack-start/native-request-host";
 import { resolveArtifactDocumentRequest } from "../../../../../lib/serverless-tanstack-start/artifact-request";
+import { resolveIncrementalStaticRegeneration } from "../../../../../lib/serverless-tanstack-start/isr-runtime";
 
 export const runtime = "nodejs";
 
@@ -40,15 +42,42 @@ export async function GET(request: Request) {
       status: prerendered.status,
     });
   } else if (prerendered.body !== null) {
-    response = new Response(prerendered.body, {
-      headers: {
-        "cache-control": "private, max-age=31536000, immutable",
-        "content-type": "text/html; charset=utf-8",
-        "x-tuto-artifact-cache": prerendered.artifactCache,
-        "x-tuto-prerender-kind": prerendered.kind ?? "route",
-        "x-tuto-prerender-output": prerendered.outputPath ?? "",
-      },
+    const isr =
+      prerendered.kind === "route" && prerendered.outputPath
+        ? await resolveIncrementalStaticRegeneration(
+            request,
+            {
+              ...prerendered,
+              body: prerendered.body,
+              kind: "route",
+              outputPath: prerendered.outputPath,
+            },
+            {
+              schedule(operation) {
+                try {
+                  after(operation);
+                } catch {
+                  queueMicrotask(() =>
+                    void operation().catch(() => undefined),
+                  );
+                }
+              },
+            },
+          )
+        : null;
+    const headers = new Headers({
+      "cache-control":
+        isr?.cacheControl ?? "private, max-age=31536000, immutable",
+      "content-type": "text/html; charset=utf-8",
+      "x-tuto-artifact-cache": prerendered.artifactCache,
+      "x-tuto-prerender-kind": prerendered.kind ?? "route",
+      "x-tuto-prerender-output": prerendered.outputPath ?? "",
     });
+    if (isr) {
+      headers.set("x-tuto-isr-generated-at", String(isr.generatedAt));
+      headers.set("x-tuto-isr-status", isr.status);
+    }
+    response = new Response(isr?.body ?? prerendered.body, { headers });
   } else {
     response = await executeNativeArtifactRequest(request, {
       acceptHtml: true,

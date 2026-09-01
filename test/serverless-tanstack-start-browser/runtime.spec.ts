@@ -909,6 +909,9 @@ export const Route = createFileRoute('/static')({
     source: typeof window === 'undefined' ? 'static-server' : 'client',
     staticMessage: await readStaticMessage({ data: { scope: 'browser-fixture' } }),
   }),
+  headers: () => ({
+    'Cache-Control': 'public, max-age=0, stale-while-revalidate=60',
+  }),
   component: StaticRoute,
 });
 
@@ -1570,9 +1573,26 @@ test("boots an official Start SPA shell and keeps server functions live", async 
   expect(staticResponse.headers()["x-tuto-prerender-output"]).toBe(
     "/static/index.html",
   );
+  expect(staticResponse.headers()["x-tuto-isr-status"]).toBe("stale");
+  expect(staticResponse.headers()["cache-control"]).toBe("private, no-store");
   expect(staticResponse.headers()["x-tuto-worker-id"]).toBeUndefined();
   expect(staticHtml).toContain("Static route rendered by <!-- -->static-server");
   expect(staticHtml).toContain("static-function-build-result:browser-fixture");
+
+  const regeneratedResponse = await request.get(
+    renderRoutePath(renderPath, "/static"),
+    { headers: { "cache-control": "no-cache" } },
+  );
+  expect(regeneratedResponse.status()).toBe(200);
+  expect(regeneratedResponse.headers()["x-tuto-isr-status"]).toBe(
+    "regenerated",
+  );
+  expect(regeneratedResponse.headers()["cache-control"]).toBe(
+    "public, max-age=0, stale-while-revalidate=60",
+  );
+  expect(await regeneratedResponse.text()).toContain(
+    "static-function-build-result:browser-fixture",
+  );
 
   const staticNavigation = await page.goto(
     new URL(renderRoutePath(renderPath, "/static"), baseURL).href,

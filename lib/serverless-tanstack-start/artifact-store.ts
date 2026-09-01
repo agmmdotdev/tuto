@@ -373,6 +373,60 @@ function staticServerFunctionsAreValid(value: unknown) {
   );
 }
 
+function isrDocumentsAreValid(
+  value: unknown,
+  output: TanstackStartPrerenderedOutput,
+) {
+  if (value === undefined) return true;
+  if (value === null || typeof value !== "object") return false;
+  const entries = Object.entries(value);
+  return (
+    entries.length <= 64 &&
+    entries.every(([outputPath, rawPolicy]) => {
+      if (
+        !prerenderedOutputPathIsValid(outputPath) ||
+        !Object.hasOwn(output.documents, outputPath) ||
+        rawPolicy === null ||
+        typeof rawPolicy !== "object"
+      ) {
+        return false;
+      }
+      const policy = rawPolicy as NonNullable<
+        TanstackStartPrerenderedOutput["isr"]
+      >[string];
+      const requestHeaders = policy.requestHeaders;
+      return (
+        typeof policy.cacheControl === "string" &&
+        policy.cacheControl.length > 0 &&
+        policy.cacheControl.length <= 2_048 &&
+        Number.isSafeInteger(policy.generatedAt) &&
+        policy.generatedAt >= 0 &&
+        Number.isSafeInteger(policy.maxRedirects) &&
+        policy.maxRedirects >= 0 &&
+        policy.maxRedirects <= 20 &&
+        requestHeaders !== null &&
+        typeof requestHeaders === "object" &&
+        Object.entries(requestHeaders).length <= 64 &&
+        Object.entries(requestHeaders).every(
+          ([name, headerValue]) =>
+            /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) &&
+            typeof headerValue === "string" &&
+            headerValue.length <= 8_192,
+        ) &&
+        Number.isSafeInteger(policy.revalidateSeconds) &&
+        policy.revalidateSeconds >= 0 &&
+        prerenderedRoutePathIsValid(policy.routePath) &&
+        output.routes[policy.routePath] === outputPath &&
+        Array.isArray(policy.staticServerFunctionPaths) &&
+        policy.staticServerFunctionPaths.length <= 64 &&
+        policy.staticServerFunctionPaths.every(staticServerFunctionPathIsValid) &&
+        Number.isSafeInteger(policy.staleWhileRevalidateSeconds) &&
+        policy.staleWhileRevalidateSeconds >= 0
+      );
+    })
+  );
+}
+
 function prerenderedOutputIsValid(value: unknown) {
   if (value === undefined) return true;
   if (value === null || typeof value !== "object") return false;
@@ -402,6 +456,7 @@ function prerenderedOutputIsValid(value: unknown) {
   ) {
     return false;
   }
+  if (!isrDocumentsAreValid(output.isr, output)) return false;
   return (
     output.shell === undefined ||
     (prerenderedOutputPathIsValid(output.shell) &&
@@ -483,6 +538,9 @@ function artifactMetadata(
     ...(artifact.prerendered
       ? {
           prerendered: {
+            ...(artifact.prerendered.isr
+              ? { isr: artifact.prerendered.isr }
+              : {}),
             routes: artifact.prerendered.routes,
             ...(artifact.prerendered.shell
               ? { shell: artifact.prerendered.shell }
@@ -607,6 +665,7 @@ function createArtifactManifest(artifact: TanstackStartArtifact) {
       ...(prerendered
         ? {
             prerendered: {
+              ...(prerendered.isr ? { isr: prerendered.isr } : {}),
               routes: prerendered.routes,
               ...(prerendered.shell ? { shell: prerendered.shell } : {}),
             },

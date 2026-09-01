@@ -57,7 +57,7 @@ or Markdown drift.
 | `deferred-hydration` | Rendering modes | **verified** | [Deferred hydration](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/deferred-hydration.md) | SSR preservation; interaction, idle, media, visible, condition, and never strategies; delayed child chunks; prefetch without hydration; post-hydration interaction. |
 | `seo-head-metadata` | Document output | **verified** | [SEO](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/seo.md) | Loader-derived title/meta/Open Graph/canonical/JSON-LD in SSR and navigation. |
 | `static-prerendering` | Build output | **partial** | [Static prerendering](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/static-prerendering.md) | Declarative pages, bounded crawling/concurrency/retries, output paths, and the SPA shell emit revision-pinned HTML blobs through the official handler. Executable filters/hooks, automatic route-generator discovery, and third-party deployment packaging remain outside the safe compiler surface. |
-| `incremental-static-regeneration` | Build output | **not-verified** | [ISR](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/isr.md) | No preview-host regeneration contract yet. |
+| `incremental-static-regeneration` | Build output | **verified** | [ISR](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/isr.md) | Prerendered route `Cache-Control` drives shared freshness and stale-while-revalidate; bounded single-flight regeneration reuses the revision worker and revision-serialized publication atomically updates HTML plus static server-function results. |
 | `static-server-functions` | Build output | **verified** | [Static server functions](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/static-server-functions.md) | The documented final `staticFunctionMiddleware` executes during prerender, keys Seroval results by function ID and validated payload, stores immutable JSON blobs, and replaces later browser RPC with an authenticated asset fetch. |
 | `environment-functions` | Compiler protection | **verified** | [Environment functions](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/environment-functions.md) | Isomorphic/server-only/client-only branch selection, tree-shaking, and wrong-runtime errors. |
 | `environment-variables` | Compiler protection | **verified** | [Environment variables](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/environment-variables.md) | Production `.env` layering, server `process.env`, public `VITE_` client values, and secret non-leakage. |
@@ -136,8 +136,34 @@ capability-checked immutable artifact read. It does not dispatch the function
 to a runtime worker. Server functions without the static middleware and all
 server routes remain live.
 
+## Incremental static regeneration
+
+ISR follows Start's documented standard-header contract. During prerender,
+Tuto records an eligible route response's `Cache-Control` policy, preferring
+`s-maxage` over `max-age` and retaining `stale-while-revalidate`. Private,
+`no-store`, and responses without a numeric shared freshness lifetime remain
+ordinary revision-pinned static documents.
+
+Fresh ISR documents retain the route's cache header. A stale document inside
+its stale-while-revalidate window is returned immediately with `private,
+no-store` while Next's post-response lifetime keeps one background
+regeneration alive. An expired document blocks on the same regeneration; a
+request with `Cache-Control: no-cache` or `max-age=0` forces this blocking path.
+Regeneration failures serve the last valid document without recaching it.
+
+Rendering is single-flight per revision and output path, bounded process-wide by
+`TUTO_TANSTACK_ISR_CONCURRENCY` and `TUTO_TANSTACK_ISR_MAX_PENDING`, and runs
+through the existing revision-pinned Node worker pool. Separate routes may
+render concurrently, but publication is serialized per revision: the latest
+artifact is reloaded, its identity and route mapping are rechecked, and the new
+HTML and any static server-function JSON are merged before durable and hot
+publication. Diagnostic responses expose `x-tuto-isr-status` and
+`x-tuto-isr-generated-at`.
+
 ## Next compatibility slice
 
-The next core-runtime slice is ISR with bounded regeneration locking and
-revision-safe publication. This stays inside the request-based Node/esbuild
-architecture; it does not require a watcher, container, or microVM.
+The next core-runtime slice closes the remaining safe static-prerender surface:
+virtual-route automatic discovery, declarative filtering, and deployment
+output metadata. This stays inside the request-based Node/esbuild architecture;
+it does not require a watcher, container, or microVM, and it will not execute
+student Vite callbacks in the compiler host.

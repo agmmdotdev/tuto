@@ -8,6 +8,7 @@ import {
   putTanstackStartArtifact,
   type TanstackStartArtifact,
   type TanstackStartBuildMetrics,
+  type TanstackStartIsrDocument,
 } from "./artifact-cache";
 import {
   getDurableTanstackStartArtifactSummary,
@@ -16,6 +17,7 @@ import {
 } from "./artifact-store";
 import { getNativeRpcWorkerPool } from "./native-rpc-worker-pool";
 import type { NativeRpcRequest, NativeRpcResult } from "./native-rpc-protocol";
+import { createTanstackStartIsrDocument } from "./isr-policy";
 
 export type ServerlessTanstackStartResult = {
   success: boolean;
@@ -219,6 +221,7 @@ async function prerenderArtifact(
   const documents: Record<string, string> = {};
   const routes: Record<string, string> = {};
   const staticServerFunctions: Record<string, string> = {};
+  const isr: Record<string, TanstackStartIsrDocument> = {};
   const warnings: BuildDiagnostic[] = [];
   const pending: PrerenderPagePlan[] = [];
   const seen = new Set<string>();
@@ -338,7 +341,19 @@ async function prerenderArtifact(
     }
     documents[outputPath] = html;
     if (page.shell) shell = outputPath;
-    else routes[page.path] = outputPath;
+    else {
+      routes[page.path] = outputPath;
+      const policy = createTanstackStartIsrDocument({
+        cacheControl: new Headers(response.headers).get("cache-control"),
+        maxRedirects: plan.maxRedirects,
+        requestHeaders: page.headers,
+        routePath: page.path,
+        staticServerFunctionPaths: Object.keys(
+          response.staticServerFunctionCache ?? {},
+        ),
+      });
+      if (policy) isr[outputPath] = policy;
+    }
 
     if (!page.crawlLinks || page.shell) return [] as PrerenderPagePlan[];
     return extractPrerenderLinks(html)
@@ -361,13 +376,14 @@ async function prerenderArtifact(
       {
         id: randomUUID(),
         level: "info",
-        message: `TanStack Start emitted ${Object.keys(documents).length} static HTML document(s) and ${Object.keys(staticServerFunctions).length} static server-function result(s) in ${Date.now() - startedAt}ms.`,
+        message: `TanStack Start emitted ${Object.keys(documents).length} static HTML document(s), ${Object.keys(isr).length} ISR policy record(s), and ${Object.keys(staticServerFunctions).length} static server-function result(s) in ${Date.now() - startedAt}ms.`,
         timestamp: new Date().toISOString(),
       },
     ],
     durationMs: artifact.durationMs + (Date.now() - startedAt),
     prerendered: {
       documents,
+      ...(Object.keys(isr).length > 0 ? { isr } : {}),
       routes,
       ...(shell ? { shell } : {}),
     },
