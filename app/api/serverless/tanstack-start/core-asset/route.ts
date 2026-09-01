@@ -11,18 +11,20 @@ export async function GET(request: Request) {
   const asset: TanstackStartArtifactAsset | null =
     kind === "client"
       ? { kind: "client" }
-      : kind === "style"
-        ? requestedChunk
-          ? { kind: "style-chunk", name: requestedChunk }
-          : { kind: "style" }
-        : kind === "static-server-function" && requestedChunk
-          ? {
-              kind: "static-server-function",
-              name: `/${requestedChunk}`,
-            }
-          : kind === "chunk" && requestedChunk
-          ? { kind: "client-chunk", name: requestedChunk }
-          : null;
+      : kind === "deployment-manifest"
+        ? { kind: "deployment-manifest" }
+        : kind === "style"
+          ? requestedChunk
+            ? { kind: "style-chunk", name: requestedChunk }
+            : { kind: "style" }
+          : kind === "static-server-function" && requestedChunk
+            ? {
+                kind: "static-server-function",
+                name: `/${requestedChunk}`,
+              }
+            : kind === "chunk" && requestedChunk
+              ? { kind: "client-chunk", name: requestedChunk }
+              : null;
   if (!asset) {
     return new Response("Unknown preview asset.", {
       headers: { "cache-control": "no-store" },
@@ -54,15 +56,15 @@ export async function GET(request: Request) {
     headers: {
       "access-control-allow-origin": "*",
       "cache-control":
-        kind === "static-server-function"
+        kind === "static-server-function" || kind === "deployment-manifest"
           ? "private, max-age=31536000, immutable"
           : "private, no-store",
       "content-type":
-        kind === "static-server-function"
+        kind === "static-server-function" || kind === "deployment-manifest"
           ? "application/json; charset=utf-8"
           : kind === "client" || kind === "chunk"
-          ? "text/javascript; charset=utf-8"
-          : "text/css; charset=utf-8",
+            ? "text/javascript; charset=utf-8"
+            : "text/css; charset=utf-8",
       "x-content-type-options": "nosniff",
     },
   });

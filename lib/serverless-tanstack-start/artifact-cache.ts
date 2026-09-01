@@ -18,6 +18,21 @@ export type TanstackStartPrerenderedOutput = {
   shell?: string;
 };
 
+export type TanstackStartDeploymentManifest = {
+  assets: Record<
+    string,
+    {
+      contentType:
+        | "application/json; charset=utf-8"
+        | "text/html; charset=utf-8";
+      kind: "document" | "static-server-function";
+    }
+  >;
+  routes: Record<string, { outputPath: string }>;
+  spaFallback?: { outputPath: string };
+  version: 1;
+};
+
 export type TanstackStartIsrDocument = {
   cacheControl: string;
   generatedAt: number;
@@ -31,6 +46,7 @@ export type TanstackStartIsrDocument = {
 
 export type TanstackStartArtifact = {
   buildMetrics: TanstackStartBuildMetrics;
+  deploymentManifest?: TanstackStartDeploymentManifest;
   diagnostics: BuildDiagnostic[];
   durationMs: number;
   html: string;
@@ -49,6 +65,51 @@ export type TanstackStartArtifact = {
   staticServerFunctions?: Record<string, string>;
   success: boolean;
 };
+
+export function createTanstackStartDeploymentManifest(
+  prerendered: TanstackStartPrerenderedOutput,
+  staticServerFunctions: Record<string, string> = {},
+): TanstackStartDeploymentManifest {
+  const documentAssets = Object.keys(prerendered.documents)
+    .sort((left, right) => left.localeCompare(right))
+    .map(
+      (outputPath) =>
+        [
+          outputPath,
+          {
+            contentType: "text/html; charset=utf-8" as const,
+            kind: "document" as const,
+          },
+        ] as const,
+    );
+  const staticServerFunctionAssets = Object.keys(staticServerFunctions)
+    .sort((left, right) => left.localeCompare(right))
+    .map(
+      (outputPath) =>
+        [
+          outputPath,
+          {
+            contentType: "application/json; charset=utf-8" as const,
+            kind: "static-server-function" as const,
+          },
+        ] as const,
+    );
+  return {
+    assets: Object.fromEntries([
+      ...documentAssets,
+      ...staticServerFunctionAssets,
+    ]),
+    routes: Object.fromEntries(
+      Object.entries(prerendered.routes)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([routePath, outputPath]) => [routePath, { outputPath }]),
+    ),
+    ...(prerendered.shell
+      ? { spaFallback: { outputPath: prerendered.shell } }
+      : {}),
+    version: 1,
+  };
+}
 
 type CacheEntry = {
   artifact: TanstackStartArtifact;

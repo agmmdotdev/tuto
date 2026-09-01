@@ -52,6 +52,7 @@ type PreviewCompileResult = {
   prerenderPlan?: {
     concurrency: number;
     failOnError: boolean;
+    filter?: { exclude: string[]; include: string[] };
     maxRedirects: number;
     pages: Array<{
       autoSubfolderIndex: boolean;
@@ -243,9 +244,7 @@ export const readBrowserValue = createServerFn().handler(() => browserValue);`,
   );
   assert.equal(serverMarkerViolation.success, false);
   assert.match(
-    serverMarkerViolation.diagnostics
-      .map(({ message }) => message)
-      .join("\n"),
+    serverMarkerViolation.diagnostics.map(({ message }) => message).join("\n"),
     /Denied by client-only marker/,
   );
 
@@ -295,16 +294,19 @@ test("applies configurable import-protection deny and scope rules", () => {
   );
 
   const customFile = compilePreview(
-    basicClientWorkspace("import { secret } from './private/secret'; console.log(secret);", [
-      importProtectionConfig({
-        client: { files: ["**/private/**"] },
-      }),
-      {
-        path: "src/private/secret.ts",
-        language: "ts",
-        content: "export const secret = 'private';",
-      },
-    ]),
+    basicClientWorkspace(
+      "import { secret } from './private/secret'; console.log(secret);",
+      [
+        importProtectionConfig({
+          client: { files: ["**/private/**"] },
+        }),
+        {
+          path: "src/private/secret.ts",
+          language: "ts",
+          content: "export const secret = 'private';",
+        },
+      ],
+    ),
   );
   assert.equal(customFile.success, false);
   assert.match(
@@ -318,7 +320,8 @@ test("applies configurable import-protection deny and scope rules", () => {
       {
         path: "src/checked/bridge.ts",
         language: "ts",
-        content: "import { secret } from '../secret.server'; console.log(secret);",
+        content:
+          "import { secret } from '../secret.server'; console.log(secret);",
       },
       {
         path: "src/secret.server.ts",
@@ -334,45 +337,54 @@ test("applies configurable import-protection deny and scope rules", () => {
   );
 
   const excludedImporter = compilePreview(
-    basicClientWorkspace("import { safe } from './generated/bridge'; console.log(safe);", [
-      importProtectionConfig({ exclude: ["src/generated/**"] }),
-      {
-        path: "src/generated/bridge.ts",
-        language: "ts",
-        content: "export { secret as safe } from '../secret.server';",
-      },
-      {
-        path: "src/secret.server.ts",
-        language: "ts",
-        content: "export const secret = 'scope-excluded';",
-      },
-    ]),
+    basicClientWorkspace(
+      "import { safe } from './generated/bridge'; console.log(safe);",
+      [
+        importProtectionConfig({ exclude: ["src/generated/**"] }),
+        {
+          path: "src/generated/bridge.ts",
+          language: "ts",
+          content: "export { secret as safe } from '../secret.server';",
+        },
+        {
+          path: "src/secret.server.ts",
+          language: "ts",
+          content: "export const secret = 'scope-excluded';",
+        },
+      ],
+    ),
   );
   assert.equal(excludedImporter.success, true, excludedImporter.html);
 
   const excludedTarget = compilePreview(
-    basicClientWorkspace("import { secret } from './secret.server'; console.log(secret);", [
-      importProtectionConfig({
-        client: { excludeFiles: ["src/secret.server.ts"] },
-      }),
-      {
-        path: "src/secret.server.ts",
-        language: "ts",
-        content: "export const secret = 'target-excluded';",
-      },
-    ]),
+    basicClientWorkspace(
+      "import { secret } from './secret.server'; console.log(secret);",
+      [
+        importProtectionConfig({
+          client: { excludeFiles: ["src/secret.server.ts"] },
+        }),
+        {
+          path: "src/secret.server.ts",
+          language: "ts",
+          content: "export const secret = 'target-excluded';",
+        },
+      ],
+    ),
   );
   assert.equal(excludedTarget.success, true, excludedTarget.html);
 
   const disabled = compilePreview(
-    basicClientWorkspace("import { secret } from './secret.server'; console.log(secret);", [
-      importProtectionConfig({ enabled: false }),
-      {
-        path: "src/secret.server.ts",
-        language: "ts",
-        content: "export const secret = 'disabled-protection';",
-      },
-    ]),
+    basicClientWorkspace(
+      "import { secret } from './secret.server'; console.log(secret);",
+      [
+        importProtectionConfig({ enabled: false }),
+        {
+          path: "src/secret.server.ts",
+          language: "ts",
+          content: "export const secret = 'disabled-protection';",
+        },
+      ],
+    ),
   );
   assert.equal(disabled.success, true, disabled.html);
 
@@ -382,7 +394,8 @@ test("applies configurable import-protection deny and scope rules", () => {
       {
         path: "src/fixtures/bridge.ts",
         language: "ts",
-        content: "import { secret } from '../secret.server'; console.log(secret);",
+        content:
+          "import { secret } from '../secret.server'; console.log(secret);",
       },
       {
         path: "src/secret.server.ts",
@@ -394,18 +407,21 @@ test("applies configurable import-protection deny and scope rules", () => {
   assert.equal(ignoredImporter.success, true, ignoredImporter.html);
 
   const serverSpecifier = compilePreview(
-    basicClientWorkspace("import { readValue } from './actions'; console.log(readValue);", [
-      importProtectionConfig({
-        server: { specifiers: ["browser-runtime"] },
-      }),
-      {
-        path: "src/actions.ts",
-        language: "ts",
-        content: `import { createServerFn } from '@tanstack/react-start';
+    basicClientWorkspace(
+      "import { readValue } from './actions'; console.log(readValue);",
+      [
+        importProtectionConfig({
+          server: { specifiers: ["browser-runtime"] },
+        }),
+        {
+          path: "src/actions.ts",
+          language: "ts",
+          content: `import { createServerFn } from '@tanstack/react-start';
 import { browserValue } from 'browser-runtime';
 export const readValue = createServerFn().handler(() => browserValue);`,
-      },
-    ]),
+        },
+      ],
+    ),
   );
   assert.equal(serverSpecifier.success, false);
   assert.match(
@@ -573,22 +589,96 @@ test("builds a bounded declarative static-output plan", () => {
     ],
   });
 
-  const unsupportedDiscovery = compilePreview(
+  const discovered = compilePreview(
     basicClientWorkspace("console.log('discovery config');", [
       {
         path: "tanstack-start.config.json",
         language: "json",
         content: JSON.stringify({
-          prerender: { autoStaticPathsDiscovery: true, enabled: true },
+          pages: [
+            {
+              path: "/about",
+              prerender: { crawlLinks: false, retryDelay: 25 },
+            },
+          ],
+          prerender: {
+            autoStaticPathsDiscovery: true,
+            enabled: true,
+            filter: { exclude: ["/private/**"] },
+          },
         }),
+      },
+      {
+        path: "src/routes/index.tsx",
+        language: "tsx",
+        content: `import { createFileRoute } from '@tanstack/react-router';
+export const Route = createFileRoute('/')({ component: () => <p>home</p> });`,
+      },
+      {
+        path: "src/routes/about.tsx",
+        language: "tsx",
+        content: `import { createFileRoute } from '@tanstack/react-router';
+export const Route = createFileRoute('/about')({ component: () => <p>about</p> });`,
+      },
+      {
+        path: "src/routes/private.secret.tsx",
+        language: "tsx",
+        content: `import { createFileRoute } from '@tanstack/react-router';
+export const Route = createFileRoute('/private/secret')({ component: () => <p>secret</p> });`,
+      },
+      {
+        path: "src/routes/_layout.catalog.tsx",
+        language: "tsx",
+        content: `import { createFileRoute } from '@tanstack/react-router';
+export const Route = createFileRoute('/_layout/catalog')({ component: () => <p>catalog</p> });`,
+      },
+      {
+        path: "src/routes/users.$userId.tsx",
+        language: "tsx",
+        content: `import { createFileRoute } from '@tanstack/react-router';
+export const Route = createFileRoute('/users/$userId')({ component: () => <p>user</p> });`,
+      },
+      {
+        path: "src/routes/api.health.ts",
+        language: "ts",
+        content: `import { createFileRoute } from '@tanstack/react-router';
+export const Route = createFileRoute('/api/health')({ server: { handlers: { GET: () => Response.json({ ok: true }) } } });`,
       },
     ]),
   );
-  assert.equal(unsupportedDiscovery.success, false);
-  assert.match(
-    unsupportedDiscovery.diagnostics.map(({ message }) => message).join("\n"),
-    /autoStaticPathsDiscovery is not available.*declare pages/i,
-  );
+  assert.equal(discovered.success, true, discovered.html);
+  assert.deepEqual(discovered.prerenderPlan, {
+    concurrency: 4,
+    failOnError: true,
+    filter: { exclude: ["/private/**"], include: [] },
+    maxRedirects: 5,
+    pages: [
+      {
+        autoSubfolderIndex: true,
+        crawlLinks: true,
+        headers: {},
+        path: "/",
+        retryCount: 0,
+        retryDelay: 500,
+      },
+      {
+        autoSubfolderIndex: true,
+        crawlLinks: false,
+        headers: {},
+        path: "/about",
+        retryCount: 0,
+        retryDelay: 25,
+      },
+      {
+        autoSubfolderIndex: true,
+        crawlLinks: true,
+        headers: {},
+        path: "/catalog",
+        retryCount: 0,
+        retryDelay: 500,
+      },
+    ],
+  });
 });
 
 test("real Start client and server runtimes round-trip without sending workspace files", async () => {
@@ -1196,6 +1286,10 @@ export function getRouter() {
   const preview = compilePreview(files);
 
   assert.equal(preview.success, true, preview.html);
+  assert.deepEqual(
+    preview.prerenderPlan?.pages.map(({ path, shell }) => ({ path, shell })),
+    [{ path: "/hello", shell: true }],
+  );
   assert.match(preview.html, /path=%2Fhello&shell=true/);
   assert.deepEqual(preview.serverFnIds, []);
   assert.ok(preview.serverBundle.length > 0);
@@ -1635,7 +1729,10 @@ test("native RPC reports a lazy durable source failure as unavailable", async ()
       ),
     );
     assert.equal(response.status, 503);
-    assert.match(await response.text(), /shared artifact storage is unavailable/i);
+    assert.match(
+      await response.text(),
+      /shared artifact storage is unavailable/i,
+    );
   } finally {
     clearNativeRpcWorkerPoolForTests();
     setTanstackStartArtifactStoreForTests(undefined);

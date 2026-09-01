@@ -351,9 +351,13 @@
         {
           "file": "test/serverless-tanstack-start-browser/runtime.spec.ts",
           "test": "boots an official Start SPA shell and keeps server functions live"
+        },
+        {
+          "file": "test/serverless-tanstack-start/artifact-store.test.ts",
+          "test": "selectively reads metadata, one asset, and server runtime blobs"
         }
       ],
-      "notes": "Declarative pages, bounded crawling/concurrency/retries, output paths, and the SPA shell render through the official Start handler and persist as revision-pinned content-addressed HTML. Executable filters/hooks, automatic route-generator discovery, and third-party deployment packaging are not supported."
+      "notes": "Explicit pages merge with compiler-derived component routes; safe include/exclude globs filter configured, discovered, and crawled paths. The signed revision artifact exposes portable deployment metadata for HTML, static-function assets, routes, and the SPA fallback. Executable callbacks and third-party adapter packaging are not supported."
     },
     {
       "id": "incremental-static-regeneration",

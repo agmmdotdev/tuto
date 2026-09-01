@@ -1,4 +1,9 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type Page,
+} from "@playwright/test";
 import type { WorkspaceFile } from "../../lib/ide/types";
 
 const files: WorkspaceFile[] = [
@@ -847,8 +852,11 @@ export function getRouter() {
 const spaFiles: WorkspaceFile[] = [
   {
     content: JSON.stringify({
-      pages: [{ path: "/static", prerender: { crawlLinks: false } }],
-      prerender: { autoStaticPathsDiscovery: false, enabled: true },
+      prerender: {
+        autoStaticPathsDiscovery: true,
+        enabled: true,
+        filter: { include: ["/static"] },
+      },
       spa: { enabled: true, maskPath: "/hello" },
     }),
     language: "json",
@@ -998,7 +1006,9 @@ async function compilePreview(
   expect(result.success, JSON.stringify(result.diagnostics)).toBe(true);
   expect(result.html).not.toBeNull();
 
-  const redirect = result.html?.match(/location\.replace\(("(?:\\.|[^"])*")\)/)?.[1];
+  const redirect = result.html?.match(
+    /location\.replace\(("(?:\\.|[^"])*")\)/,
+  )?.[1];
   expect(redirect).toBeTruthy();
   return JSON.parse(redirect as string) as string;
 }
@@ -1018,12 +1028,17 @@ function collectBrowserErrors(page: Page) {
   return errors;
 }
 
-test("hydrates and exercises the native Start browser runtime", async ({ page, request, baseURL }) => {
+test("hydrates and exercises the native Start browser runtime", async ({
+  page,
+  request,
+  baseURL,
+}) => {
   const browserErrors = collectBrowserErrors(page);
   const renderPath = await compilePreview(request);
   const routeChunks = new Set<string>();
   const routeStyles = new Set<string>();
-  const flightResponses: Array<{ contentType: string | null; status: number }> = [];
+  const flightResponses: Array<{ contentType: string | null; status: number }> =
+    [];
   const actionResponses: Array<{
     contentType: string | null;
     status: number;
@@ -1038,8 +1053,14 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
         response.headers()["x-custom-server-entry"] ?? null,
       );
     }
-    if (url.includes("/core-asset") && url.includes("kind=chunk")) routeChunks.add(url);
-    if (url.includes("/core-asset") && url.includes("kind=style") && url.includes("name=")) routeStyles.add(url);
+    if (url.includes("/core-asset") && url.includes("kind=chunk"))
+      routeChunks.add(url);
+    if (
+      url.includes("/core-asset") &&
+      url.includes("kind=style") &&
+      url.includes("name=")
+    )
+      routeStyles.add(url);
     if (url.includes("/core-route") && url.includes("__tuto_rsc")) {
       const responseSummary = {
         contentType: response.headers()["content-type"] ?? null,
@@ -1114,14 +1135,24 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   expect(hydrationSsrResponse.status()).toBe(200);
   expect(hydrationSsrHtml).toContain("Idle<!-- --> hydration count: <!-- -->0");
   expect(hydrationSsrHtml).toContain('data-ts-hydrate-when="idle"');
-  expect(hydrationSsrHtml).toContain("Media<!-- --> hydration count: <!-- -->0");
+  expect(hydrationSsrHtml).toContain(
+    "Media<!-- --> hydration count: <!-- -->0",
+  );
   expect(hydrationSsrHtml).toContain('data-ts-hydrate-when="media"');
-  expect(hydrationSsrHtml).toContain("Visible<!-- --> hydration count: <!-- -->0");
-  expect(hydrationSsrHtml).toContain("Condition<!-- --> hydration count: <!-- -->0");
+  expect(hydrationSsrHtml).toContain(
+    "Visible<!-- --> hydration count: <!-- -->0",
+  );
+  expect(hydrationSsrHtml).toContain(
+    "Condition<!-- --> hydration count: <!-- -->0",
+  );
   expect(hydrationSsrHtml).toContain('data-ts-hydrate-when="condition"');
-  expect(hydrationSsrHtml).toContain("Never<!-- --> hydration count: <!-- -->0");
+  expect(hydrationSsrHtml).toContain(
+    "Never<!-- --> hydration count: <!-- -->0",
+  );
   expect(hydrationSsrHtml).toContain('data-ts-hydrate-when="never"');
-  expect(hydrationSsrHtml).toContain("Prefetch<!-- --> hydration count: <!-- -->0");
+  expect(hydrationSsrHtml).toContain(
+    "Prefetch<!-- --> hydration count: <!-- -->0",
+  );
 
   const renderResponse = await page.goto(new URL(renderPath, baseURL).href);
   expect(renderResponse?.status()).toBe(200);
@@ -1139,7 +1170,9 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   expect(initialHtml).toContain('rel="modulepreload"');
   expect(initialHtml).toContain("data-rsc-css-href");
   expect(initialHtml).toContain("kind=style");
-  await expect(page.getByRole("heading", { name: "Browser runtime fixture" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Browser runtime fixture" }),
+  ).toBeVisible();
   await expect(page.getByTestId("environment-server-result")).toContainText(
     "server-runtime|server-only:server-environment-secret|createClientOnlyFn() functions can only be called on the client!",
   );
@@ -1171,10 +1204,9 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
     "border-bottom-color",
     "rgb(41, 73, 105)",
   );
-  await expect(page.getByTestId("initial-rsc-root").locator("div").first()).toHaveCSS(
-    "border-top-color",
-    "rgb(98, 76, 54)",
-  );
+  await expect(
+    page.getByTestId("initial-rsc-root").locator("div").first(),
+  ).toHaveCSS("border-top-color", "rgb(98, 76, 54)");
   expect(routeStyles.size).toBeGreaterThan(0);
   await page.getByTestId("initial-rsc-counter").click();
   await expect(page.getByTestId("initial-rsc-counter")).toHaveText(
@@ -1206,9 +1238,9 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
     '"pathname":"/__tuto_rsc_action"',
   );
   await page.getByTestId("inline-rsc-server-action").click();
-  await expect(
-    page.getByTestId("inline-rsc-server-action-result"),
-  ).toHaveText("inline-bound-action:client-value");
+  await expect(page.getByTestId("inline-rsc-server-action-result")).toHaveText(
+    "inline-bound-action:client-value",
+  );
   expect(actionResponses).toEqual([
     expect.objectContaining({
       contentType: expect.stringContaining("text/x-component"),
@@ -1305,10 +1337,9 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
       .getByTestId(testId)
       .locator("xpath=ancestor::*[@data-ts-hydrate-id][1]");
 
-  await expect(hydrationMarker("condition-hydration-counter")).not.toHaveAttribute(
-    "data-ts-hydrate-when",
-    "condition",
-  );
+  await expect(
+    hydrationMarker("condition-hydration-counter"),
+  ).not.toHaveAttribute("data-ts-hydrate-when", "condition");
   await page.getByTestId("condition-hydration-counter").click();
   await expect(page.getByTestId("condition-hydration-counter")).toHaveText(
     "Condition hydration count: 1",
@@ -1330,7 +1361,9 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
     "data-ts-hydrate-when",
     "idle",
   );
-  await expect.poll(() => routeChunks.size).toBeGreaterThan(chunksBeforeIdleHydration);
+  await expect
+    .poll(() => routeChunks.size)
+    .toBeGreaterThan(chunksBeforeIdleHydration);
   await page.getByTestId("idle-hydration-counter").click();
   await expect(page.getByTestId("idle-hydration-counter")).toHaveText(
     "Idle hydration count: 1",
@@ -1346,7 +1379,9 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
     "data-ts-hydrate-when",
     "media",
   );
-  await expect.poll(() => routeChunks.size).toBeGreaterThan(chunksBeforeMediaHydration);
+  await expect
+    .poll(() => routeChunks.size)
+    .toBeGreaterThan(chunksBeforeMediaHydration);
   await page.getByTestId("media-hydration-counter").click();
   await expect(page.getByTestId("media-hydration-counter")).toHaveText(
     "Media hydration count: 1",
@@ -1354,7 +1389,9 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
 
   const chunksBeforeVisibleHydration = routeChunks.size;
   await page.getByTestId("visible-hydration-counter").scrollIntoViewIfNeeded();
-  await expect.poll(() => routeChunks.size).toBeGreaterThan(chunksBeforeVisibleHydration);
+  await expect
+    .poll(() => routeChunks.size)
+    .toBeGreaterThan(chunksBeforeVisibleHydration);
   await page.getByTestId("visible-hydration-counter").click();
   await expect(page.getByTestId("visible-hydration-counter")).toHaveText(
     "Visible hydration count: 1",
@@ -1378,16 +1415,17 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   );
   const chunksBeforePrefetch = routeChunks.size;
   await page.getByTestId("prefetch-hydration-counter").hover();
-  await expect.poll(() => routeChunks.size).toBeGreaterThan(chunksBeforePrefetch);
+  await expect
+    .poll(() => routeChunks.size)
+    .toBeGreaterThan(chunksBeforePrefetch);
   await expect(hydrationMarker("prefetch-hydration-counter")).toHaveAttribute(
     "data-ts-hydrate-when",
     "interaction",
   );
   await page.getByTestId("prefetch-hydration-counter").click();
-  await expect(hydrationMarker("prefetch-hydration-counter")).not.toHaveAttribute(
-    "data-ts-hydrate-when",
-    "interaction",
-  );
+  await expect(
+    hydrationMarker("prefetch-hydration-counter"),
+  ).not.toHaveAttribute("data-ts-hydrate-when", "interaction");
   await page.getByTestId("prefetch-hydration-counter").click();
   await expect(page.getByTestId("prefetch-hydration-counter")).toHaveText(
     "Prefetch hydration count: 1",
@@ -1407,7 +1445,7 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
     });
     return {
       body: await response.json(),
-      customServerEntry: response.headers.get('x-custom-server-entry'),
+      customServerEntry: response.headers.get("x-custom-server-entry"),
     };
   });
   expect(directGatewayResult).toMatchObject({
@@ -1417,7 +1455,9 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
 
   await page.getByTestId("server-fn").click();
   await expect(page.getByTestId("server-result")).toContainText("Hello Ada");
-  await expect(page.getByTestId("server-result")).toContainText("browser-middleware");
+  await expect(page.getByTestId("server-result")).toContainText(
+    "browser-middleware",
+  );
 
   await page.getByTestId("streaming-server-functions").click();
   await expect(
@@ -1438,12 +1478,16 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   );
 
   await page.getByTestId("request-fetch").click();
-  await expect(page.getByTestId("request-result")).toContainText("browser-body");
+  await expect(page.getByTestId("request-result")).toContainText(
+    "browser-body",
+  );
   await expect(page.getByTestId("request-result")).toContainText("active");
   await expect(page.getByTestId("request-result")).toContainText("PATCH");
 
   await page.getByTestId("redirect-fetch").click();
-  await expect(page.getByTestId("redirect-result")).toContainText('"landed":true');
+  await expect(page.getByTestId("redirect-result")).toContainText(
+    '"landed":true',
+  );
 
   const chunksBeforeRsc = new Set(routeChunks);
   await page.getByTestId("rsc-load").click();
@@ -1455,7 +1499,10 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   await page.getByTestId("rsc-counter").click();
   await expect(page.getByTestId("rsc-counter")).toHaveText("RSC count: 3");
   expect(flightResponses).toEqual([
-    expect.objectContaining({ contentType: expect.stringContaining("text/x-component"), status: 200 }),
+    expect.objectContaining({
+      contentType: expect.stringContaining("text/x-component"),
+      status: 200,
+    }),
   ]);
   expect([...routeChunks].some((url) => !chunksBeforeRsc.has(url))).toBe(true);
 
@@ -1514,8 +1561,13 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   const chunksBeforeNavigation = new Set(routeChunks);
   const stylesBeforeNavigation = new Set(routeStyles);
   await page.getByTestId("about-link").click();
-  await expect(page.getByTestId("about-route")).toHaveText("Lazy route loaded in the browser");
-  await expect(page.getByTestId("about-route")).toHaveCSS("color", "rgb(12, 34, 56)");
+  await expect(page.getByTestId("about-route")).toHaveText(
+    "Lazy route loaded in the browser",
+  );
+  await expect(page.getByTestId("about-route")).toHaveCSS(
+    "color",
+    "rgb(12, 34, 56)",
+  );
   await expect(page.getByTestId("path-alias-component")).toHaveText(
     "Resolved through tsconfig paths",
   );
@@ -1530,13 +1582,13 @@ test("hydrates and exercises the native Start browser runtime", async ({ page, r
   );
   expect(
     await page.locator('script[type="application/ld+json"]').textContent(),
-  ).toContain(
-    "About compatibility fixture",
+  ).toContain("About compatibility fixture");
+  expect([...routeChunks].some((url) => !chunksBeforeNavigation.has(url))).toBe(
+    true,
   );
-  expect([...routeChunks].some((url) => !chunksBeforeNavigation.has(url))).toBe(true);
-  expect(
-    [...routeStyles].some((url) => !stylesBeforeNavigation.has(url)),
-  ).toBe(true);
+  expect([...routeStyles].some((url) => !stylesBeforeNavigation.has(url))).toBe(
+    true,
+  );
   expect(browserErrors).toEqual([]);
 });
 
@@ -1576,7 +1628,9 @@ test("boots an official Start SPA shell and keeps server functions live", async 
   expect(staticResponse.headers()["x-tuto-isr-status"]).toBe("stale");
   expect(staticResponse.headers()["cache-control"]).toBe("private, no-store");
   expect(staticResponse.headers()["x-tuto-worker-id"]).toBeUndefined();
-  expect(staticHtml).toContain("Static route rendered by <!-- -->static-server");
+  expect(staticHtml).toContain(
+    "Static route rendered by <!-- -->static-server",
+  );
   expect(staticHtml).toContain("static-function-build-result:browser-fixture");
 
   const regeneratedResponse = await request.get(

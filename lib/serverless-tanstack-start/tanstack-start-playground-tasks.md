@@ -20,18 +20,20 @@ The remaining playground work is:
    - The official Start shell marker renders root SSR plus the pending fallback; Firefox proves the child route boots client-side and server functions remain live.
    - The compiler persists `/_shell.html` as a revision-pinned static artifact and serves it for unmatched document paths. Hosting-specific rewrite generation remains adapter work.
 6. **Static prerender output — complete for the safe declarative surface:**
-   - Top-level `pages` and `prerender` configuration emit bounded, content-addressed HTML documents from the official Start handler.
+   - Top-level `pages` merge with compiler-derived component routes and emit bounded, content-addressed HTML documents from the official Start handler.
+   - Safe include/exclude glob arrays filter configured, discovered, and crawled routes without executing student callbacks.
    - Exact static routes are served before the SPA shell with private immutable caching; server functions and server routes remain dynamic.
-   - Executable filters/hooks, automatic filesystem route discovery, and third-party deployment packaging are intentionally not run by the shared compiler.
+   - A signed, revision-pinned deployment manifest describes HTML, static server-function assets, route outputs, and the SPA fallback.
+   - Executable filters/hooks and third-party adapter packaging are intentionally not run by the shared compiler.
 7. **Static server functions — complete:**
    - The documented `staticFunctionMiddleware` import works as the final middleware on GET server functions.
    - Prerendering executes validators and handlers in the existing worker, persists the upstream Seroval result under its function-ID/payload-derived key, and embeds it in static HTML.
    - Later browser calls fetch the authenticated immutable JSON artifact without running live RPC; ordinary server functions and routes stay dynamic.
 
 The versioned support contract and its executable evidence live in
-[`TANSTACK_START_COMPATIBILITY.md`](./TANSTACK_START_COMPATIBILITY.md). ISR,
-static server functions, third-party hosting adapters, and a per-student
-Vite/HMR server are not prerequisites for the interactive Tuto preview path.
+[`TANSTACK_START_COMPATIBILITY.md`](./TANSTACK_START_COMPATIBILITY.md).
+Third-party hosting adapters and a per-student Vite/HMR server are not
+prerequisites for the interactive Tuto preview path.
 
 Deferred loader data, deferred hydration's interaction path, environment
 functions/variables, selective SSR, SEO/head metadata, path aliases, and custom
@@ -41,6 +43,5 @@ Advanced deferred hydration is complete: the Firefox fixture covers `idle`,
 `visible`, `media`, `condition`, `never`, and prefetch behavior while verifying
 that deferred child chunks are not included in route preloads.
 
-The next core-runtime slice is ISR with bounded regeneration locking and
-revision-safe publication. It is not a prerequisite for the interactive
-request preview.
+The next roadmap slice is Explorer File Actions: create, delete, and rename
+workspace files while preserving route-tree regeneration and editor state.

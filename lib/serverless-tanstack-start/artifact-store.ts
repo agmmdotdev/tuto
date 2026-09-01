@@ -5,20 +5,14 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { createReadStream } from "node:fs";
-import {
-  mkdir,
-  readFile,
-  rename,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { AwsClient } from "aws4fetch";
 import kernelManifest from "./kernel-manifest.generated.json";
-import type {
-  TanstackStartArtifact,
-  TanstackStartPrerenderedOutput,
+import {
+  createTanstackStartDeploymentManifest,
+  type TanstackStartArtifact,
+  type TanstackStartPrerenderedOutput,
 } from "./artifact-cache";
 import type {
   ServerRuntimeArtifact,
@@ -93,6 +87,7 @@ export type TanstackStartArtifactDocumentResult = {
 export type TanstackStartArtifactAsset =
   | { kind: "client" }
   | { kind: "client-chunk"; name: string }
+  | { kind: "deployment-manifest" }
   | { kind: "static-server-function"; name: string }
   | { kind: "style" }
   | { kind: "style-chunk"; name: string };
@@ -177,10 +172,7 @@ type FilesystemStoreOptions = Omit<
   root: string;
 };
 
-type S3StoreOptions = Omit<
-  TanstackStartArtifactStoreOptions,
-  "blobStore"
-> & {
+type S3StoreOptions = Omit<TanstackStartArtifactStoreOptions, "blobStore"> & {
   accessKeyId: string;
   bucket: string;
   endpoint: string;
@@ -276,8 +268,9 @@ async function mapConcurrent<T, R>(
   let nextIndex = 0;
   let failed = false;
   let failure: unknown;
-  const workers =
-    Array.from({ length: Math.min(values.length, concurrency) }, async () => {
+  const workers = Array.from(
+    { length: Math.min(values.length, concurrency) },
+    async () => {
       while (!failed && nextIndex < values.length) {
         const index = nextIndex++;
         try {
@@ -287,7 +280,8 @@ async function mapConcurrent<T, R>(
           failure = error;
         }
       }
-    });
+    },
+  );
   await Promise.all(workers);
   if (failed) throw failure;
   return results;
@@ -419,7 +413,9 @@ function isrDocumentsAreValid(
         output.routes[policy.routePath] === outputPath &&
         Array.isArray(policy.staticServerFunctionPaths) &&
         policy.staticServerFunctionPaths.length <= 64 &&
-        policy.staticServerFunctionPaths.every(staticServerFunctionPathIsValid) &&
+        policy.staticServerFunctionPaths.every(
+          staticServerFunctionPathIsValid,
+        ) &&
         Number.isSafeInteger(policy.staleWhileRevalidateSeconds) &&
         policy.staleWhileRevalidateSeconds >= 0
       );
@@ -464,6 +460,21 @@ function prerenderedOutputIsValid(value: unknown) {
   );
 }
 
+function deploymentManifestIsValid(
+  value: unknown,
+  prerendered: TanstackStartPrerenderedOutput | undefined,
+  staticServerFunctions: Record<string, string> | undefined,
+) {
+  if (value === undefined) return true;
+  if (!prerendered || value === null || typeof value !== "object") return false;
+  return (
+    JSON.stringify(value) ===
+    JSON.stringify(
+      createTanstackStartDeploymentManifest(prerendered, staticServerFunctions),
+    )
+  );
+}
+
 function artifactIsValid(
   artifact: unknown,
   revision: string,
@@ -482,8 +493,7 @@ function artifactIsValid(
     typeof candidate.ssrCssChunks === "object" &&
     Object.entries(candidate.ssrCssChunks).every(
       ([name, value]) =>
-        /^chunks\/[A-Za-z0-9_-]+\.css$/.test(name) &&
-        typeof value === "string",
+        /^chunks\/[A-Za-z0-9_-]+\.css$/.test(name) && typeof value === "string",
     );
   const serverChunksAreValid =
     candidate.serverChunks !== null &&
@@ -519,6 +529,11 @@ function artifactIsValid(
     serverChunksAreValid &&
     routeManifestIsValid &&
     prerenderedOutputIsValid(candidate.prerendered) &&
+    deploymentManifestIsValid(
+      candidate.deploymentManifest,
+      candidate.prerendered,
+      candidate.staticServerFunctions,
+    ) &&
     staticServerFunctionsAreValid(candidate.staticServerFunctions) &&
     typeof candidate.ssrCss === "string" &&
     typeof candidate.serverBundle === "string" &&
@@ -533,6 +548,9 @@ function artifactMetadata(
   return {
     buildMetrics: artifact.buildMetrics,
     diagnostics: artifact.diagnostics,
+    ...(artifact.deploymentManifest
+      ? { deploymentManifest: artifact.deploymentManifest }
+      : {}),
     durationMs: artifact.durationMs,
     kernelId: artifact.kernelId,
     ...(artifact.prerendered
@@ -565,6 +583,10 @@ function artifactAssetBody(
       return artifact.ssrClientBundle;
     case "client-chunk":
       return artifact.ssrClientChunks[asset.name] ?? null;
+    case "deployment-manifest":
+      return artifact.deploymentManifest
+        ? JSON.stringify(artifact.deploymentManifest)
+        : null;
     case "static-server-function":
       return artifact.staticServerFunctions?.[asset.name] ?? null;
     case "style":
@@ -583,6 +605,8 @@ function artifactAssetDescriptor(
       return manifest.sources.ssrClientBundle;
     case "client-chunk":
       return manifest.sources.ssrClientChunks[asset.name] ?? null;
+    case "deployment-manifest":
+      return null;
     case "static-server-function":
       return manifest.sources.staticServerFunctions?.[asset.name] ?? null;
     case "style":
@@ -700,8 +724,7 @@ function artifactManifestIsValid(
   if (
     sources === null ||
     typeof sources !== "object" ||
-    Boolean(manifest.prerendered) !==
-      Boolean(sources.prerenderedDocuments) ||
+    Boolean(manifest.prerendered) !== Boolean(sources.prerenderedDocuments) ||
     !descriptorIsValid(sources.html) ||
     (sources.prerenderedDocuments !== undefined &&
       !(
@@ -800,7 +823,8 @@ function reconstructArtifact(
 ) {
   const { sources, ...metadata } = manifest;
   const { prerendered, ...artifactMetadata } = metadata;
-  const source = (descriptor: ArtifactBlobDescriptor) => blobs.get(descriptor.hash)!;
+  const source = (descriptor: ArtifactBlobDescriptor) =>
+    blobs.get(descriptor.hash)!;
   const sourceRecord = (record: Record<string, ArtifactBlobDescriptor>) =>
     Object.fromEntries(
       Object.entries(record).map(([name, descriptor]) => [
@@ -857,7 +881,10 @@ export function createTanstackStartArtifactStore({
   );
   const manifestCache = new Map<string, ArtifactEnvelopePayload>();
 
-  const cacheManifest = (revision: string, payload: ArtifactEnvelopePayload) => {
+  const cacheManifest = (
+    revision: string,
+    payload: ArtifactEnvelopePayload,
+  ) => {
     manifestCache.delete(revision);
     manifestCache.set(revision, payload);
     while (manifestCache.size > defaultManifestCacheEntries) {
@@ -882,7 +909,9 @@ export function createTanstackStartArtifactStore({
     }
     const source = await blobStore.get(blobObjectKey(prefix, descriptor.hash));
     if (source === null) {
-      throw new Error(`Stored TanStack artifact blob ${descriptor.hash} is missing.`);
+      throw new Error(
+        `Stored TanStack artifact blob ${descriptor.hash} is missing.`,
+      );
     }
     if (
       Buffer.byteLength(source) !== descriptor.bytes ||
@@ -1077,7 +1106,14 @@ export function createTanstackStartArtifactStore({
       const descriptor = artifactAssetDescriptor(payload.artifact, asset);
       return {
         artifact: artifactMetadata(payload.artifact),
-        body: descriptor ? await loadBlob(descriptor) : null,
+        body:
+          asset.kind === "deployment-manifest"
+            ? payload.artifact.deploymentManifest
+              ? JSON.stringify(payload.artifact.deploymentManifest)
+              : null
+            : descriptor
+              ? await loadBlob(descriptor)
+              : null,
       };
     },
 
@@ -1517,9 +1553,7 @@ export async function getDurableTanstackStartServerRuntimeArtifact(
     : null;
 }
 
-export async function getDurableTanstackStartArtifactSummary(
-  revision: string,
-) {
+export async function getDurableTanstackStartArtifactSummary(revision: string) {
   const store = getStore();
   if (!store) return null;
   if (store.getSummary) return store.getSummary(revision);

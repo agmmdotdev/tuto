@@ -97,8 +97,17 @@ type PrerenderPagePlan = {
 type PrerenderPlan = {
   concurrency: number;
   failOnError: boolean;
+  filter?: PrerenderFilterPlan;
   maxRedirects: number;
   pages: PrerenderPagePlan[];
+};
+type PrerenderFilterPlan = {
+  exclude: string[];
+  include: string[];
+};
+type PrerenderRouteDiscovery = {
+  clientRouteIds: Record<string, string>;
+  clientRouteSplits: WorkspaceFileMap;
 };
 
 type HtmlEntryPoint = {
@@ -396,7 +405,9 @@ function parseEnvironmentFile(
   }
 }
 
-function readWorkspaceEnvironment(files: WorkspaceFileMap): WorkspaceEnvironment {
+function readWorkspaceEnvironment(
+  files: WorkspaceFileMap,
+): WorkspaceEnvironment {
   const server: Record<string, string> = Object.create(null);
   for (const fileName of environmentFileNames) {
     const source = files.get(fileName);
@@ -522,11 +533,7 @@ function readImportProtectionPolicy(files: WorkspaceFileMap) {
   } else if (behavior !== undefined) {
     const modes = importProtectionObject(behavior, "behavior");
     const selected = mode === "development" ? modes.dev : modes.build;
-    if (
-      selected !== undefined &&
-      selected !== "error" &&
-      selected !== "mock"
-    ) {
+    if (selected !== undefined && selected !== "error" && selected !== "mock") {
       throw new Error(
         `[import-protection] behavior.${mode === "development" ? "dev" : "build"} must be "error" or "mock".`,
       );
@@ -557,18 +564,9 @@ function readImportProtectionPolicy(files: WorkspaceFileMap) {
   ) {
     throw new Error('[import-protection] log must be "once" or "always".');
   }
-  policy.log =
-    (options.log as ImportProtectionLogMode | undefined) ?? "once";
-  policy.include = importProtectionStringArray(
-    options.include,
-    [],
-    "include",
-  );
-  policy.exclude = importProtectionStringArray(
-    options.exclude,
-    [],
-    "exclude",
-  );
+  policy.log = (options.log as ImportProtectionLogMode | undefined) ?? "once";
+  policy.include = importProtectionStringArray(options.include, [], "include");
+  policy.exclude = importProtectionStringArray(options.exclude, [], "exclude");
   policy.ignoreImporters = importProtectionStringArray(
     options.ignoreImporters,
     [],
@@ -773,9 +771,117 @@ function prerenderHeaders(value: unknown, label: string) {
   );
 }
 
+function prerenderFilterPatterns(value: unknown, label: string): string[] {
+  if (value === undefined) return [];
+  if (
+    !Array.isArray(value) ||
+    value.length > 32 ||
+    value.some(
+      (pattern) =>
+        typeof pattern !== "string" ||
+        pattern.length === 0 ||
+        pattern.length > 256,
+    )
+  ) {
+    throw new Error(
+      `[prerender] ${label} must be an array with at most 32 non-empty glob strings.`,
+    );
+  }
+  for (const pattern of value) {
+    try {
+      picomatch(pattern, { dot: true });
+    } catch (error) {
+      throw new Error(
+        `[prerender] ${label} contains an invalid glob: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+  return value as string[];
+}
+
+function readPrerenderFilter(
+  globalOptions: Record<string, unknown>,
+): PrerenderFilterPlan | undefined {
+  if (globalOptions.filter === undefined) return undefined;
+  const filter = importProtectionObject(
+    globalOptions.filter,
+    "prerender.filter",
+  );
+  const unknownKeys = Object.keys(filter).filter(
+    (key) => key !== "include" && key !== "exclude",
+  );
+  if (unknownKeys.length > 0) {
+    throw new Error(
+      `[prerender] filter only supports include and exclude glob arrays; received ${unknownKeys.join(", ")}.`,
+    );
+  }
+  return {
+    exclude: prerenderFilterPatterns(filter.exclude, "filter.exclude"),
+    include: prerenderFilterPatterns(filter.include, "filter.include"),
+  };
+}
+
+function prerenderPathMatchesFilter(
+  routePath: string,
+  filter: PrerenderFilterPlan | undefined,
+) {
+  if (!filter) return true;
+  const pathname = new URL(routePath, "http://localhost").pathname;
+  const included =
+    filter.include.length === 0 ||
+    filter.include.some((pattern) =>
+      picomatch(pattern, { dot: true })(pathname),
+    );
+  return (
+    included &&
+    !filter.exclude.some((pattern) =>
+      picomatch(pattern, { dot: true })(pathname),
+    )
+  );
+}
+
+function discoveredPrerenderPath(routeId: string) {
+  if (routeId === "/") return "/";
+  if (routeId === "__root__" || !routeId.startsWith("/")) return null;
+  const segments = routeId.split("/").filter(Boolean);
+  if (segments.some((segment) => segment.startsWith("$"))) return null;
+  const pathSegments = segments
+    .filter(
+      (segment) =>
+        !segment.startsWith("_") &&
+        !(segment.startsWith("(") && segment.endsWith(")")),
+    )
+    .map((segment) => segment.replace(/_$/, ""))
+    .filter(Boolean);
+  if (pathSegments.length === 0) return null;
+  return normalizePrerenderPath(
+    `/${pathSegments.join("/")}`,
+    "discovered route",
+  );
+}
+
+function discoverPrerenderPaths(discovery: PrerenderRouteDiscovery) {
+  return Object.entries(discovery.clientRouteIds)
+    .filter(([workspacePath]) =>
+      [...discovery.clientRouteSplits.keys()].some((splitId) => {
+        if (!splitId.startsWith(`${workspacePath}?tsr-split=`)) return false;
+        return splitId
+          .slice(splitId.indexOf("=") + 1)
+          .split("---")
+          .includes("component");
+      }),
+    )
+    .map(([, routeId]) => discoveredPrerenderPath(routeId))
+    .filter((routePath): routePath is string => routePath !== null)
+    .sort((left, right) => left.localeCompare(right));
+}
+
 function readPrerenderPlan(
   files: WorkspaceFileMap,
   spaPolicy: SpaPolicy,
+  discovery: PrerenderRouteDiscovery,
 ): PrerenderPlan | undefined {
   const source = files.get(importProtectionConfigFile);
   if (source === undefined) return undefined;
@@ -805,15 +911,15 @@ function readPrerenderPlan(
   }
   if (
     globalOptions.autoStaticPathsDiscovery !== undefined &&
-    globalOptions.autoStaticPathsDiscovery !== false
+    typeof globalOptions.autoStaticPathsDiscovery !== "boolean"
   ) {
-    throw new Error(
-      "[prerender] autoStaticPathsDiscovery is not available in the virtual workspace compiler; declare pages or enable link crawling.",
-    );
+    throw new Error("[prerender] autoStaticPathsDiscovery must be a boolean.");
   }
   const rawPages = config.pages ?? [];
   if (!Array.isArray(rawPages) || rawPages.length > 32) {
-    throw new Error("[prerender] pages must be an array with at most 32 entries.");
+    throw new Error(
+      "[prerender] pages must be an array with at most 32 entries.",
+    );
   }
 
   const pageEntries = rawPages.map((rawPage, index) => {
@@ -843,6 +949,7 @@ function readPrerenderPlan(
     (globalOptions.enabled !== false &&
       (globalOptions.enabled === true || enabledByPage));
   if (!enabled) return undefined;
+  const filter = readPrerenderFilter(globalOptions);
 
   const resolvePage = (
     rawPath: unknown,
@@ -890,11 +997,35 @@ function readPrerenderPlan(
     };
   };
 
-  const pages = pageEntries
+  const explicitPages = pageEntries
     .map(({ path: pagePath, prerender }, index) =>
       resolvePage(pagePath, prerender, `pages[${index}].prerender`),
     )
     .filter((page): page is PrerenderPagePlan => page !== null);
+  const pagesByPath = new Map<string, PrerenderPagePlan>();
+  const automaticDiscoveryEnabled =
+    globalOptions.autoStaticPathsDiscovery === true ||
+    (globalOptions.autoStaticPathsDiscovery !== false &&
+      (globalOptions.enabled === true || enabledByPage));
+  if (automaticDiscoveryEnabled) {
+    for (const routePath of discoverPrerenderPaths(discovery)) {
+      const page = resolvePage(routePath, {}, "discovered route");
+      if (page && prerenderPathMatchesFilter(page.path, filter)) {
+        pagesByPath.set(page.path, page);
+      }
+    }
+  }
+  for (const page of explicitPages) {
+    if (prerenderPathMatchesFilter(page.path, filter)) {
+      pagesByPath.set(page.path, page);
+    }
+  }
+  const pages = [...pagesByPath.values()];
+  if (pages.length > 32) {
+    throw new Error(
+      "[prerender] automatic discovery and configured pages exceed the 32-page build limit; narrow prerender.filter.include or exclude routes.",
+    );
+  }
   if (spaPolicy.enabled) {
     pages.push({
       autoSubfolderIndex: false,
@@ -912,24 +1043,20 @@ function readPrerenderPlan(
   }
   if (pages.length === 0) {
     const root = resolvePage("/", {}, "prerender");
-    if (root) pages.push(root);
+    if (root && prerenderPathMatchesFilter(root.path, filter)) pages.push(root);
   }
 
   return {
     concurrency: Math.max(
       1,
-      prerenderConfigInteger(
-        globalOptions.concurrency,
-        4,
-        "concurrency",
-        4,
-      ),
+      prerenderConfigInteger(globalOptions.concurrency, 4, "concurrency", 4),
     ),
     failOnError: prerenderConfigBoolean(
       globalOptions.failOnError,
       true,
       "failOnError",
     ),
+    ...(filter ? { filter } : {}),
     maxRedirects: prerenderConfigInteger(
       globalOptions.maxRedirects,
       5,
@@ -1054,8 +1181,12 @@ function createImportProtectionPlugin(
       if (/^[A-Za-z_$][\w$]*(?:\s*,|$)/.test(clause)) names.add("default");
       const named = clause.match(/\{([\s\S]*?)\}/)?.[1];
       for (const part of named?.split(",") ?? []) {
-        const imported = part.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0];
-        if (imported && /^[A-Za-z_$][\w$]*$/.test(imported)) names.add(imported);
+        const imported = part
+          .trim()
+          .replace(/^type\s+/, "")
+          .split(/\s+as\s+/)[0];
+        if (imported && /^[A-Za-z_$][\w$]*$/.test(imported))
+          names.add(imported);
       }
     }
     return [...names];
@@ -1103,10 +1234,7 @@ export default mock;
       details.specifier,
       details.resolved ?? "",
     ].join(":");
-    if (
-      run &&
-      (policy.log === "always" || !run.seenViolations.has(key))
-    ) {
+    if (run && (policy.log === "always" || !run.seenViolations.has(key))) {
       run.seenViolations.add(key);
       run.diagnostics.push(createDiagnostic("warn", error.message));
     }
@@ -1166,9 +1294,7 @@ export default mock;
             : null);
         if (!resolved) return null;
         const cleanResolved = resolved.split("?")[0] ?? resolved;
-        if (
-          firstImportProtectionMatch(cleanResolved, rules.excludeFiles)
-        ) {
+        if (firstImportProtectionMatch(cleanResolved, rules.excludeFiles)) {
           return null;
         }
         const deniedByFile = firstImportProtectionMatch(
@@ -1195,17 +1321,14 @@ export default mock;
         contents: "export {};",
         loader: "js",
       }));
-      buildApi.onLoad(
-        { filter: /.*/, namespace: mockNamespace },
-        (args) => {
-          const mock = mocks.get(args.path);
-          if (!mock) return null;
-          return {
-            contents: mockModule(mock.names, mock.message),
-            loader: "js",
-          };
-        },
-      );
+      buildApi.onLoad({ filter: /.*/, namespace: mockNamespace }, (args) => {
+        const mock = mocks.get(args.path);
+        if (!mock) return null;
+        return {
+          contents: mockModule(mock.names, mock.message),
+          loader: "js",
+        };
+      });
     },
   };
 }
@@ -1349,7 +1472,10 @@ function readWorkspacePathAliases(
 
   const aliases = Object.entries(paths as Record<string, unknown>)
     .flatMap(([pattern, targets]) => {
-      if (!Array.isArray(targets) || !targets.every((target) => typeof target === "string")) {
+      if (
+        !Array.isArray(targets) ||
+        !targets.every((target) => typeof target === "string")
+      ) {
         return [];
       }
       const wildcard = pattern.indexOf("*");
@@ -1363,7 +1489,8 @@ function readWorkspacePathAliases(
     })
     .sort(
       (left, right) =>
-        right.patternPrefix.length + right.patternSuffix.length -
+        right.patternPrefix.length +
+        right.patternSuffix.length -
         (left.patternPrefix.length + left.patternSuffix.length),
     );
   const result = { aliases, baseUrl };
@@ -1770,15 +1897,11 @@ async function transformRscCssResources(
 
   if (hasDirectCssImport(ast)) {
     const transformed = await transformRscCssExport({
-      ast: ast as unknown as Parameters<
-        typeof transformRscCssExport
-      >[0]["ast"],
+      ast: ast as unknown as Parameters<typeof transformRscCssExport>[0]["ast"],
       code: output,
       filter: (_name, meta) =>
         !!(
-          (meta.isFunction &&
-            meta.declName &&
-            /^[A-Z]/.test(meta.declName)) ||
+          (meta.isFunction && meta.declName && /^[A-Z]/.test(meta.declName)) ||
           (meta.defaultExportIdentifierName &&
             /^[A-Z]/.test(meta.defaultExportIdentifierName))
         ),
@@ -1905,8 +2028,7 @@ async function transformRscServerActionModules(
         source,
         ast as unknown as Parameters<typeof transformServerActionServer>[1],
         {
-          decode: (value) =>
-            `await $$decryptActionBoundArgs(${value})`,
+          decode: (value) => `await $$decryptActionBoundArgs(${value})`,
           encode: (value) => `$$encryptActionBoundArgs(${value})`,
           rejectNonAsyncFunction: true,
           runtime: (value, name) =>
@@ -1916,8 +2038,7 @@ async function transformRscServerActionModules(
         },
       );
       if (!result.output.hasChanged()) return;
-      const exportNames =
-        "names" in result ? result.names : result.exportNames;
+      const exportNames = "names" in result ? result.names : result.exportNames;
       if (exportNames.length === 0) return;
       files.set(
         filePath,
@@ -2009,9 +2130,7 @@ function createRscWorkspacePlugin({
       buildApi.onLoad(
         { filter: /.*/, namespace: "tuto-rsc-css-resource" },
         (args) => {
-          const resourceKey = args.path.slice(
-            "virtual:tuto-rsc/css/".length,
-          );
+          const resourceKey = args.path.slice("virtual:tuto-rsc/css/".length);
           const importer = Object.keys(cssResources.resourcesByImporter).find(
             (filePath) => rscCssResourceKey(filePath) === resourceKey,
           );
@@ -2066,7 +2185,9 @@ function createRscWorkspacePlugin({
             },
           );
           if (!transformed) {
-            throw new Error(`Unable to compile RSC client boundary ${args.path}.`);
+            throw new Error(
+              `Unable to compile RSC client boundary ${args.path}.`,
+            );
           }
           return {
             contents: `import { registerClientReference as $$registerClientReference } from '@vitejs/plugin-rsc/react/rsc';\n${transformed.output.toString()}`,
@@ -2359,10 +2480,7 @@ async function buildNativeServerBundle({
 }) {
   const serverFiles = new Map(transform.serverFiles);
   const startModule = findWorkspaceFile(serverFiles, "src/start");
-  const customServerModule = findWorkspaceScriptFile(
-    serverFiles,
-    "src/server",
-  );
+  const customServerModule = findWorkspaceScriptFile(serverFiles, "src/server");
   const routerModule = findWorkspaceFile(serverFiles, "src/router");
   if (
     Object.keys(transform.serverFnsById).length === 0 &&
@@ -2391,10 +2509,7 @@ globalThis.${kernelManifest.server.manifestKey} = ${JSON.stringify({
               ...(cssAssetUrl ? [cssAssetUrl] : []),
               ...(rootRouteManifest?.css ?? []),
             ],
-            preloads: [
-              clientAssetUrl,
-              ...(rootRouteManifest?.preloads ?? []),
-            ],
+            preloads: [clientAssetUrl, ...(rootRouteManifest?.preloads ?? [])],
             scripts: [
               { attrs: { src: kernelManifest.client.url } },
               { attrs: { src: clientAssetUrl, type: "module" } },
@@ -2590,8 +2705,10 @@ async function buildRscCssResources({
 }): Promise<RscCssResourceBuild> {
   const cssImporters = await collectRscCssImporters(files, clientReferences);
   const entryPoints = Object.fromEntries(
-    [...cssImporters]
-      .map((filePath) => [rscCssResourceKey(filePath), filePath]),
+    [...cssImporters].map((filePath) => [
+      rscCssResourceKey(filePath),
+      filePath,
+    ]),
   );
   if (Object.keys(entryPoints).length === 0) {
     return { chunks: {}, resourcesByImporter: {}, usedAssets: new Set() };
@@ -2721,9 +2838,7 @@ setRequireModule({
     : "";
   const actionHandlerSource = hasRscServerActions
     ? `
-  if (pathname === ${JSON.stringify(
-    kernelManifest.rsc.actionInternalPath,
-  )}) {
+  if (pathname === ${JSON.stringify(kernelManifest.rsc.actionInternalPath)}) {
     if (request.method !== 'POST') {
       return new Response('Method not allowed.', {
         headers: { allow: 'POST' },
@@ -2977,9 +3092,7 @@ function createClientOutputPreloadCollector({
 
     return [
       routeChunkUrl(chunkAssetBase, outputName),
-      ...emittedStaticImports.flatMap((name) =>
-        collectPreloads(name, seen),
-      ),
+      ...emittedStaticImports.flatMap((name) => collectPreloads(name, seen)),
       ...output.imports.flatMap((entry) => {
         if (
           entry.kind === "dynamic-import" ||
@@ -3022,11 +3135,12 @@ function buildClientRouteManifest({
     )
       continue;
     const routePath = Object.keys(routeIds).find((workspacePath) =>
-      Object.keys(output.inputs).some((inputPath) =>
-        inputPath.includes(`${workspacePath}?tsr-split=`) &&
-        // Hydrate virtual modules are dynamic child entries, not route entry
-        // dependencies. Preloading them would defeat every deferred strategy.
-        !inputPath.includes("tss-hydrate="),
+      Object.keys(output.inputs).some(
+        (inputPath) =>
+          inputPath.includes(`${workspacePath}?tsr-split=`) &&
+          // Hydrate virtual modules are dynamic child entries, not route entry
+          // dependencies. Preloading them would defeat every deferred strategy.
+          !inputPath.includes("tss-hydrate="),
       ),
     );
     if (!routePath) continue;
@@ -3087,12 +3201,7 @@ function buildRscClientReferenceDeps({
     if (!reference) continue;
     deps[reference] = {
       css: output.cssBundle
-        ? [
-            routeStyleUrl(
-              styleAssetBase,
-              relativeOutputName(output.cssBundle),
-            ),
-          ]
+        ? [routeStyleUrl(styleAssetBase, relativeOutputName(output.cssBundle))]
         : [],
       js: collectPreloads(relativeOutputName(outputPath)),
     };
@@ -3244,8 +3353,8 @@ ${Object.entries(rscClientReferences)
   .join("\n")}
 };
 const frameworkRscClientReferences = ${JSON.stringify(
-    kernelManifest.rsc.clientReferences,
-  )};
+      kernelManifest.rsc.clientReferences,
+    )};
 globalThis.${kernelManifest.client.rscLoaderKey} = async function loadRscClientReference(id) {
   const load = rscClientReferences[id];
   if (load) return load();
@@ -3342,9 +3451,10 @@ ${
   );
   const cssChunks = Object.fromEntries(
     result.outputFiles
-      .filter((file) =>
-        file.path.replaceAll("\\", "/").includes("/chunks/") &&
-        file.path.endsWith(".css"),
+      .filter(
+        (file) =>
+          file.path.replaceAll("\\", "/").includes("/chunks/") &&
+          file.path.endsWith(".css"),
       )
       .map((file) => [relativeOutputName(file.path), file.text]),
   );
@@ -3402,7 +3512,6 @@ async function compilePreview(
   try {
     const originalFileMap = sanitizeWorkspaceFiles(files);
     const spaPolicy = readSpaPolicy(originalFileMap);
-    const prerenderPlan = readPrerenderPlan(originalFileMap, spaPolicy);
     activeImportProtectionRun = {
       diagnostics: importProtectionDiagnostics,
       policy: readImportProtectionPolicy(originalFileMap),
@@ -3417,6 +3526,11 @@ async function compilePreview(
     const transform = await transformStartServerFunctions(originalFileMap, {
       root,
     });
+    const prerenderPlan = readPrerenderPlan(
+      originalFileMap,
+      spaPolicy,
+      transform,
+    );
     const rscClientReferences =
       await collectRscClientReferences(originalFileMap);
     const transformed = transform.clientFiles;

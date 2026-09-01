@@ -125,8 +125,11 @@ test("emits revision-pinned static documents and serves exact routes before the 
     {
       path: "tanstack-start.config.json",
       content: JSON.stringify({
-        pages: [{ path: "/static", prerender: { crawlLinks: false } }],
-        prerender: { autoStaticPathsDiscovery: false, enabled: true },
+        prerender: {
+          autoStaticPathsDiscovery: true,
+          enabled: true,
+          filter: { exclude: ["/private/**"] },
+        },
         spa: { enabled: true, maskPath: "/static" },
       }),
       language: "json" as const,
@@ -169,6 +172,14 @@ function StaticRoute() {
       language: "tsx" as const,
     },
     {
+      path: "src/routes/private.tsx",
+      content: `import { createFileRoute } from '@tanstack/react-router';
+export const Route = createFileRoute('/private/hidden')({
+  component: () => <p>must not be prerendered</p>,
+});`,
+      language: "tsx" as const,
+    },
+    {
       path: "src/router.tsx",
       content: `import {
   Outlet,
@@ -205,7 +216,11 @@ export function getRouter() {
   ];
 
   const result = await compileServerlessTanstackStartWorkspace(files);
-  assert.equal(result.success, true, JSON.stringify(result.diagnostics, null, 2));
+  assert.equal(
+    result.success,
+    true,
+    JSON.stringify(result.diagnostics, null, 2),
+  );
   const artifact = getTanstackStartArtifact(result.revision);
   assert.ok(artifact?.prerendered);
   assert.deepEqual(artifact.prerendered.routes, {
@@ -250,11 +265,27 @@ export function getRouter() {
   const staticEntries = Object.entries(artifact.staticServerFunctions ?? {});
   assert.equal(staticEntries.length, 1);
   const [[cachePath, cacheBody]] = staticEntries;
-  assert.match(
-    cachePath,
-    /^\/__tsr\/staticServerFnCache\/[a-f0-9]{40}\.json$/,
-  );
+  assert.match(cachePath, /^\/__tsr\/staticServerFnCache\/[a-f0-9]{40}\.json$/);
   assert.match(cacheBody, /static-function-build-result:fixture/);
+  assert.deepEqual(artifact.deploymentManifest, {
+    assets: {
+      "/_shell.html": {
+        contentType: "text/html; charset=utf-8",
+        kind: "document",
+      },
+      "/static/index.html": {
+        contentType: "text/html; charset=utf-8",
+        kind: "document",
+      },
+      [cachePath]: {
+        contentType: "application/json; charset=utf-8",
+        kind: "static-server-function",
+      },
+    },
+    routes: { "/static": { outputPath: "/static/index.html" } },
+    spaFallback: { outputPath: "/_shell.html" },
+    version: 1,
+  });
 
   const assetUrl = new URL(
     "http://tuto.local/api/serverless/tanstack-start/core-asset",
@@ -271,10 +302,29 @@ export function getRouter() {
     "private, max-age=31536000, immutable",
   );
   assert.equal(cachedResult.headers.get("x-tuto-worker-id"), null);
+
+  assetUrl.searchParams.set("kind", "deployment-manifest");
+  assetUrl.searchParams.delete("name");
+  const deploymentManifest = await handleNativeAsset(new Request(assetUrl));
+  assert.equal(deploymentManifest.status, 200);
+  assert.equal(
+    deploymentManifest.headers.get("content-type"),
+    "application/json; charset=utf-8",
+  );
+  assert.equal(
+    deploymentManifest.headers.get("cache-control"),
+    "private, max-age=31536000, immutable",
+  );
+  assert.deepEqual(
+    await deploymentManifest.json(),
+    artifact.deploymentManifest,
+  );
 });
 
 test("regenerates stale pages once and merges concurrent route publications", async () => {
-  const routeSource = (path: "/a" | "/b") => `import { createFileRoute } from '@tanstack/react-router';
+  const routeSource = (
+    path: "/a" | "/b",
+  ) => `import { createFileRoute } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { staticFunctionMiddleware } from '@tanstack/start-static-server-functions';
 const readToken = createServerFn({ method: 'GET' })
@@ -363,7 +413,11 @@ export function getRouter() {
   ];
 
   const result = await compileServerlessTanstackStartWorkspace(files);
-  assert.equal(result.success, true, JSON.stringify(result.diagnostics, null, 2));
+  assert.equal(
+    result.success,
+    true,
+    JSON.stringify(result.diagnostics, null, 2),
+  );
   const initial = getTanstackStartArtifact(result.revision);
   assert.ok(initial?.prerendered?.isr);
   assert.equal(
@@ -419,14 +473,8 @@ export function getRouter() {
     regenerated.prerendered.documents["/b/index.html"] ?? "",
     /data-route="\/b"/,
   );
-  assert.notEqual(
-    regenerated.prerendered.documents["/a/index.html"],
-    initialA,
-  );
-  assert.notEqual(
-    regenerated.prerendered.documents["/b/index.html"],
-    initialB,
-  );
+  assert.notEqual(regenerated.prerendered.documents["/a/index.html"], initialA);
+  assert.notEqual(regenerated.prerendered.documents["/b/index.html"], initialB);
   assert.deepEqual(
     Object.keys(regenerated.staticServerFunctions ?? {}).sort(),
     Object.keys(initialStaticResults).sort(),

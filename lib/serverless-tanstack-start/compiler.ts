@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { BuildDiagnostic, WorkspaceFile } from "@/lib/ide/types";
 import {
+  createTanstackStartDeploymentManifest,
   createWorkspaceRevision,
   getTanstackStartArtifact,
   putTanstackStartArtifact,
@@ -18,6 +20,12 @@ import {
 import { getNativeRpcWorkerPool } from "./native-rpc-worker-pool";
 import type { NativeRpcRequest, NativeRpcResult } from "./native-rpc-protocol";
 import { createTanstackStartIsrDocument } from "./isr-policy";
+
+const runtimeRequire = createRequire(import.meta.url);
+const picomatch = runtimeRequire("picomatch") as (
+  pattern: string,
+  options?: { dot?: boolean },
+) => (value: string) => boolean;
 
 export type ServerlessTanstackStartResult = {
   success: boolean;
@@ -42,6 +50,10 @@ type PrerenderPagePlan = {
 type PrerenderPlan = {
   concurrency: number;
   failOnError: boolean;
+  filter?: {
+    exclude: string[];
+    include: string[];
+  };
   maxRedirects: number;
   pages: PrerenderPagePlan[];
 };
@@ -168,6 +180,25 @@ function normalizedPrerenderRoute(value: string, basePath = "/") {
   return `${url.pathname}${url.search}`;
 }
 
+function prerenderPathMatchesFilter(
+  routePath: string,
+  filter: PrerenderPlan["filter"],
+) {
+  if (!filter) return true;
+  const pathname = new URL(routePath, "http://tuto.local").pathname;
+  const included =
+    filter.include.length === 0 ||
+    filter.include.some((pattern) =>
+      picomatch(pattern, { dot: true })(pathname),
+    );
+  return (
+    included &&
+    !filter.exclude.some((pattern) =>
+      picomatch(pattern, { dot: true })(pathname),
+    )
+  );
+}
+
 async function executePrerenderRequest(
   artifact: TanstackStartArtifact,
   page: PrerenderPagePlan,
@@ -230,6 +261,9 @@ async function prerenderArtifact(
   let shell: string | undefined;
 
   const enqueue = (page: PrerenderPagePlan) => {
+    if (!page.shell && !prerenderPathMatchesFilter(page.path, plan.filter)) {
+      return;
+    }
     const key = page.shell ? `shell:${page.path}` : `route:${page.path}`;
     if (seen.has(key)) return;
     if (seen.size >= maxPrerenderedDocuments) {
@@ -258,9 +292,12 @@ async function prerenderArtifact(
           page.path,
           plan.maxRedirects,
         );
-        const contentType = new Headers(response.headers).get("content-type") ?? "";
+        const contentType =
+          new Headers(response.headers).get("content-type") ?? "";
         if (response.status < 200 || response.status >= 300) {
-          throw new Error(`Failed to fetch ${page.path}: HTTP ${response.status}.`);
+          throw new Error(
+            `Failed to fetch ${page.path}: HTTP ${response.status}.`,
+          );
         }
         if (!contentType.includes("text/html")) {
           throw new Error(
@@ -290,11 +327,11 @@ async function prerenderArtifact(
       response.staticServerFunctionCache ?? {},
     )) {
       if (
-        !/^\/__tsr\/staticServerFnCache\/[a-f0-9]{40}\.json$/.test(
-          cachePath,
-        )
+        !/^\/__tsr\/staticServerFnCache\/[a-f0-9]{40}\.json$/.test(cachePath)
       ) {
-        throw new Error(`Invalid static server function cache path: ${cachePath}.`);
+        throw new Error(
+          `Invalid static server function cache path: ${cachePath}.`,
+        );
       }
       const existing = staticServerFunctions[cachePath];
       if (existing !== undefined) {
@@ -315,7 +352,9 @@ async function prerenderArtifact(
       }
       const bytes = Buffer.byteLength(body);
       if (bytes > maxStaticServerFunctionResultBytes) {
-        throw new Error(`Static server function result ${cachePath} is too large.`);
+        throw new Error(
+          `Static server function result ${cachePath} is too large.`,
+        );
       }
       staticServerFunctionBytes += bytes;
       if (staticServerFunctionBytes > maxStaticServerFunctionTotalBytes) {
@@ -368,8 +407,18 @@ async function prerenderArtifact(
     discovered.flat().forEach(enqueue);
   }
 
+  const prerendered = {
+    documents,
+    ...(Object.keys(isr).length > 0 ? { isr } : {}),
+    routes,
+    ...(shell ? { shell } : {}),
+  };
   return {
     ...artifact,
+    deploymentManifest: createTanstackStartDeploymentManifest(
+      prerendered,
+      staticServerFunctions,
+    ),
     diagnostics: [
       ...artifact.diagnostics,
       ...warnings,
@@ -381,12 +430,7 @@ async function prerenderArtifact(
       },
     ],
     durationMs: artifact.durationMs + (Date.now() - startedAt),
-    prerendered: {
-      documents,
-      ...(Object.keys(isr).length > 0 ? { isr } : {}),
-      routes,
-      ...(shell ? { shell } : {}),
-    },
+    prerendered,
     ...(Object.keys(staticServerFunctions).length > 0
       ? { staticServerFunctions }
       : {}),

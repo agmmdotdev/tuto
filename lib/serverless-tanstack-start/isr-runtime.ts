@@ -2,7 +2,10 @@ import type {
   TanstackStartArtifact,
   TanstackStartIsrDocument,
 } from "./artifact-cache";
-import { putTanstackStartArtifact } from "./artifact-cache";
+import {
+  createTanstackStartDeploymentManifest,
+  putTanstackStartArtifact,
+} from "./artifact-cache";
 import {
   resolveArtifactRequest,
   type ArtifactDocumentRequestResolution,
@@ -83,7 +86,10 @@ async function withRegenerationSlot<T>(operation: () => Promise<T>) {
   }
 }
 
-async function publishSerially<T>(revision: string, operation: () => Promise<T>) {
+async function publishSerially<T>(
+  revision: string,
+  operation: () => Promise<T>,
+) {
   const current = state();
   const previous = current.publicationTails.get(revision) ?? Promise.resolve();
   let release!: () => void;
@@ -106,8 +112,7 @@ function artifactMatches(
   artifact: TanstackStartArtifact,
   selected: SelectedDocument,
 ) {
-  const policy =
-    selected.artifact.prerendered?.isr?.[selected.outputPath];
+  const policy = selected.artifact.prerendered?.isr?.[selected.outputPath];
   return (
     policy !== undefined &&
     artifact.revision === selected.artifact.revision &&
@@ -172,7 +177,9 @@ async function executeRegenerationRequest(
   }
   const contentType = headers.get("content-type") ?? "";
   if (!contentType.includes("text/html")) {
-    throw new Error(`ISR request returned ${contentType || "no content type"}.`);
+    throw new Error(
+      `ISR request returned ${contentType || "no content type"}.`,
+    );
   }
   return response;
 }
@@ -186,16 +193,22 @@ function validatedStaticResults(response: NativeRpcResult) {
   let totalBytes = 0;
   for (const [cachePath, body] of entries) {
     if (!/^\/__tsr\/staticServerFnCache\/[a-f0-9]{40}\.json$/.test(cachePath)) {
-      throw new Error(`Invalid static server function cache path: ${cachePath}.`);
+      throw new Error(
+        `Invalid static server function cache path: ${cachePath}.`,
+      );
     }
     const bytes = Buffer.byteLength(body);
     if (bytes > maxStaticServerFunctionResultBytes) {
-      throw new Error(`Static server function result ${cachePath} is too large.`);
+      throw new Error(
+        `Static server function result ${cachePath} is too large.`,
+      );
     }
     totalBytes += bytes;
   }
   if (totalBytes > maxStaticServerFunctionTotalBytes) {
-    throw new Error("ISR static server-function results exceed the size limit.");
+    throw new Error(
+      "ISR static server-function results exceed the size limit.",
+    );
   }
   return results;
 }
@@ -204,8 +217,10 @@ async function regenerateDocument(
   request: Request,
   selected: SelectedDocument,
 ): Promise<IsrDocumentResolution> {
-  const initialPolicy = selected.artifact.prerendered?.isr?.[selected.outputPath];
-  if (!initialPolicy) throw new Error("The selected document is not ISR-enabled.");
+  const initialPolicy =
+    selected.artifact.prerendered?.isr?.[selected.outputPath];
+  if (!initialPolicy)
+    throw new Error("The selected document is not ISR-enabled.");
   const resolved = await resolveArtifactRequest(request);
   if (!resolved.ok || !artifactMatches(resolved.artifact, selected)) {
     throw new Error("The compiled revision changed before ISR regeneration.");
@@ -243,7 +258,9 @@ async function regenerateDocument(
     staticServerFunctionPaths: Object.keys(staticResults),
   });
   if (!nextPolicy) {
-    throw new Error("ISR response no longer has a shared-cache max-age policy.");
+    throw new Error(
+      "ISR response no longer has a shared-cache max-age policy.",
+    );
   }
 
   return publishSerially(resolved.artifact.revision, async () => {
@@ -251,8 +268,10 @@ async function regenerateDocument(
     if (!latest.ok || !artifactMatches(latest.artifact, selected)) {
       throw new Error("The compiled revision changed before ISR publication.");
     }
-    const latestPolicy = latest.artifact.prerendered?.isr?.[selected.outputPath];
-    const latestBody = latest.artifact.prerendered?.documents[selected.outputPath];
+    const latestPolicy =
+      latest.artifact.prerendered?.isr?.[selected.outputPath];
+    const latestBody =
+      latest.artifact.prerendered?.documents[selected.outputPath];
     if (!latestPolicy || latestBody === undefined) {
       throw new Error("The ISR document disappeared before publication.");
     }
@@ -269,15 +288,21 @@ async function regenerateDocument(
       ...(latest.artifact.staticServerFunctions ?? {}),
     };
     Object.assign(staticServerFunctions, staticResults);
-    if (Object.keys(staticServerFunctions).length > maxStaticServerFunctionResults) {
-      throw new Error("ISR static server-function cache exceeds the result limit.");
+    if (
+      Object.keys(staticServerFunctions).length > maxStaticServerFunctionResults
+    ) {
+      throw new Error(
+        "ISR static server-function cache exceeds the result limit.",
+      );
     }
     const staticBytes = Object.values(staticServerFunctions).reduce(
       (bytes, value) => bytes + Buffer.byteLength(value),
       0,
     );
     if (staticBytes > maxStaticServerFunctionTotalBytes) {
-      throw new Error("ISR static server-function cache exceeds the size limit.");
+      throw new Error(
+        "ISR static server-function cache exceeds the size limit.",
+      );
     }
 
     const documents = {
@@ -287,16 +312,21 @@ async function regenerateDocument(
     if (Object.keys(documents).length > maxDocuments) {
       throw new Error("ISR document cache exceeds the result limit.");
     }
+    const prerendered = {
+      ...latest.artifact.prerendered!,
+      documents,
+      isr: {
+        ...latest.artifact.prerendered!.isr,
+        [selected.outputPath]: nextPolicy,
+      },
+    };
     const updated: TanstackStartArtifact = {
       ...latest.artifact,
-      prerendered: {
-        ...latest.artifact.prerendered!,
-        documents,
-        isr: {
-          ...latest.artifact.prerendered!.isr,
-          [selected.outputPath]: nextPolicy,
-        },
-      },
+      deploymentManifest: createTanstackStartDeploymentManifest(
+        prerendered,
+        staticServerFunctions,
+      ),
+      prerendered,
       ...(Object.keys(staticServerFunctions).length > 0
         ? { staticServerFunctions }
         : { staticServerFunctions: undefined }),
@@ -326,14 +356,18 @@ function singleFlight(request: Request, selected: SelectedDocument) {
     regenerateDocument(request, selected),
   );
   current.inFlight.set(key, regeneration);
-  void regeneration.finally(() => {
-    if (current.inFlight.get(key) === regeneration) current.inFlight.delete(key);
-  }).catch(() => undefined);
+  void regeneration
+    .finally(() => {
+      if (current.inFlight.get(key) === regeneration)
+        current.inFlight.delete(key);
+    })
+    .catch(() => undefined);
   return regeneration;
 }
 
 function bypassesCache(request: Request) {
-  const cacheControl = request.headers.get("cache-control")?.toLowerCase() ?? "";
+  const cacheControl =
+    request.headers.get("cache-control")?.toLowerCase() ?? "";
   return cacheControl
     .split(",")
     .some((directive) => /^(no-cache|max-age\s*=\s*0)$/.test(directive.trim()));
@@ -367,8 +401,7 @@ export async function resolveIncrementalStaticRegeneration(
   });
   if (
     !forced &&
-    ageSeconds <=
-      policy.revalidateSeconds + policy.staleWhileRevalidateSeconds
+    ageSeconds <= policy.revalidateSeconds + policy.staleWhileRevalidateSeconds
   ) {
     const schedule =
       options.schedule ??

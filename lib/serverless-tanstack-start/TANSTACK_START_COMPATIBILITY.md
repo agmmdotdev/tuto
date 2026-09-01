@@ -32,6 +32,7 @@ or Markdown drift.
 
 ## Matrix
 
+<!-- prettier-ignore -->
 | ID | Area | Status | Official source | Current evidence / next gap |
 | --- | --- | --- | --- | --- |
 | `router-ssr-loaders` | Routing and SSR | **verified** | [Routing](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/routing.md) | Router SSR, loaders, streamed HTML, route chunks, and manifests. |
@@ -56,7 +57,7 @@ or Markdown drift.
 | `selective-ssr` | Rendering modes | **verified** | [Selective SSR](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/selective-ssr.md) | Full, data-only, and client-only initial renders plus client navigation. |
 | `deferred-hydration` | Rendering modes | **verified** | [Deferred hydration](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/deferred-hydration.md) | SSR preservation; interaction, idle, media, visible, condition, and never strategies; delayed child chunks; prefetch without hydration; post-hydration interaction. |
 | `seo-head-metadata` | Document output | **verified** | [SEO](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/seo.md) | Loader-derived title/meta/Open Graph/canonical/JSON-LD in SSR and navigation. |
-| `static-prerendering` | Build output | **partial** | [Static prerendering](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/static-prerendering.md) | Declarative pages, bounded crawling/concurrency/retries, output paths, and the SPA shell emit revision-pinned HTML blobs through the official handler. Executable filters/hooks, automatic route-generator discovery, and third-party deployment packaging remain outside the safe compiler surface. |
+| `static-prerendering` | Build output | **partial** | [Static prerendering](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/static-prerendering.md) | Explicit pages and compiler-derived component routes merge into bounded revision-pinned output. Declarative include/exclude globs cover discovered and crawled paths, and a signed deployment manifest describes HTML, static-function assets, routes, and the SPA fallback. Executable callbacks and third-party adapter packaging remain outside the safe compiler surface. |
 | `incremental-static-regeneration` | Build output | **verified** | [ISR](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/isr.md) | Prerendered route `Cache-Control` drives shared freshness and stale-while-revalidate; bounded single-flight regeneration reuses the revision worker and revision-serialized publication atomically updates HTML plus static server-function results. |
 | `static-server-functions` | Build output | **verified** | [Static server functions](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/static-server-functions.md) | The documented final `staticFunctionMiddleware` executes during prerender, keys Seroval results by function ID and validated payload, stores immutable JSON blobs, and replaces later browser RPC with an authenticated asset fetch. |
 | `environment-functions` | Compiler protection | **verified** | [Environment functions](https://github.com/TanStack/router/blob/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react/guide/environment-functions.md) | Isomorphic/server-only/client-only branch selection, tree-shaking, and wrong-runtime errors. |
@@ -106,8 +107,9 @@ Top-level `pages` and `prerender` fields in `tanstack-start.config.json` select
 build-time documents. The safe declarative surface supports per-page
 `enabled`, `outputPath`, `autoSubfolderIndex`, `crawlLinks`, `retryCount`,
 `retryDelay`, and string `headers`, plus global `concurrency`, `failOnError`,
-and `maxRedirects`. Tuto caps concurrency, retries, document counts, and total
-HTML bytes.
+`maxRedirects`, `autoStaticPathsDiscovery`, and `filter.include` / `exclude`
+glob arrays. Tuto caps patterns, concurrency, retries, document counts, and
+total HTML bytes.
 
 The compiler renders these pages with the same official Start request handler
 inside the existing revision-pinned reusable Node worker pool. It then stores
@@ -115,10 +117,19 @@ each HTML document as a content-addressed durable artifact and serves exact
 routes with private immutable caching. Server functions and server routes are
 not frozen; they continue through the live request gateway.
 
-`autoStaticPathsDiscovery` must be `false` because the virtual esbuild compiler
-does not run the upstream filesystem route-generator discovery pass. Executable
-`filter` and `onSuccess` callbacks are likewise outside the JSON config surface.
-Declare pages directly or enable bounded link crawling instead.
+Automatic discovery defaults on when prerendering is enabled. It uses the
+official route compiler's literal route IDs and generated component splits,
+then removes parameterized and layout-only paths. It does not import route
+modules or execute student configuration. Explicit pages override discovered
+defaults. Declarative filters apply to configured, discovered, and crawled
+paths; the SPA shell is kept separately as fallback output.
+
+Every static build also signs a portable versioned deployment manifest into the
+revision artifact. It maps route paths to HTML output, identifies document and
+static server-function assets, and records the SPA fallback when present. Build
+or deployment tooling can fetch it from the authenticated core-asset gateway
+with `kind=deployment-manifest`. Hosting-specific files and executable upstream
+`filter` / `onSuccess` callbacks remain adapter work.
 
 ## Static server functions
 
@@ -160,10 +171,10 @@ HTML and any static server-function JSON are merged before durable and hot
 publication. Diagnostic responses expose `x-tuto-isr-status` and
 `x-tuto-isr-generated-at`.
 
-## Next compatibility slice
+## Next implementation slice
 
-The next core-runtime slice closes the remaining safe static-prerender surface:
-virtual-route automatic discovery, declarative filtering, and deployment
-output metadata. This stays inside the request-based Node/esbuild architecture;
-it does not require a watcher, container, or microVM, and it will not execute
-student Vite callbacks in the compiler host.
+The safe request-runtime and static-output foundations are now in place. The
+next roadmap item is playground authoring UX: create, delete, and rename files
+from the explorer so learners can add routes without leaving the editor. Route
+tree regeneration and the existing request-based Node/esbuild runtime remain
+the execution path.

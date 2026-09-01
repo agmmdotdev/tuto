@@ -35,6 +35,25 @@ function artifact(revision: string): TanstackStartArtifact {
       sharedServerKernelBytes: kernelManifest.server.bytes,
     },
     diagnostics: [],
+    deploymentManifest: {
+      assets: {
+        "/_shell.html": {
+          contentType: "text/html; charset=utf-8",
+          kind: "document",
+        },
+        "/about/index.html": {
+          contentType: "text/html; charset=utf-8",
+          kind: "document",
+        },
+        [`/__tsr/staticServerFnCache/${"a".repeat(40)}.json`]: {
+          contentType: "application/json; charset=utf-8",
+          kind: "static-server-function",
+        },
+      },
+      routes: { "/about": { outputPath: "/about/index.html" } },
+      spaFallback: { outputPath: "/_shell.html" },
+      version: 1,
+    },
     durationMs: 1,
     html: "<p>durable</p>",
     kernelId: kernelManifest.id,
@@ -98,12 +117,7 @@ async function temporaryRoot() {
 }
 
 function artifactRoot(root: string) {
-  return path.join(
-    root,
-    "tanstack-start",
-    "artifacts",
-    kernelManifest.id,
-  );
+  return path.join(root, "tanstack-start", "artifacts", kernelManifest.id);
 }
 
 function manifestPath(root: string, revision: string) {
@@ -230,7 +244,10 @@ test("reads existing signed v3 monolithic artifacts during migration", async () 
     "utf8",
   );
 
-  const store = createFilesystemTanstackStartArtifactStore({ root, signingKey });
+  const store = createFilesystemTanstackStartArtifactStore({
+    root,
+    signingKey,
+  });
   assert.deepEqual(await store.get(revision), artifact(revision));
   assert.equal(
     (
@@ -301,6 +318,10 @@ test("selectively reads metadata, one asset, and server runtime blobs", async ()
     shell: "/_shell.html",
   });
   assert.deepEqual(
+    metadata?.deploymentManifest,
+    artifact(revision).deploymentManifest,
+  );
+  assert.deepEqual(
     backend.reads.map((key) => path.posix.basename(key)),
     [`${revision}.json`],
   );
@@ -337,6 +358,16 @@ test("selectively reads metadata, one asset, and server runtime blobs", async ()
   assert.equal(staticResult?.body, '{"static":"result"}');
   assert.equal(backend.reads.length, 1);
   assert.match(backend.reads[0]!, /\.blob$/);
+
+  backend.reads.length = 0;
+  const deploymentManifest = await reader.getAsset!(revision, {
+    kind: "deployment-manifest",
+  });
+  assert.deepEqual(
+    JSON.parse(deploymentManifest?.body ?? "null"),
+    artifact(revision).deploymentManifest,
+  );
+  assert.equal(backend.reads.length, 0);
 
   backend.reads.length = 0;
   await reader.getAsset!(revision, {
@@ -415,7 +446,10 @@ test("streams server blobs into the runtime CAS without string reads", async () 
   backend.reads.length = 0;
   backend.streamReads.length = 0;
   const first = await runtimeStore.acquire(selected.runtime);
-  assert.equal(await readFile(first.entryPath, "utf8"), artifact(revision).serverBundle);
+  assert.equal(
+    await readFile(first.entryPath, "utf8"),
+    artifact(revision).serverBundle,
+  );
   assert.equal(backend.reads.length, 0);
   assert.equal(backend.streamReads.length, 2);
   assert.ok(backend.streamReads.every((key) => key.endsWith(".blob")));
@@ -486,7 +520,9 @@ test("rejects a corrupt content-addressed artifact blob", async () => {
     signingKey: "blob-integrity-key",
   });
   await writer.put(artifact(revision));
-  const envelope = JSON.parse(await readFile(manifestPath(root, revision), "utf8")) as {
+  const envelope = JSON.parse(
+    await readFile(manifestPath(root, revision), "utf8"),
+  ) as {
     artifact: { sources: { serverBundle: { hash: string } } };
   };
   await writeFile(
@@ -522,10 +558,15 @@ test("expired durable artifacts are treated as misses", async () => {
     ttlMs: 60_000,
   });
   await retainedStore.put(artifact(retainedRevision));
-  const blobsBeforeExpiry = await readdir(path.join(artifactRoot(root), "blobs"));
+  const blobsBeforeExpiry = await readdir(
+    path.join(artifactRoot(root), "blobs"),
+  );
   await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(await store.get(revision), null);
-  assert.equal(await readFile(manifestPath(root, revision), "utf8").catch(() => null), null);
+  assert.equal(
+    await readFile(manifestPath(root, revision), "utf8").catch(() => null),
+    null,
+  );
   assert.deepEqual(
     await readdir(path.join(artifactRoot(root), "blobs")),
     blobsBeforeExpiry,

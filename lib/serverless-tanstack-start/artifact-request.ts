@@ -178,6 +178,10 @@ function hotAsset(
       return artifact.ssrClientBundle;
     case "client-chunk":
       return artifact.ssrClientChunks[asset.name] ?? null;
+    case "deployment-manifest":
+      return artifact.deploymentManifest
+        ? JSON.stringify(artifact.deploymentManifest)
+        : null;
     case "static-server-function":
       return artifact.staticServerFunctions?.[asset.name] ?? null;
     case "style":
@@ -329,7 +333,9 @@ export async function resolveArtifactDocumentRequest(
     const body =
       authorization.hotArtifact.prerendered?.documents[outputPath] ?? null;
     return body === null
-      ? durableStoreFailure(new Error("Stored prerendered document is missing."))
+      ? durableStoreFailure(
+          new Error("Stored prerendered document is missing."),
+        )
       : {
           artifact: authorization.metadata,
           artifactCache: "hot",
@@ -354,7 +360,9 @@ export async function resolveArtifactDocumentRequest(
     return changedArtifact();
   }
   if (selected.body === null) {
-    return durableStoreFailure(new Error("Stored prerendered document is missing."));
+    return durableStoreFailure(
+      new Error("Stored prerendered document is missing."),
+    );
   }
   return {
     artifact: selected.artifact,
