@@ -194,7 +194,7 @@ export async function POST(request: Request) {
           {
             id: crypto.randomUUID(),
             level: "info",
-            message: `Router: ${artifact.router.routes.length} route(s), ${Object.keys(artifact.actionManifest).length} Server Action reference(s). Matched ${response.headers.get("x-tuto-next-route-pattern") ?? "404"}.`,
+            message: `Router: ${artifact.router.routes.length} route(s), ${Object.values(artifact.actionManifest).filter((reference) => reference.kind === "action").length} Server Action reference(s), ${Object.values(artifact.actionManifest).filter((reference) => reference.kind === "cache").length} Cache Component reference(s). Matched ${response.headers.get("x-tuto-next-route-pattern") ?? "404"}.`,
             timestamp: new Date().toISOString(),
           },
           {

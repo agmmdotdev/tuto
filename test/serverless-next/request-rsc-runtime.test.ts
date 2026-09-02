@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, test } from "vitest";
+import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import path from "node:path";
 import type { WorkspaceFile } from "../../lib/ide/types";
@@ -207,6 +208,114 @@ export default async function CachePage() {
 }`,
       language: "tsx",
       path: "app/cache/page.tsx",
+    },
+  ];
+}
+
+function cacheComponentsWorkspace(): WorkspaceFile[] {
+  return [
+    {
+      content: `export default function Layout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}`,
+      language: "tsx",
+      path: "app/layout.tsx",
+    },
+    {
+      content: `import { cacheLife, cacheTag } from "next/cache";
+let reads = 0;
+export async function getCachedLesson(id: string) {
+  "use cache";
+  cacheLife({ stale: 30, revalidate: 3600, expire: 7200 });
+  cacheTag("cache-component-" + id);
+  return { id, reads: ++reads };
+}`,
+      language: "ts",
+      path: "app/components/data.ts",
+    },
+    {
+      content: `"use client";
+export default function CachedBadge({ label }: { label: string }) {
+  return <button data-cached-client>{label}</button>;
+}`,
+      language: "tsx",
+      path: "app/components/cached-badge.tsx",
+    },
+    {
+      content: `import { cacheLife, cacheTag } from "next/cache";
+import CachedBadge from "./cached-badge";
+let renders = 0;
+export default async function CachedCard({ id }: { id: string }) {
+  "use cache";
+  cacheLife("hours");
+  cacheTag("cache-component-" + id);
+  return <section>cached-card:{id}:{++renders}<CachedBadge label={id} /></section>;
+}`,
+      language: "tsx",
+      path: "app/components/cached-card.tsx",
+    },
+    {
+      content: `"use server";
+import { revalidateTag, updateTag } from "next/cache";
+export async function expireComponent(id: string) {
+  updateTag("cache-component-" + id);
+  return id;
+}
+export async function staleComponent(id: string) {
+  revalidateTag("cache-component-" + id, "max");
+  return id;
+}`,
+      language: "ts",
+      path: "app/components/actions.ts",
+    },
+    {
+      content: `import CachedCard from "./cached-card";
+import { getCachedLesson } from "./data";
+export default async function CacheComponentsPage() {
+  const first = await getCachedLesson("rsc");
+  const second = await getCachedLesson("rsc");
+  return <main><p>component-read:{first.id}:{first.reads}</p><p>deduped-read:{second.reads}</p><CachedCard id="rsc" /></main>;
+}`,
+      language: "tsx",
+      path: "app/components/page.tsx",
+    },
+  ];
+}
+
+function fetchCacheWorkspace(originUrl: string): WorkspaceFile[] {
+  return [
+    {
+      content: `export default function Layout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}`,
+      language: "tsx",
+      path: "app/layout.tsx",
+    },
+    {
+      content: `export async function getOriginValue() {
+  const response = await fetch(${JSON.stringify(originUrl)}, {
+    next: { revalidate: 3600, tags: ["fetch-lesson"] },
+  });
+  return response.json() as Promise<{ reads: number }>;
+}`,
+      language: "ts",
+      path: "app/fetch/data.ts",
+    },
+    {
+      content: `"use server";
+import { updateTag } from "next/cache";
+export async function expireFetch() { updateTag("fetch-lesson"); }`,
+      language: "ts",
+      path: "app/fetch/actions.ts",
+    },
+    {
+      content: `import { getOriginValue } from "./data";
+export default async function FetchPage() {
+  const value = await getOriginValue();
+  return <main>fetch-read:{value.reads}</main>;
+}`,
+      language: "tsx",
+      path: "app/fetch/page.tsx",
     },
   ];
 }
@@ -516,6 +625,143 @@ describe("request-compiled Next RSC runtime", () => {
     expect(isolatedResponse.headers.get("x-tuto-next-cache")).toContain(
       "miss=2",
     );
+  });
+
+  test('runs compiler-generated "use cache" entries with cacheLife and cacheTag', async () => {
+    const artifact = await compileNextRequestWorkspace(
+      cacheComponentsWorkspace(),
+      {
+        serverReferenceHashSalt: actionSalt,
+        workspaceKey: "cache-components",
+      },
+    );
+    const cacheReferences = Object.values(artifact.actionManifest).filter(
+      (reference) => reference.kind === "cache",
+    );
+    expect(cacheReferences).toHaveLength(2);
+
+    const cold = await renderNextRequestArtifact(artifact, {
+      url: "/components",
+    });
+    const coldHtml = await cold.text();
+    expect(coldHtml).toContain("component-read:<!-- -->rsc<!-- -->:<!-- -->1");
+    expect(coldHtml).toContain("deduped-read:<!-- -->1");
+    expect(coldHtml).toContain("cached-card:<!-- -->rsc<!-- -->:<!-- -->1");
+    expect(coldHtml).toContain("data-cached-client");
+    expect(cold.headers.get("x-tuto-next-cache")).toContain("miss=2");
+    expect(cold.headers.get("x-tuto-next-cache")).toContain("write=2");
+
+    const hot = await renderNextRequestArtifact(artifact, {
+      url: "/components",
+    });
+    expect(await hot.text()).toContain(
+      "component-read:<!-- -->rsc<!-- -->:<!-- -->1",
+    );
+    expect(hot.headers.get("x-tuto-next-cache")).toContain("hit=2");
+
+    const staleAction = Object.entries(artifact.actionManifest).find(
+      ([, reference]) => reference.exportName === "staleComponent",
+    );
+    const stale = await invokeNextServerAction(artifact, {
+      actionId: staleAction![0],
+      body: await serializeNextActionBody(await rscClient.encodeReply(["rsc"])),
+      url: "/components",
+    });
+    expect(await stale.text()).toContain("1");
+    expect(stale.headers.get("x-tuto-next-cache")).toContain("stale=2");
+    expect(stale.headers.get("x-tuto-next-cache")).toContain("write=2");
+
+    const refreshed = await renderNextRequestArtifact(artifact, {
+      url: "/components",
+    });
+    expect(await refreshed.text()).toContain(
+      "component-read:<!-- -->rsc<!-- -->:<!-- -->2",
+    );
+
+    const actionEntry = Object.entries(artifact.actionManifest).find(
+      ([, reference]) => reference.exportName === "expireComponent",
+    );
+    expect(actionEntry?.[1].kind).toBe("action");
+    const invalidated = await invokeNextServerAction(artifact, {
+      actionId: actionEntry![0],
+      body: await serializeNextActionBody(await rscClient.encodeReply(["rsc"])),
+      url: "/components",
+    });
+    expect(await invalidated.text()).toContain("3");
+    expect(invalidated.headers.get("x-tuto-next-cache")).toContain("miss=2");
+    expect(invalidated.headers.get("x-tuto-next-cache")).toContain(
+      "revalidate=1",
+    );
+
+    const editedFiles = cacheComponentsWorkspace().map((file) =>
+      file.path === "app/components/page.tsx"
+        ? { ...file, content: `${file.content}\nexport const lessonEdit = "v2";` }
+        : file,
+    );
+    const edited = await compileNextRequestWorkspace(editedFiles, {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "cache-components",
+    });
+    const afterEdit = await renderNextRequestArtifact(edited, {
+      url: "/components",
+    });
+    expect(edited.generation).not.toBe(artifact.generation);
+    expect(await afterEdit.text()).toContain(
+      "component-read:<!-- -->rsc<!-- -->:<!-- -->1",
+    );
+    expect(afterEdit.headers.get("x-tuto-next-cache")).toContain("miss=2");
+  });
+
+  test("uses Next patched fetch caching and invalidates fetch tags", async () => {
+    let originReads = 0;
+    const origin = createServer((_request, response) => {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ reads: ++originReads }));
+    });
+    await new Promise<void>((resolve, reject) => {
+      origin.once("error", reject);
+      origin.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = origin.address();
+      if (!address || typeof address === "string") {
+        throw new Error("The fetch-cache test server did not expose a port.");
+      }
+      const artifact = await compileNextRequestWorkspace(
+        fetchCacheWorkspace(`http://127.0.0.1:${address.port}/value`),
+        {
+          serverReferenceHashSalt: actionSalt,
+          workspaceKey: "fetch-cache",
+        },
+      );
+
+      const cold = await renderNextRequestArtifact(artifact, { url: "/fetch" });
+      expect(await cold.text()).toContain("fetch-read:<!-- -->1");
+      expect(originReads).toBe(1);
+      expect(cold.headers.get("x-tuto-next-cache")).toContain("miss=1");
+      expect(cold.headers.get("x-tuto-next-cache")).toContain("write=1");
+
+      const hot = await renderNextRequestArtifact(artifact, { url: "/fetch" });
+      expect(await hot.text()).toContain("fetch-read:<!-- -->1");
+      expect(originReads).toBe(1);
+      expect(hot.headers.get("x-tuto-next-cache")).toContain("hit=1");
+
+      const actionEntry = Object.entries(artifact.actionManifest).find(
+        ([, reference]) => reference.exportName === "expireFetch",
+      );
+      const invalidated = await invokeNextServerAction(artifact, {
+        actionId: actionEntry![0],
+        body: await serializeNextActionBody(await rscClient.encodeReply([])),
+        url: "/fetch",
+      });
+      expect(await invalidated.text()).toContain("2");
+      expect(originReads).toBe(2);
+      expect(invalidated.headers.get("x-tuto-next-cache")).toContain("miss=1");
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        origin.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
   });
 
   test("serves the Tuto workbench template through the integrated request route", async () => {
