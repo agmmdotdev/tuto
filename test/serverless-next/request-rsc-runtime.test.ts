@@ -1,4 +1,6 @@
 import { afterAll, beforeEach, describe, expect, test } from "vitest";
+import { createRequire } from "node:module";
+import path from "node:path";
 import type { WorkspaceFile } from "../../lib/ide/types";
 import { getServerlessNextjsRuntimeTemplate } from "../../lib/ide/templates";
 import {
@@ -12,14 +14,22 @@ import {
 } from "../../lib/serverless-next/compiler";
 import { clearNextTransformCacheForTests } from "../../lib/serverless-next/next-compiler-adapter";
 import {
+  invokeNextServerAction,
   renderHydratableNextRequestArtifact,
   renderNextRequestArtifact,
+  serializeNextActionBody,
 } from "../../lib/serverless-next/runtime";
 import { closeNextRscWorkerPoolForTests } from "../../lib/serverless-next/rsc-worker-pool";
 import { closeNextSsrWorkerPoolForTests } from "../../lib/serverless-next/ssr-worker-pool";
 import { POST as requestRoute } from "../../app/api/serverless/nextjs-runtime/request/route";
 
 const actionSalt = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+const runtimeRequire = createRequire(path.join(process.cwd(), "package.json"));
+const rscClient = runtimeRequire(
+  "next/dist/compiled/react-server-dom-webpack/client.node",
+) as {
+  encodeReply(value: unknown): Promise<FormData | string>;
+};
 
 function workspace(serverMarker: string): WorkspaceFile[] {
   return [
@@ -52,6 +62,105 @@ export default function Counter({ initial }: { initial: number }) {
   ];
 }
 
+function routeWorkspace(): WorkspaceFile[] {
+  return [
+    {
+      content: `export default function Layout({ children }: { children: React.ReactNode }) {
+  return <html><body><header>root-layout</header>{children}</body></html>;
+}`,
+      language: "tsx",
+      path: "app/layout.tsx",
+    },
+    {
+      content: `export default function NotFound() { return <main>root-not-found</main>; }`,
+      language: "tsx",
+      path: "app/not-found.tsx",
+    },
+    {
+      content: `export default function BlogLayout({ children }: { children: React.ReactNode }) {
+  return <section><h2>blog-layout</h2>{children}</section>;
+}`,
+      language: "tsx",
+      path: "app/blog/layout.tsx",
+    },
+    {
+      content: `export default function NewPost() { return <p>static-new-post</p>; }`,
+      language: "tsx",
+      path: "app/blog/new/page.tsx",
+    },
+    {
+      content: `export default async function Post({ params, searchParams }: {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<{ tab?: string }>;
+}) {
+  const [{ slug }, { tab }] = await Promise.all([params, searchParams]);
+  return <p>dynamic-post:{slug}:tab:{tab ?? "overview"}</p>;
+}`,
+      language: "tsx",
+      path: "app/blog/[slug]/page.tsx",
+    },
+    {
+      content: `export default async function Docs({ params }: { params: Promise<{ parts: string[] }> }) {
+  return <p>docs:{(await params).parts.join("|")}</p>;
+}`,
+      language: "tsx",
+      path: "app/docs/[...parts]/page.tsx",
+    },
+    {
+      content: `export default async function Optional({ params }: { params: Promise<{ rest?: string[] }> }) {
+  return <p>optional:{(await params).rest?.join("|") ?? "empty"}</p>;
+}`,
+      language: "tsx",
+      path: "app/optional/[[...rest]]/page.tsx",
+    },
+  ];
+}
+
+function actionWorkspace(): WorkspaceFile[] {
+  return [
+    {
+      content: `export default function Layout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}`,
+      language: "tsx",
+      path: "app/layout.tsx",
+    },
+    {
+      content: `"use server";
+let total = 0;
+export async function increment(delta: number) {
+  total += delta;
+  return total;
+}
+export async function current() { return total; }`,
+      language: "ts",
+      path: "app/actions.ts",
+    },
+    {
+      content: `import { current } from "./actions";
+import ActionButton from "./action-button";
+export default async function Page() {
+  return <main><h1>server-total:{await current()}</h1><ActionButton /></main>;
+}`,
+      language: "tsx",
+      path: "app/page.tsx",
+    },
+    {
+      content: `"use client";
+import { useState } from "react";
+import { increment } from "./actions";
+export default function ActionButton() {
+  const [result, setResult] = useState<number | null>(null);
+  return <button data-action="increment" onClick={async () => setResult(await increment(3))}>
+    action-result:{result ?? "idle"}
+  </button>;
+}`,
+      language: "tsx",
+      path: "app/action-button.tsx",
+    },
+  ];
+}
+
 describe("request-compiled Next RSC runtime", () => {
   beforeEach(() => {
     clearNextRequestArtifactsForTests();
@@ -73,10 +182,13 @@ describe("request-compiled Next RSC runtime", () => {
 
     expect(artifact.nextVersion).toBe("16.2.6");
     expect(artifact.kernelId).toMatch(/^[a-f0-9]{20}$/);
-    expect(artifact.entries).toEqual({
-      layout: "app/layout.tsx",
-      page: "app/page.tsx",
-    });
+    expect(artifact.router.routes).toMatchObject([
+      {
+        layouts: ["app/layout.tsx"],
+        page: "app/page.tsx",
+        pattern: "/",
+      },
+    ]);
     expect(Object.keys(artifact.clientReferenceManifest)).toEqual([
       "/tuto/workspaces/lesson-rsc/app/counter.tsx",
     ]);
@@ -142,6 +254,7 @@ describe("request-compiled Next RSC runtime", () => {
       clientManifestChanged: false,
       removedClientModules: [],
       removedServerModules: [],
+      routeManifestChanged: false,
     });
     expect(after.buildMetrics.browserTransformCacheHits).toBe(1);
     expect(after.buildMetrics.serverTransformCacheHits).toBe(2);
@@ -172,6 +285,87 @@ describe("request-compiled Next RSC runtime", () => {
     expect(second.artifact).toBe(first.artifact);
   });
 
+  test("matches static, dynamic, catch-all, and optional routes with nested layouts", async () => {
+    const artifact = await compileNextRequestWorkspace(routeWorkspace(), {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "router-lessons",
+    });
+    expect(artifact.router.routes.map((route) => route.pattern)).toEqual([
+      "/blog/new",
+      "/blog/[slug]",
+      "/docs/[...parts]",
+      "/optional/[[...rest]]",
+    ]);
+
+    const dynamic = await renderNextRequestArtifact(artifact, {
+      url: "/blog/hello-next?tab=comments",
+    });
+    const dynamicHtml = await dynamic.text();
+    expect(dynamic.status).toBe(200);
+    expect(dynamic.headers.get("x-tuto-next-route-pattern")).toBe(
+      "/blog/[slug]",
+    );
+    expect(dynamicHtml).toContain("root-layout");
+    expect(dynamicHtml).toContain("blog-layout");
+    expect(dynamicHtml).toContain("dynamic-post:<!-- -->hello-next");
+    expect(dynamicHtml).toContain("tab:<!-- -->comments");
+
+    expect(
+      await (
+        await renderNextRequestArtifact(artifact, { url: "/blog/new" })
+      ).text(),
+    ).toContain("static-new-post");
+    expect(
+      await (
+        await renderNextRequestArtifact(artifact, { url: "/docs/a/b/c" })
+      ).text(),
+    ).toContain("docs:<!-- -->a|b|c");
+    expect(
+      await (
+        await renderNextRequestArtifact(artifact, { url: "/optional" })
+      ).text(),
+    ).toContain("optional:<!-- -->empty");
+
+    const missing = await renderNextRequestArtifact(artifact, {
+      url: "/does-not-exist",
+    });
+    expect(missing.status).toBe(404);
+    expect(await missing.text()).toContain("root-not-found");
+  });
+
+  test("decodes and executes a real Next Server Action then returns refreshed Flight", async () => {
+    const artifact = await compileNextRequestWorkspace(actionWorkspace(), {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "action-lessons",
+    });
+    const actionEntry = Object.entries(artifact.actionManifest).find(
+      ([, reference]) => reference.exportName === "increment",
+    );
+    expect(actionEntry).toBeDefined();
+    expect(artifact.clientModules["app/actions.ts"].code).toContain(
+      "createServerReference",
+    );
+    expect(artifact.clientBundle.code).toContain("__TUTO_NEXT_CLIENT_KERNEL__");
+
+    const encodedArgs = await rscClient.encodeReply([3]);
+    const response = await invokeNextServerAction(artifact, {
+      actionId: actionEntry![0],
+      body: await serializeNextActionBody(encodedArgs),
+      url: "/",
+    });
+    const flight = await response.text();
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/x-component");
+    expect(flight).toContain('"actionResult":3');
+    expect(flight).toContain("server-total:");
+    expect(flight).toContain("3");
+
+    const refreshedHtml = await (
+      await renderNextRequestArtifact(artifact)
+    ).text();
+    expect(refreshedHtml).toContain("server-total:<!-- -->3");
+  });
+
   test("serves the Tuto workbench template through the integrated request route", async () => {
     const template = getServerlessNextjsRuntimeTemplate();
     expect(template).toBeDefined();
@@ -186,12 +380,13 @@ describe("request-compiled Next RSC runtime", () => {
         method: "POST",
       }),
     );
-    const result = (await response.json()) as {
+    const responseText = await response.text();
+    const result = JSON.parse(responseText) as {
       response?: { body?: string };
       success?: boolean;
     };
 
-    expect(response.status).toBe(200);
+    expect(response.status, responseText).toBe(200);
     expect(result.success).toBe(true);
     expect(result.response?.body).toContain("Hello from real Next core APIs.");
     expect(result.response?.body).toContain('data-client="counter"');

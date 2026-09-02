@@ -15,6 +15,9 @@ and rerun the compatibility suite.
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | Root `app/layout.tsx` and `app/page.tsx` | Next SWC server transforms render genuine Flight and SSR HTML                                          |
 | Async Server Components                  | Promise-backed page content is present in Flight and HTML                                              |
+| Nested App Router pages                  | Static, dynamic, catch-all, and optional catch-all matchers select pages without `next build`          |
+| Layout composition                       | Root and nested layouts wrap the matched page; route groups are omitted from URL patterns              |
+| `params` and `searchParams`              | Next 16-style promised props are resolved for pages and route params are decoded                       |
 | `"use client"` boundary                  | Next's server transform produces its client-reference proxy                                            |
 | Client Component bundle                  | Only the student client closure is bundled against the shared kernel                                   |
 | Browser hydration                        | A Playwright checkpoint verifies `hydrateRoot` and a stateful click when a browser binary is installed |
@@ -22,6 +25,8 @@ and rerun the compatibility suite.
 | Unchanged request reuse                  | The hot artifact cache returns the same immutable artifact                                             |
 | Server-only edit                         | A new generation changes only the edited server module; the client manifest and bundle are reused      |
 | Boundary enforcement                     | A client graph importing `server-only` is rejected                                                     |
+| Module-level Server Actions              | Next SWC emits genuine action IDs and browser proxies; Flight `encodeReply`/`decodeReply` carries args |
+| Action refresh                           | The action result and re-rendered route return in one Flight payload and the browser applies both      |
 | Bounded execution                        | Reusable RSC and SSR child workers have a 256 MB V8 heap cap and a 15 second request timeout           |
 
 The generated browser kernel contains React, React DOM, and Next's compiled
@@ -40,14 +45,14 @@ is separate and each worker has a 256 MB V8 heap ceiling.
 | Unchanged request |   34.2 ms |  12.1 ms |       +1.1 MiB | Hot immutable artifact                                |
 | Server page edit  |  113.5 ms |  51.5 ms |       +1.1 MiB | 2/3 server transforms and the client transform reused |
 
-The shared minified browser kernel is 219,750 bytes before HTTP compression.
+The shared minified browser kernel is 220,069 bytes before HTTP compression.
 This result supports the shared-runtime design: cold compiler initialization is
 the expensive event, not every request or ordinary Server Component edit.
 
 ## Deliberately not supported yet
 
-- Nested/static/dynamic route trees, layouts, loading, error, and not-found boundaries
-- Server Action request decoding, dispatch, re-render Flight, and progressive enhancement
+- Full Next segment semantics: parallel/intercepted routes and complete loading, error, and thrown `notFound()` behavior
+- Captured inline Server Action arguments, progressive-enhancement form posts, `useActionState`, redirects, and action transitions
 - Route Handlers in `app/**/route.ts`
 - `cache`, `unstable_cache`, `revalidatePath`, `revalidateTag`, and cache tags
 - Middleware/proxy execution and request rewriting
@@ -73,7 +78,7 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next vertical slice should implement the route tree first, then Server
-Action dispatch plus a mutation-triggered Flight refresh. Cache and invalidation
-lessons should follow only after request identity and action dispatch exist,
-because invalidation semantics depend on both.
+The next vertical slice should add a Tuto-owned cache adapter and exercise
+request memoization, persistent data cache entries, tags, `revalidatePath`, and
+`revalidateTag`. Route Handlers should follow because they share request/response
+normalization but do not need to block the cache lessons.

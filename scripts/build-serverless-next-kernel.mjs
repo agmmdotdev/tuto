@@ -17,7 +17,28 @@ import * as ReactJsxRuntime from "react/jsx-runtime";
 import * as ReactDomClient from "react-dom/client";
 import * as RscClient from "next/dist/compiled/react-server-dom-webpack/client.browser";
 
+const actionClient = Object.freeze({
+  callServer(actionId, args) {
+    const call = globalThis.__TUTO_NEXT_CALL_SERVER__;
+    if (typeof call !== "function") {
+      throw new Error("The Tuto Next Server Action transport is not initialized.");
+    }
+    return call(actionId, args);
+  },
+  createServerReference(actionId, _callServer, ...metadata) {
+    return RscClient.createServerReference(
+      actionId,
+      actionClient.callServer,
+      ...metadata,
+    );
+  },
+  findSourceMapURL() {
+    return undefined;
+  },
+});
+
 globalThis.__TUTO_NEXT_CLIENT_KERNEL__ = Object.freeze({
+  actionClient,
   modules: Object.freeze({
     react: React,
     "react/jsx-runtime": ReactJsxRuntime,

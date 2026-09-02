@@ -77,10 +77,10 @@ export function ServerlessNextjsRuntimeWorkbench({
         badge: "NEXT CORE",
         dependencyLabel: "Next SWC + React Flight",
         explorerCopy:
-          "This route compiles the saved snapshot with Next's own SWC transforms, renders genuine React Flight in a reusable bounded worker, then hydrates Client Components with a shared precompiled browser kernel. The current checkpoint supports GET /.",
+          "This checkpoint compiles the saved snapshot with Next's SWC transforms, matches nested App Router pages, renders genuine React Flight, hydrates Client Components, and dispatches module-level Server Actions through the hot immutable generation.",
         modeValue: "serverless",
         runtimeValue: "next-rsc",
-        requestPathPlaceholder: "/",
+        requestPathPlaceholder: "/lessons/rsc?mode=practice",
         requestRoute: "/api/serverless/nextjs-runtime/request",
         typeLibrariesUrl: "/api/serverless/types",
         extraTypeLibraries: nextTypeLibraries,
@@ -88,7 +88,7 @@ export function ServerlessNextjsRuntimeWorkbench({
         sessionId: "serverless-nextjs-runtime",
         responseHeading: "RSC Response",
         responseEmptyPreview:
-          "Send GET / to compile, render, and hydrate the workspace.",
+          "Send GET / or a nested route to compile, render, and hydrate the workspace.",
         responseEmptyBody: "Send a request to inspect the response.",
         outputHeading: "Artifact, compile, and runtime output",
         footerMode: "request-compiled-next",

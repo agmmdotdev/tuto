@@ -8,6 +8,30 @@ type WorkerReply = {
   error?: string;
   id: string;
   ok: boolean;
+  routePattern?: string | null;
+  status?: number;
+};
+
+export type NextSerializedActionBody =
+  | { kind: "string"; value: string }
+  | {
+      entries: Array<
+        | { kind: "string"; name: string; value: string }
+        | {
+            contentType: string;
+            filename: string;
+            kind: "file";
+            name: string;
+            value: string;
+          }
+      >;
+      kind: "form-data";
+    };
+
+export type NextFlightWorkerResult = {
+  flight: Buffer;
+  routePattern: string | null;
+  status: number;
 };
 
 type Pending = {
@@ -88,7 +112,17 @@ export class NextRscWorkerPool {
     });
   }
 
-  async render(artifact: NextRequestArtifact) {
+  private result(reply: WorkerReply): NextFlightWorkerResult {
+    if (!reply.bodyBase64)
+      throw new Error("Next RSC worker returned no Flight payload.");
+    return {
+      flight: Buffer.from(reply.bodyBase64, "base64"),
+      routePattern: reply.routePattern ?? null,
+      status: reply.status ?? 200,
+    };
+  }
+
+  async render(artifact: NextRequestArtifact, url: string) {
     if (!this.installed.has(artifact.generation)) {
       await this.send({ artifact, type: "install" });
       this.installed.add(artifact.generation);
@@ -96,10 +130,30 @@ export class NextRscWorkerPool {
     const reply = await this.send({
       generation: artifact.generation,
       type: "render",
+      url,
     });
-    if (!reply.bodyBase64)
-      throw new Error("Next RSC worker returned no Flight payload.");
-    return Buffer.from(reply.bodyBase64, "base64");
+    return this.result(reply);
+  }
+
+  async invokeAction(
+    artifact: NextRequestArtifact,
+    input: {
+      actionId: string;
+      body: NextSerializedActionBody;
+      url: string;
+    },
+  ) {
+    if (!this.installed.has(artifact.generation)) {
+      await this.send({ artifact, type: "install" });
+      this.installed.add(artifact.generation);
+    }
+    return this.result(
+      await this.send({
+        ...input,
+        generation: artifact.generation,
+        type: "action",
+      }),
+    );
   }
 
   async close() {

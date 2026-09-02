@@ -19,6 +19,7 @@ import {
   canonicalNextWorkspacePath,
   transformNextModule,
 } from "./next-compiler-adapter";
+import { buildNextRouteManifest } from "./route-manifest";
 
 const sourceExtensions = [".tsx", ".ts", ".jsx", ".js"] as const;
 const maxFileCount = 96;
@@ -145,17 +146,6 @@ function clientModuleId(modulePath: string) {
   return `next-client-${createHash("sha256").update(modulePath).digest("hex").slice(0, 20)}`;
 }
 
-function findEntry(
-  modules: Map<string, SourceModule>,
-  basename: "layout" | "page",
-) {
-  for (const extension of sourceExtensions) {
-    const candidate = `app/${basename}${extension}`;
-    if (modules.has(candidate)) return candidate;
-  }
-  return undefined;
-}
-
 function clientClosure(
   clientEntries: string[],
   modules: Map<string, SourceModule>,
@@ -167,14 +157,15 @@ function clientClosure(
     if (closure.has(modulePath)) continue;
     closure.add(modulePath);
     const source = modules.get(modulePath)!;
-    if (
-      /^[\s;]*(?:["']use server["'];?)/.test(source.content) ||
-      /["']server-only["']/.test(source.content)
-    ) {
+    const isActionModule = /^[\s;]*(?:["']use server["'];?)/.test(
+      source.content,
+    );
+    if (!isActionModule && /["']server-only["']/.test(source.content)) {
       throw new Error(
         `Client Component graph imports a server-only module: ${modulePath}`,
       );
     }
+    if (isActionModule) continue;
     for (const specifier of importSpecifiers(source.content)) {
       const resolved = resolveWorkspaceImport(modulePath, specifier, modules);
       if (!resolved && specifier.startsWith(".")) {
@@ -243,6 +234,13 @@ async function buildClientBundle(
           path: args.path,
         }),
       );
+      buildApi.onResolve(
+        { filter: /^private-next-rsc-action-client-wrapper$/ },
+        (args) => ({
+          namespace: sharedNamespace,
+          path: args.path,
+        }),
+      );
       buildApi.onResolve({ filter: /^@swc\/helpers\// }, (args) => ({
         path: runtimeRequire.resolve(args.path),
       }));
@@ -272,7 +270,10 @@ async function buildClientBundle(
         return { contents: clientModule.code, loader: "js" };
       });
       buildApi.onLoad({ filter: /.*/, namespace: sharedNamespace }, (args) => ({
-        contents: `module.exports = globalThis.__TUTO_NEXT_CLIENT_KERNEL__.modules[${JSON.stringify(args.path)}];`,
+        contents:
+          args.path === "private-next-rsc-action-client-wrapper"
+            ? "module.exports = globalThis.__TUTO_NEXT_CLIENT_KERNEL__.actionClient;"
+            : `module.exports = globalThis.__TUTO_NEXT_CLIENT_KERNEL__.modules[${JSON.stringify(args.path)}];`,
         loader: "js",
       }));
     },
@@ -312,12 +313,7 @@ export async function compileNextRequestWorkspaceWithStatus(
   const workspaceKey = sanitizeWorkspaceKey(options.workspaceKey);
   const actionSalt = sanitizeActionSalt(options.serverReferenceHashSalt);
   const modules = sourceModules(files, workspaceKey);
-  const page = findEntry(modules, "page");
-  if (!page)
-    throw new Error(
-      "The request-based Next runtime requires app/page.tsx or app/page.jsx.",
-    );
-  const layout = findEntry(modules, "layout");
+  const router = buildNextRouteManifest(modules.keys());
   const revision = createNextWorkspaceRevision(
     files,
     workspaceKey,
@@ -413,11 +409,11 @@ export async function compileNextRequestWorkspaceWithStatus(
     clientBundle,
     clientModules,
     clientReferenceManifest,
-    entries: { ...(layout ? { layout } : {}), page },
     generation: revision.slice(0, 20),
     kernelId: clientKernelManifest.id,
     nextVersion: NEXT_COMPILER_VERSION,
     revision,
+    router,
     serverModules,
     version: NEXT_REQUEST_ARTIFACT_VERSION,
     workspaceKey,
