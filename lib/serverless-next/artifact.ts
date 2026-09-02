@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { WorkspaceFile } from "@/lib/ide/types";
 
-export const NEXT_REQUEST_ARTIFACT_VERSION = 1 as const;
+export const NEXT_REQUEST_ARTIFACT_VERSION = 2 as const;
 
 export type NextCompiledModule = {
   canonicalPath: string;
@@ -27,6 +27,30 @@ export type NextServerActionReference = {
   modulePath: string;
 };
 
+export type NextRouteParam = {
+  kind: "catchall" | "dynamic" | "optional-catchall";
+  name: string;
+};
+
+export type NextRouteDefinition = {
+  error?: string;
+  layouts: string[];
+  loading?: string;
+  matcher: {
+    params: NextRouteParam[];
+    source: string;
+  };
+  notFound?: string;
+  page: string;
+  pattern: string;
+};
+
+export type NextRouteManifest = {
+  rootLayout?: string;
+  rootNotFound?: string;
+  routes: NextRouteDefinition[];
+};
+
 export type NextRequestArtifact = {
   actionManifest: Record<string, NextServerActionReference>;
   buildMetrics: {
@@ -43,14 +67,11 @@ export type NextRequestArtifact = {
   };
   clientModules: Record<string, NextClientModule>;
   clientReferenceManifest: Record<string, NextClientReference>;
-  entries: {
-    layout?: string;
-    page: string;
-  };
   generation: string;
   kernelId: string;
   nextVersion: string;
   revision: string;
+  router: NextRouteManifest;
   serverModules: Record<string, NextCompiledModule>;
   version: typeof NEXT_REQUEST_ARTIFACT_VERSION;
   workspaceKey: string;
@@ -64,6 +85,7 @@ export type NextArtifactDiff = {
   changedServerModules: string[];
   removedClientModules: string[];
   removedServerModules: string[];
+  routeManifestChanged: boolean;
 };
 
 const artifactCacheKey = Symbol.for("tuto.serverless-next.artifacts.v1");
@@ -146,6 +168,8 @@ export function diffNextRequestArtifacts(
     changedServerModules: changed(before.serverModules, after.serverModules),
     removedClientModules: removed(before.clientModules, after.clientModules),
     removedServerModules: removed(before.serverModules, after.serverModules),
+    routeManifestChanged:
+      JSON.stringify(before.router) !== JSON.stringify(after.router),
   };
 }
 

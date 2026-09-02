@@ -6,6 +6,7 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const saltKey = Symbol.for("tuto.serverless-next.action-salt.v1");
+const maxRequestBytes = 6 * 1024 * 1024;
 const previewBridgeScript = `<script>
 (() => {
   const previewSource = "tuto-serverless-nextjs-runtime-preview-log";
@@ -55,7 +56,39 @@ function injectPreviewBridge(html: string) {
     : `${html}${previewBridgeScript}`;
 }
 
+async function readPayload(request: Request) {
+  const text = await request.text();
+  if (new TextEncoder().encode(text).byteLength > maxRequestBytes) {
+    throw new Error(
+      "The Next runtime request exceeds the 6 MiB checkpoint limit.",
+    );
+  }
+  return JSON.parse(text) as {
+    action?: {
+      actionId?: string;
+      body?: unknown;
+      revision?: string;
+      url?: string;
+    };
+    files?: WorkspaceFile[];
+    request?: { method?: string; path?: string };
+    workspaceKey?: string;
+  };
+}
+
+export function OPTIONS() {
+  return new Response(null, {
+    headers: {
+      "access-control-allow-headers": "content-type",
+      "access-control-allow-methods": "POST, OPTIONS",
+      "access-control-allow-origin": "*",
+    },
+    status: 204,
+  });
+}
+
 export async function POST(request: Request) {
+  let isActionRequest = false;
   try {
     if (
       process.env.VERCEL === "1" &&
@@ -65,16 +98,55 @@ export async function POST(request: Request) {
         "The request-compiled Next checkpoint is disabled in production until student execution is behind Tuto's isolation boundary.",
       );
     }
-    const payload = (await request.json()) as {
-      files?: WorkspaceFile[];
-      request?: { method?: string; path?: string };
-      workspaceKey?: string;
-    };
+    const payload = await readPayload(request);
+    if (payload.action) {
+      isActionRequest = true;
+      const [{ getNextRequestArtifact }, { invokeNextServerAction }] =
+        await Promise.all([
+          import("../../../../../lib/serverless-next/artifact"),
+          import("../../../../../lib/serverless-next/runtime"),
+        ]);
+      if (
+        !payload.action.actionId ||
+        !payload.action.revision ||
+        !payload.action.body ||
+        typeof payload.action.url !== "string"
+      ) {
+        throw new Error("The Server Action request is incomplete.");
+      }
+      const artifact = getNextRequestArtifact(payload.action.revision);
+      if (!artifact) {
+        return new Response(
+          "The Server Action generation is no longer hot. Render the workspace again.",
+          {
+            headers: {
+              "access-control-allow-origin": "*",
+              "cache-control": "no-store",
+              "content-type": "text/plain; charset=utf-8",
+            },
+            status: 409,
+          },
+        );
+      }
+      return invokeNextServerAction(artifact, {
+        actionId: payload.action.actionId,
+        body: payload.action.body as Parameters<
+          typeof invokeNextServerAction
+        >[1]["body"],
+        url: payload.action.url,
+      });
+    }
     const method = (payload.request?.method ?? "GET").toUpperCase();
     const pathname = payload.request?.path ?? "/";
-    if (method !== "GET" || pathname !== "/") {
+    if (method !== "GET") {
       throw new Error(
-        "This checkpoint currently executes GET /. Nested routes, Route Handlers, and mutations are the next compatibility slices.",
+        "App Router page requests currently use GET. Server Actions use their generated action transport.",
+      );
+    }
+    const routeUrl = new URL(pathname, "http://next.local");
+    if (routeUrl.origin !== "http://next.local") {
+      throw new Error(
+        "The Next request path must be relative to the workspace.",
       );
     }
 
@@ -83,15 +155,18 @@ export async function POST(request: Request) {
       { compileNextRequestWorkspaceWithStatus },
       { renderHydratableNextRequestArtifact },
     ] = await Promise.all([
-      import("@/lib/serverless-next/compiler"),
-      import("@/lib/serverless-next/runtime"),
+      import("../../../../../lib/serverless-next/compiler"),
+      import("../../../../../lib/serverless-next/runtime"),
     ]);
     const { artifact, artifactCache } =
       await compileNextRequestWorkspaceWithStatus(payload.files ?? [], {
         serverReferenceHashSalt: serverReferenceHashSalt(),
         workspaceKey: payload.workspaceKey ?? "next-request-workspace",
       });
-    const response = await renderHydratableNextRequestArtifact(artifact);
+    const response = await renderHydratableNextRequestArtifact(artifact, {
+      actionEndpoint: request.url,
+      url: `${routeUrl.pathname}${routeUrl.search}`,
+    });
     const body = injectPreviewBridge(await response.text());
     const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
 
@@ -116,6 +191,12 @@ export async function POST(request: Request) {
             message: `Transforms: server ${artifact.buildMetrics.serverTransforms} (${artifact.buildMetrics.serverTransformCacheHits} cached), browser ${artifact.buildMetrics.browserTransforms} (${artifact.buildMetrics.browserTransformCacheHits} cached). Shared kernel ${artifact.kernelId}.`,
             timestamp: new Date().toISOString(),
           },
+          {
+            id: crypto.randomUUID(),
+            level: "info",
+            message: `Router: ${artifact.router.routes.length} route(s), ${Object.keys(artifact.actionManifest).length} Server Action reference(s). Matched ${response.headers.get("x-tuto-next-route-pattern") ?? "404"}.`,
+            timestamp: new Date().toISOString(),
+          },
         ],
         response: {
           status: response.status,
@@ -132,6 +213,16 @@ export async function POST(request: Request) {
       error instanceof Error
         ? error.message
         : "Unable to execute the request-compiled Next workspace.";
+    if (isActionRequest) {
+      return new Response(message, {
+        headers: {
+          "access-control-allow-origin": "*",
+          "cache-control": "no-store",
+          "content-type": "text/plain; charset=utf-8",
+        },
+        status: 400,
+      });
+    }
     return NextResponse.json(
       {
         success: false,

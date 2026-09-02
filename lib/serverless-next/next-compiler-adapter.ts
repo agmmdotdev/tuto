@@ -46,7 +46,18 @@ function parseActionMetadata(code: string) {
       code,
     );
   if (!match) return {};
-  return JSON.parse(match[1]) as Record<string, string>;
+  const metadata = JSON.parse(match[1]) as Record<
+    string,
+    string | { name?: string }
+  >;
+  return Object.fromEntries(
+    Object.entries(metadata).map(([id, value]) => {
+      const name = typeof value === "string" ? value : value.name;
+      if (!name)
+        throw new Error(`Next emitted an invalid action name for ${id}.`);
+      return [id, name];
+    }),
+  );
 }
 
 function cacheKey(
@@ -205,7 +216,7 @@ export async function transformNextModule({
   return { ...value, cacheHit: false };
 }
 
-export const NEXT_COMPILER_FINGERPRINT = `next-swc:${PINNED_NEXT_VERSION}:rsc-v1`;
+export const NEXT_COMPILER_FINGERPRINT = `next-swc:${PINNED_NEXT_VERSION}:rsc-v2`;
 export const NEXT_COMPILER_VERSION = PINNED_NEXT_VERSION;
 
 export function canonicalNextWorkspacePath(

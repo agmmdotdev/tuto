@@ -2237,7 +2237,9 @@ This checkpoint runs real Next compiler and React Server Components machinery wi
 - Reusable bounded workers render Flight and SSR HTML
 - An immutable generation is reused when the workspace is unchanged
 
-Current checkpoint: root \`app/layout.tsx\`, root \`app/page.tsx\`, Client Components, Flight, SSR, and hydration. Nested routes, Route Handlers, Server Action dispatch, middleware/proxy, and Next cache APIs are deliberately not claimed yet.`,
+Current checkpoint: nested layouts and static/dynamic/catch-all routes, async Server Components, Client Components, Flight, SSR, hydration, and module-level Server Action dispatch with a refreshed Flight tree.
+
+Try \`GET /lessons/rsc?mode=practice\` after the root page. The action demo uses worker-local state only; it proves the action protocol and re-render, not durable storage. Route Handlers, middleware/proxy, cache invalidation APIs, and captured inline action arguments are deliberately not claimed yet.`,
       },
       {
         path: "package.json",
@@ -2313,7 +2315,8 @@ export default function RootLayout({
         language: "tsx",
         description:
           "An async Server Component importing a Client Component boundary.",
-        content: `import Counter from "./counter";
+        content: `import { current } from "./actions";
+import Counter from "./counter";
 
 async function getGreeting() {
   return {
@@ -2324,6 +2327,7 @@ async function getGreeting() {
 
 export default async function Page() {
   const greeting = await getGreeting();
+  const serverTotal = await current();
 
   return (
     <main style={{ borderRadius: 24, background: "white", padding: 32 }}>
@@ -2334,7 +2338,13 @@ export default async function Page() {
         Component and save: the Client Component bundle stays reusable.
       </p>
       <p style={{ color: "#666" }}>Rendered at {greeting.renderedAt}</p>
+      <p data-server-total style={{ color: "#666" }}>
+        Server Action total: {serverTotal}
+      </p>
       <Counter initial={0} />
+      <p style={{ marginTop: 22 }}>
+        Try this in the request path field: <code>/lessons/rsc?mode=practice</code>
+      </p>
     </main>
   );
 }
@@ -2348,17 +2358,85 @@ export default async function Page() {
         content: `"use client";
 
 import { useState } from "react";
+import { increment } from "./actions";
 
 export default function Counter({ initial }: { initial: number }) {
   const [count, setCount] = useState(initial);
+  const [actionResult, setActionResult] = useState<number | null>(null);
   return (
-    <button
-      data-client="counter"
-      onClick={() => setCount((value) => value + 1)}
-      style={{ marginTop: 18, border: 0, borderRadius: 999, padding: "12px 18px" }}
-    >
-      Client count: {count}
-    </button>
+    <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+      <button
+        data-client="counter"
+        onClick={() => setCount((value) => value + 1)}
+        style={{ marginTop: 18, border: 0, borderRadius: 999, padding: "12px 18px" }}
+      >
+        Client count: {count}
+      </button>
+      <button
+        data-action="increment"
+        onClick={async () => setActionResult(await increment(1))}
+        style={{ marginTop: 18, border: 0, borderRadius: 999, padding: "12px 18px" }}
+      >
+        Server Action result: {actionResult ?? "idle"}
+      </button>
+    </div>
+  );
+}
+`,
+      },
+      {
+        path: "app/actions.ts",
+        language: "ts",
+        description:
+          "Module-level Server Actions compiled into genuine Next server references.",
+        content: `"use server";
+
+let total = 0;
+
+export async function increment(delta: number) {
+  total += delta;
+  return total;
+}
+
+export async function current() {
+  return total;
+}
+`,
+      },
+      {
+        path: "app/lessons/[lessonId]/layout.tsx",
+        language: "tsx",
+        description: "A nested layout shared by dynamic lesson routes.",
+        content: `import type { ReactNode } from "react";
+
+export default function LessonLayout({ children }: { children: ReactNode }) {
+  return (
+    <section style={{ borderRadius: 24, background: "white", padding: 32 }}>
+      <strong style={{ color: "#b34f24" }}>Nested lesson layout</strong>
+      {children}
+    </section>
+  );
+}
+`,
+      },
+      {
+        path: "app/lessons/[lessonId]/page.tsx",
+        language: "tsx",
+        description:
+          "A dynamic App Router page using promised params and searchParams.",
+        content: `type LessonPageProps = {
+  params: Promise<{ lessonId: string }>;
+  searchParams: Promise<{ mode?: string }>;
+};
+
+export default async function LessonPage({ params, searchParams }: LessonPageProps) {
+  const [{ lessonId }, { mode }] = await Promise.all([params, searchParams]);
+  return (
+    <main>
+      <h1>Lesson: {lessonId}</h1>
+      <p>Mode: {mode ?? "read"}</p>
+      <p>This route was selected by Tuto's request router and rendered with real Next RSC transforms.</p>
+    </main>
   );
 }
 `,
