@@ -60,16 +60,20 @@ function routePathFromStem(stem: string) {
 function parentPathFromFullPath(fullPath: string) {
   if (fullPath === "/") return null;
 
-  const trimmed = fullPath.endsWith("/") && fullPath !== "/" ? fullPath.slice(0, -1) : fullPath;
-  const index = trimmed.lastIndexOf("/");
+  if (fullPath.endsWith("/")) {
+    return fullPath.slice(0, -1);
+  }
 
-  return index <= 0 ? "/" : trimmed.slice(0, index);
+  const index = fullPath.lastIndexOf("/");
+
+  return index <= 0 ? null : fullPath.slice(0, index);
 }
 
 function childPath(fullPath: string, parentFullPath: string | null) {
   if (!parentFullPath) return fullPath;
   if (fullPath === "/") return "/";
-  if (fullPath.endsWith("/") && parentFullPath === fullPath.slice(0, -1)) return "/";
+  if (fullPath.endsWith("/") && parentFullPath === fullPath.slice(0, -1))
+    return "/";
   if (parentFullPath === "/") return fullPath;
 
   return fullPath.slice(parentFullPath.length) || "/";
@@ -108,7 +112,9 @@ function collectRoutes(files: WorkspaceFile[]) {
         parentFullPath,
       };
     })
-    .sort((left, right) => routeSortKey(left).localeCompare(routeSortKey(right)));
+    .sort((left, right) =>
+      routeSortKey(left).localeCompare(routeSortKey(right)),
+    );
 }
 
 function childMapName(route: RouteEntry) {
@@ -126,9 +132,12 @@ function routeParamsType(fullPath: string) {
 }
 
 function generateTanstackEditorShim(routes: RouteEntry[]) {
-  const routeUnion = routes.map((route) => `"${route.fullPath}"`).join(" | ") || "string";
+  const routeUnion =
+    routes.map((route) => `"${route.fullPath}"`).join(" | ") || "string";
   const routePathEntries = routes
-    .map((route) => `  "${route.fullPath}": ${routeParamsType(route.fullPath)};`)
+    .map(
+      (route) => `  "${route.fullPath}": ${routeParamsType(route.fullPath)};`,
+    )
     .join("\n");
 
   return `import * as React from "react";
@@ -198,6 +207,8 @@ export const Link = React.forwardRef<HTMLAnchorElement, LinkProps<any>>(function
   return React.createElement("a", { ...props, ref, href: props.href ?? props.to ?? "#" });
 }) as <const TTo extends RoutePath>(props: LinkProps<TTo> & { ref?: React.Ref<HTMLAnchorElement> }) => React.ReactElement;
 export const Outlet = () => null;
+export const HeadContent = () => null;
+export const Scripts = () => null;
 export const RouterProvider = (_props: { router: unknown }) => null;
 export function createFileRoute<const TPath extends RoutePath>(_path: TPath) {
   return (_options: FileRouteOptions<TPath>) => ({
@@ -258,9 +269,11 @@ type MiddlewareNext = (options?: {
 type MiddlewareContext = {
   context: Record<string, any>;
   data: any;
+  handlerType: "router" | "serverFn" | "serverRoute";
   headers?: HeadersInit;
   method?: string;
   next: MiddlewareNext;
+  request: Request;
   signal?: AbortSignal;
 };
 type ServerFunction<TData = any, TResult = any> = {
@@ -294,6 +307,11 @@ export function createServerFn(_options?: { method?: "GET" | "POST" | string }):
 export function createMiddleware(_options?: Record<string, unknown>): Middleware {
   return undefined as any;
 }
+export function createCsrfMiddleware(_options?: {
+  filter?: (context: MiddlewareContext) => boolean;
+}): Middleware {
+  return undefined as any;
+}
 export const createServerOnlyFn = (<T extends (...args: any[]) => any>(fn: T) => fn);
 export const createClientOnlyFn = (<T extends (...args: any[]) => any>(fn: T) => fn);
 export function createIsomorphicFn(): {
@@ -302,11 +320,13 @@ export function createIsomorphicFn(): {
 } {
   return undefined as any;
 }
-export function createStart<TOptions extends Record<string, unknown>>(options: TOptions): {
-  getOptions(): TOptions;
+export function createStart<TOptions extends Record<string, unknown>>(
+  getOptions: (() => TOptions | Promise<TOptions>) | TOptions,
+): {
+  getOptions(): TOptions | Promise<TOptions>;
 } {
   return {
-    getOptions: () => options,
+    getOptions: () => typeof getOptions === "function" ? getOptions() : getOptions,
   };
 }
 `;
@@ -323,7 +343,8 @@ export function generateTanstackRouteTree(files: WorkspaceFile[]) {
   const imports = [
     `import { Route as rootRouteImport } from "./routes/__root";`,
     ...routes.map(
-      (route) => `import { Route as ${route.identifier}Import } from "${route.importPath}";`,
+      (route) =>
+        `import { Route as ${route.identifier}Import } from "${route.importPath}";`,
     ),
   ].join("\n");
   const declarations = routes
@@ -345,7 +366,9 @@ export function generateTanstackRouteTree(files: WorkspaceFile[]) {
   );
   const childInterfaces = routesWithChildren
     .map((route) => {
-      const children = routes.filter((candidate) => candidate.parentFullPath === route.fullPath);
+      const children = routes.filter(
+        (candidate) => candidate.parentFullPath === route.fullPath,
+      );
       const members = children
         .map((child) => `  ${child.identifier}: typeof ${child.identifier};`)
         .join("\n");
@@ -361,7 +384,7 @@ ${children.map((child) => `  ${child.identifier},`).join("\n")}
 const ${route.identifier}RouteWithChildren = ${route.identifier}._addFileChildren(${childMapName(route)});`;
     })
     .join("\n\n");
-  const rootChildren = routes.filter((route) => route.parentFullPath === "/");
+  const rootChildren = routes.filter((route) => route.parentFullPath === null);
   const rootChildrenMembers = rootChildren
     .map((route) => {
       const hasChildren = routesWithChildren.includes(route);
@@ -409,7 +432,9 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo;
   to: ${
     routes
-      .filter((route) => !route.fullPath.endsWith("/") || route.fullPath === "/")
+      .filter(
+        (route) => !route.fullPath.endsWith("/") || route.fullPath === "/",
+      )
       .map((route) => `"${route.fullPath}"`)
       .join(" | ") || "never"
   };
@@ -477,7 +502,8 @@ export function materializeTanstackRouteTree(files: WorkspaceFile[]) {
     {
       path: routeTreePath,
       language: languageForPath(routeTreePath),
-      description: "Generated TanStack route tree for the stateless playground.",
+      description:
+        "Generated TanStack route tree for the stateless playground.",
       content: generated,
     },
     {

@@ -68,7 +68,9 @@ function createTemplateProgram(files: WorkspaceFile[]): VirtualProgram {
 
       if (
         normalized === normalizePath(virtualRoot) ||
-        [...virtualFiles.keys()].some((filePath) => filePath.startsWith(`${normalized}/`))
+        [...virtualFiles.keys()].some((filePath) =>
+          filePath.startsWith(`${normalized}/`),
+        )
       ) {
         return true;
       }
@@ -76,12 +78,20 @@ function createTemplateProgram(files: WorkspaceFile[]): VirtualProgram {
       return defaultHost.directoryExists?.(directoryPath) ?? false;
     },
     fileExists(filePath) {
-      return virtualFiles.has(normalizePath(filePath)) || defaultHost.fileExists(filePath);
+      return (
+        virtualFiles.has(normalizePath(filePath)) ||
+        defaultHost.fileExists(filePath)
+      );
     },
     getCurrentDirectory() {
       return normalizePath(virtualRoot);
     },
-    getSourceFile(filePath, languageVersion, onError, shouldCreateNewSourceFile) {
+    getSourceFile(
+      filePath,
+      languageVersion,
+      onError,
+      shouldCreateNewSourceFile,
+    ) {
       const normalized = normalizePath(filePath);
       const source = virtualFiles.get(normalized);
 
@@ -97,7 +107,10 @@ function createTemplateProgram(files: WorkspaceFile[]): VirtualProgram {
       );
     },
     readFile(filePath) {
-      return virtualFiles.get(normalizePath(filePath)) ?? defaultHost.readFile(filePath);
+      return (
+        virtualFiles.get(normalizePath(filePath)) ??
+        defaultHost.readFile(filePath)
+      );
     },
   };
 
@@ -114,8 +127,13 @@ function formatDiagnostic(diagnostic: ts.Diagnostic, virtualRoot: string) {
     return `TS${diagnostic.code}: ${message}`;
   }
 
-  const position = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
-  const filePath = normalizePath(diagnostic.file.fileName).replace(`${virtualRoot}/`, "");
+  const position = diagnostic.file.getLineAndCharacterOfPosition(
+    diagnostic.start,
+  );
+  const filePath = normalizePath(diagnostic.file.fileName).replace(
+    `${virtualRoot}/`,
+    "",
+  );
 
   return `${filePath}:${position.line + 1}:${position.character + 1} TS${diagnostic.code}: ${message}`;
 }
@@ -143,11 +161,18 @@ test("TanStack Start editor shim exposes server function and control-flow APIs",
   assert.ok(template, "expected TanStack Start template");
 
   const files = materializeTanstackRouteTree(template.files);
-  const shim = files.find((file) => file.path === "src/tanstack-router-editor-shim.tsx");
+  const shim = files.find(
+    (file) => file.path === "src/tanstack-router-editor-shim.tsx",
+  );
 
   assert.ok(shim, "expected generated editor shim");
   assert.match(shim.content, /export function createServerFn/);
   assert.match(shim.content, /export function createMiddleware/);
+  assert.match(shim.content, /export function createCsrfMiddleware/);
+  assert.match(shim.content, /export function createStart/);
   assert.match(shim.content, /export function redirect/);
-  assert.match(shim.content, /export function notFound\(_options: NotFoundOptions/);
+  assert.match(
+    shim.content,
+    /export function notFound\(_options: NotFoundOptions/,
+  );
 });

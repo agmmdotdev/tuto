@@ -20,7 +20,10 @@ type SerializedFormData = {
   entries: Array<
     [
       string,
-      { kind: "string"; value: string } | { kind: "file"; name?: string; text?: string; type?: string },
+      (
+        | { kind: "string"; value: string }
+        | { kind: "file"; name?: string; text?: string; type?: string }
+      ),
     ]
   >;
 };
@@ -40,7 +43,12 @@ type CoreRpcResult = {
 };
 
 function createRoot(name: string) {
-  return path.join(process.cwd(), ".tmp", "server-functions-transform-tests", name);
+  return path.join(
+    process.cwd(),
+    ".tmp",
+    "server-functions-transform-tests",
+    name,
+  );
 }
 
 function toWorkspaceFiles(files: WorkspaceFileMap): WorkspaceFileInput[] {
@@ -79,7 +87,9 @@ function runCoreRpc({
   );
 
   if (!match) {
-    throw new Error(child.stderr || child.stdout || "Missing RPC result payload.");
+    throw new Error(
+      child.stderr || child.stdout || "Missing RPC result payload.",
+    );
   }
 
   return JSON.parse(match[1]) as CoreRpcResult;
@@ -125,8 +135,70 @@ test("leaves plain modules without creating server function manifest entries", a
 
   assert.deepEqual(Object.keys(result.serverFnsById), []);
   assert.equal(result.serverSplits.size, 0);
-  assert.match(getFile(result.clientFiles, "src/routes/index.tsx"), /No server function/);
+  assert.match(
+    getFile(result.clientFiles, "src/routes/index.tsx"),
+    /No server function/,
+  );
   assert.match(result.resolverModule, /const manifest = \{\n\};/);
+});
+
+test("uses the official Router compiler to emit lazy client and server route modules", async () => {
+  const files: WorkspaceFileMap = new Map([
+    [
+      "src/routes/hello.tsx",
+      `import './hello.css';
+import { createFileRoute } from '@tanstack/react-router';
+
+const routeLabel = 'hello';
+const HelloComponent = () => <main data-route-chunk>{routeLabel}</main>;
+
+export const Route = createFileRoute('/hello')({
+  component: HelloComponent,
+  loader: () => routeLabel,
+  server: {
+    handlers: {
+      GET: () => new Response('server-route-secret'),
+    },
+  },
+});`,
+    ],
+    ["src/routes/hello.css", ".hello { color: green; }"],
+  ]);
+
+  const result = await transformFiles(files, "client-route-split");
+  const reference = getFile(result.clientFiles, "src/routes/hello.tsx");
+  const split = getFile(
+    result.clientRouteSplits,
+    "src/routes/hello.tsx?tsr-split=component",
+  );
+  const shared = getFile(
+    result.clientRouteSplits,
+    "src/routes/hello.tsx?tsr-shared=1",
+  );
+
+  assert.equal(result.clientRouteIds["src/routes/hello.tsx"], "/hello");
+  assert.match(reference, /lazyRouteComponent/);
+  assert.match(reference, /tsr-split=component/);
+  assert.doesNotMatch(reference, /data-route-chunk/);
+  assert.doesNotMatch(reference, /server-route-secret/);
+  assert.doesNotMatch(reference, /hello\.css/);
+  assert.match(split, /data-route-chunk/);
+  assert.match(split, /hello\.css/);
+  assert.doesNotMatch(split, /server-route-secret/);
+  assert.match(shared, /routeLabel/);
+  assert.doesNotMatch(shared, /server-route-secret/);
+  const serverReference = getFile(
+    result.serverFiles,
+    "src/routes/hello.tsx",
+  );
+  const serverSplit = getFile(
+    result.serverRouteSplits,
+    "src/routes/hello.tsx?tsr-split=component",
+  );
+  assert.match(serverReference, /lazyRouteComponent/);
+  assert.match(serverReference, /server-route-secret/);
+  assert.doesNotMatch(serverReference, /data-route-chunk/);
+  assert.match(serverSplit, /data-route-chunk/);
 });
 
 test("rewrites createServerFn handlers into client RPC stubs and server split exports", async () => {
@@ -160,7 +232,95 @@ export async function runGreeting() {
   assert.match(splitEntry[1], /@tanstack\/react-start\/server-rpc/);
   assert.match(splitEntry[1], /export \{ greet_createServerFn_handler \};/);
   assert.match(result.resolverModule, new RegExp(serverFnIds[0]));
-  assert.match(result.resolverModule, /module: "src\/routes\/index\.tsx\?tss-serverfn-split"/);
+  assert.match(
+    result.resolverModule,
+    /module: "src\/routes\/index\.tsx\?tss-serverfn-split"/,
+  );
+});
+
+test("tree-shakes environment functions for the client and server targets", async () => {
+  const files: WorkspaceFileMap = new Map([
+    [
+      "src/environment.ts",
+      `import {
+  createClientOnlyFn,
+  createIsomorphicFn,
+  createServerOnlyFn,
+} from '@tanstack/react-start';
+
+export const runtime = createIsomorphicFn()
+  .server(() => 'server-implementation-secret')
+  .client(() => 'client-implementation');
+export const serverOnly = createServerOnlyFn(
+  () => 'server-only-secret',
+);
+export const clientOnly = createClientOnlyFn(
+  () => 'client-only-implementation',
+);
+`,
+    ],
+  ]);
+
+  const result = await transformFiles(files, "environment-functions");
+  const clientCode = getFile(result.clientFiles, "src/environment.ts");
+  const serverCode = getFile(result.serverFiles, "src/environment.ts");
+
+  assert.match(clientCode, /client-implementation/);
+  assert.match(clientCode, /client-only-implementation/);
+  assert.doesNotMatch(clientCode, /server-implementation-secret/);
+  assert.doesNotMatch(clientCode, /server-only-secret/);
+  assert.match(clientCode, /can only be called on the server/);
+  assert.match(serverCode, /server-implementation-secret/);
+  assert.match(serverCode, /server-only-secret/);
+  assert.doesNotMatch(serverCode, /client-implementation/);
+  assert.doesNotMatch(serverCode, /client-only-implementation/);
+  assert.match(serverCode, /can only be called on the client/);
+});
+
+test("uses the official Hydrate compiler plugin to emit deferred child modules", async () => {
+  const files: WorkspaceFileMap = new Map([
+    [
+      "src/routes/deferred.tsx",
+      `import { Hydrate } from '@tanstack/react-start';
+import { interaction } from '@tanstack/react-start/hydration';
+
+const label = 'deferred-widget-label';
+function DeferredWidget() {
+  return <button data-deferred-widget>{label}</button>;
+}
+
+export function DeferredPage() {
+  return (
+    <Hydrate when={interaction({ events: 'click' })}>
+      <DeferredWidget />
+    </Hydrate>
+  );
+}
+`,
+    ],
+  ]);
+
+  const result = await transformFiles(files, "deferred-hydration");
+  const clientCode = getFile(
+    result.clientFiles,
+    "src/routes/deferred.tsx",
+  );
+  const serverCode = getFile(
+    result.serverFiles,
+    "src/routes/deferred.tsx",
+  );
+  const deferredEntry = [...result.clientFiles.entries()].find(([filePath]) =>
+    filePath.includes("tss-hydrate="),
+  );
+
+  assert.match(clientCode, /tss-hydrate=/);
+  assert.match(clientCode, /lazyRouteComponent/);
+  assert.doesNotMatch(clientCode, /deferred-widget-label/);
+  assert.ok(deferredEntry, "expected a deferred Hydrate child module");
+  assert.match(deferredEntry[1], /deferred-widget-label/);
+  assert.match(deferredEntry[1], /data-deferred-widget/);
+  assert.match(serverCode, /deferred-widget-label/);
+  assert.match(serverCode, /\bh=["']0_[a-f0-9]{10}["']/);
 });
 
 test("executes inputValidator before the server function handler", async () => {
@@ -231,8 +391,14 @@ test("keeps server function ids stable for unchanged path and export name", asyn
 
 export const greet = createServerFn({ method: 'POST' }).handler(async () => 'hi');
 `;
-  const first = await transformFiles(new Map([["src/routes/index.tsx", source]]), "stable-id-a");
-  const second = await transformFiles(new Map([["src/routes/index.tsx", source]]), "stable-id-b");
+  const first = await transformFiles(
+    new Map([["src/routes/index.tsx", source]]),
+    "stable-id-a",
+  );
+  const second = await transformFiles(
+    new Map([["src/routes/index.tsx", source]]),
+    "stable-id-b",
+  );
   const renamed = await transformFiles(
     new Map([
       [
@@ -242,7 +408,10 @@ export const greet = createServerFn({ method: 'POST' }).handler(async () => 'hi'
     ]),
     "stable-id-renamed",
   );
-  const moved = await transformFiles(new Map([["src/routes/other.tsx", source]]), "stable-id-moved");
+  const moved = await transformFiles(
+    new Map([["src/routes/other.tsx", source]]),
+    "stable-id-moved",
+  );
 
   assert.equal(firstServerFnId(first), firstServerFnId(second));
   assert.notEqual(firstServerFnId(first), firstServerFnId(renamed));
@@ -433,7 +602,10 @@ export const guarded = createServerFn({ method: 'POST' })
   assert.deepEqual(result.result, {
     __tutoType: "Response",
     body: "denied",
-    headers: { "content-type": "text/plain;charset=UTF-8", "x-auth": "required" },
+    headers: {
+      "content-type": "text/plain;charset=UTF-8",
+      "x-auth": "required",
+    },
     status: 401,
     statusText: "",
   });
@@ -465,7 +637,10 @@ export const responseFn = createServerFn({ method: 'POST' }).handler(async () =>
   assert.deepEqual(result.result, {
     __tutoType: "Response",
     body: "created",
-    headers: { "content-type": "text/plain;charset=UTF-8", "x-source": "server-fn" },
+    headers: {
+      "content-type": "text/plain;charset=UTF-8",
+      "x-source": "server-fn",
+    },
     status: 201,
     statusText: "",
   });

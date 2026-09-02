@@ -3,24 +3,74 @@ import { pathToFileURL } from "node:url";
 import type { detectKindsInCode as detectKindsInCodeType } from "../../node_modules/@tanstack/start-plugin-core/dist/esm/start-compiler/compiler.js";
 import type { createStartCompiler as createStartCompilerType } from "../../node_modules/@tanstack/start-plugin-core/dist/esm/start-compiler/host.js";
 import type { ServerFn } from "../../node_modules/@tanstack/start-plugin-core/dist/esm/start-compiler/types.js";
+import type { StartCompilerPlugin } from "../../node_modules/@tanstack/start-plugin-core/dist/esm/types.js";
 
 type WorkspaceFileMap = Map<string, string>;
 
 type StartCompilerInternals = {
+  createHydrateCompilerPlugin: () => StartCompilerPlugin;
   createStartCompiler: typeof createStartCompilerType;
   detectKindsInCode: typeof detectKindsInCodeType;
 };
+type RouterCompilerInternals = {
+  compileCodeSplitSharedRoute(options: {
+    code: string;
+    filename: string;
+    sharedBindings: Set<string>;
+  }): { code: string };
+  compileCodeSplitReferenceRoute(options: {
+    addHmr: boolean;
+    code: string;
+    codeSplitGroupings: Array<Array<RouteSplitTarget>>;
+    compilerPlugins: [];
+    deleteNodes: Set<string>;
+    filename: string;
+    id: string;
+    sharedBindings?: Set<string>;
+    targetFramework: "react";
+  }): { code: string } | null;
+  compileCodeSplitVirtualRoute(options: {
+    code: string;
+    compilerPlugins: [];
+    filename: string;
+    sharedBindings?: Set<string>;
+    splitTargets: Array<RouteSplitTarget>;
+  }): { code: string };
+  computeSharedBindings(options: {
+    code: string;
+    codeSplitGroupings: Array<Array<RouteSplitTarget>>;
+    filename: string;
+  }): Set<string>;
+  detectCodeSplitGroupingsFromRoute(options: {
+    code: string;
+    filename: string;
+  }): { groupings?: Array<Array<RouteSplitTarget>> };
+};
+type RouteSplitTarget =
+  | "component"
+  | "errorComponent"
+  | "notFoundComponent"
+  | "pendingComponent"
+  | "loader";
 type StartCompilerEnv = Parameters<typeof detectKindsInCodeType>[1];
 
 export type StartServerFunctionsTransform = {
   clientFiles: WorkspaceFileMap;
+  clientRouteIds: Record<string, string>;
+  clientRouteSplits: WorkspaceFileMap;
   resolverModule: string;
   serverFiles: WorkspaceFileMap;
   serverFnsById: Record<string, ServerFn>;
+  serverRouteSplits: WorkspaceFileMap;
   serverSplits: WorkspaceFileMap;
 };
 
 const sourceModulePattern = /\.[cm]?[tj]sx?$/;
+const defaultRouteSplitGroupings: Array<Array<RouteSplitTarget>> = [
+  ["component"],
+  ["errorComponent"],
+  ["notFoundComponent"],
+];
 
 export async function importStartCompilerInternals(): Promise<StartCompilerInternals> {
   const packageRoot = path.dirname(
@@ -28,15 +78,136 @@ export async function importStartCompilerInternals(): Promise<StartCompilerInter
   );
   const esmRoot = path.join(packageRoot, "dist", "esm", "start-compiler");
 
-  const host = await import(pathToFileURL(path.join(esmRoot, "host.js")).toString());
+  const host = await import(
+    pathToFileURL(path.join(esmRoot, "host.js")).toString()
+  );
   const compiler = await import(
     pathToFileURL(path.join(esmRoot, "compiler.js")).toString()
   );
+  const hydrate = await import(
+    pathToFileURL(
+      path.join(packageRoot, "dist", "esm", "hydrate-when-transform.js"),
+    ).toString()
+  );
 
   return {
+    createHydrateCompilerPlugin: hydrate.createHydrateCompilerPlugin,
     createStartCompiler: host.createStartCompiler,
     detectKindsInCode: compiler.detectKindsInCode,
   };
+}
+
+async function importRouterCompilerInternals(): Promise<RouterCompilerInternals> {
+  const packageRoot = path.dirname(
+    require.resolve("@tanstack/router-plugin/package.json"),
+  );
+  return import(
+    pathToFileURL(
+      path.join(
+        packageRoot,
+        "dist",
+        "esm",
+        "core",
+        "code-splitter",
+        "compilers.js",
+      ),
+    ).toString()
+  ) as Promise<RouterCompilerInternals>;
+}
+
+function routeIdFromCode(code: string) {
+  return (
+    code.match(/\bcreateFileRoute\s*\(\s*(["'`])([^"'`]+)\1\s*\)/)?.[2] ??
+    (/\bcreateRootRoute\s*\(/.test(code) ? "__root__" : undefined)
+  );
+}
+
+function routeSplitModuleId(
+  workspacePath: string,
+  grouping: Array<RouteSplitTarget>,
+) {
+  return `${workspacePath}?tsr-split=${grouping.slice().sort().join("---")}`;
+}
+
+async function compileRoutes(
+  files: WorkspaceFileMap,
+  root: string,
+  options: { deleteNodes?: Set<string>; stripRouteCssImports?: boolean } = {},
+) {
+  const {
+    compileCodeSplitReferenceRoute,
+    compileCodeSplitSharedRoute,
+    compileCodeSplitVirtualRoute,
+    computeSharedBindings,
+    detectCodeSplitGroupingsFromRoute,
+  } = await importRouterCompilerInternals();
+  const clientRouteIds: Record<string, string> = {};
+  const clientRouteSplits: WorkspaceFileMap = new Map();
+
+  for (const [workspacePath, code] of [...files]) {
+    if (
+      !/^src\/routes\/.+\.[cm]?[tj]sx?$/.test(workspacePath) ||
+      (!code.includes("createFileRoute") && !code.includes("createRootRoute"))
+    ) {
+      continue;
+    }
+    const routeId = routeIdFromCode(code);
+    if (routeId) clientRouteIds[workspacePath] = routeId;
+    const id = toAbsoluteModuleId(root, workspacePath);
+    const codeSplitGroupings =
+      detectCodeSplitGroupingsFromRoute({ code, filename: id }).groupings ??
+      defaultRouteSplitGroupings;
+    const sharedBindings = computeSharedBindings({
+      code,
+      codeSplitGroupings,
+      filename: id,
+    });
+    const result = compileCodeSplitReferenceRoute({
+      addHmr: false,
+      code,
+      codeSplitGroupings,
+      compilerPlugins: [],
+      deleteNodes: options.deleteNodes ?? new Set(),
+      filename: id,
+      id,
+      ...(sharedBindings.size > 0 ? { sharedBindings } : {}),
+      targetFramework: "react",
+    });
+    if (!result?.code) continue;
+    files.set(
+      workspacePath,
+      options.stripRouteCssImports
+        ? result.code.replace(
+            /\bimport\s+(["'])[^"'\r\n]+\.css(?:\?[^"'\r\n]*)?\1\s*;?/g,
+            "",
+          )
+        : result.code,
+    );
+
+    for (const grouping of codeSplitGroupings) {
+      const splitId = routeSplitModuleId(workspacePath, grouping);
+      if (!result.code.includes(splitId)) continue;
+      const splitResult = compileCodeSplitVirtualRoute({
+        code,
+        compilerPlugins: [],
+        filename: toAbsoluteModuleId(root, splitId),
+        ...(sharedBindings.size > 0 ? { sharedBindings } : {}),
+        splitTargets: grouping,
+      });
+      clientRouteSplits.set(splitId, splitResult.code);
+    }
+    if (sharedBindings.size > 0) {
+      const sharedId = `${workspacePath}?tsr-shared=1`;
+      const sharedResult = compileCodeSplitSharedRoute({
+        code,
+        filename: toAbsoluteModuleId(root, sharedId),
+        sharedBindings,
+      });
+      clientRouteSplits.set(sharedId, sharedResult.code);
+    }
+  }
+
+  return { clientRouteIds, clientRouteSplits };
 }
 
 export function toAbsoluteModuleId(root: string, workspacePath: string) {
@@ -58,11 +229,18 @@ export function toWorkspaceModuleId(root: string, absoluteId: string) {
   return workspacePath ? `${workspacePath}${query}` : absoluteId;
 }
 
-export function createStartCoreResolver(root: string, fileMap: WorkspaceFileMap) {
+export function createStartCoreResolver(
+  root: string,
+  fileMap: WorkspaceFileMap,
+) {
   const extensions = ["", ".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs"];
 
   return async function resolveId(source: string, importer?: string) {
-    if (source.startsWith("@tanstack/") || source === "react" || source.startsWith("react/")) {
+    if (
+      source.startsWith("@tanstack/") ||
+      source === "react" ||
+      source.startsWith("react/")
+    ) {
       return source;
     }
 
@@ -92,7 +270,9 @@ function createCompiler({
   root,
   serverFnsById,
   env,
+  compilerPlugins,
 }: StartCompilerInternals & {
+  compilerPlugins: StartCompilerPlugin[];
   env: StartCompilerEnv;
   fileMap: WorkspaceFileMap;
   root: string;
@@ -105,18 +285,22 @@ function createCompiler({
     framework: "react",
     providerEnvName: "ssr",
     mode: "build",
+    compilerPlugins,
     getKnownServerFns: () => serverFnsById,
-    onServerFnsById: (nextServerFns) => Object.assign(serverFnsById, nextServerFns),
+    onServerFnsById: (nextServerFns) =>
+      Object.assign(serverFnsById, nextServerFns),
     loadModule: async (moduleId) => {
       const workspacePath = toWorkspacePath(root, moduleId);
       const code = workspacePath ? fileMap.get(workspacePath) : undefined;
 
-      if (workspacePath && code) {
-        compiler.ingestModule({
-          code,
-          id: toAbsoluteModuleId(root, workspacePath),
-        });
-      }
+      compiler.ingestModule({
+        // Bare framework imports are already classified through the compiler's
+        // known-import table. Ingest an empty external module for other imports
+        // (for example React hooks co-located with a server function) so an
+        // unrelated call can resolve to `None` instead of aborting the build.
+        code: code ?? "export {};",
+        id: workspacePath ? toAbsoluteModuleId(root, workspacePath) : moduleId,
+      });
     },
     resolveId: createStartCoreResolver(root, fileMap),
   });
@@ -128,13 +312,15 @@ export function createServerFnResolverModule(
   serverFnsById: Record<string, ServerFn>,
   root: string,
 ) {
-  const manifestEntries = Object.entries(serverFnsById).map(([id, serverFn]) => {
-    const splitPath = toWorkspaceModuleId(root, serverFn.extractedFilename);
+  const manifestEntries = Object.entries(serverFnsById).map(
+    ([id, serverFn]) => {
+      const splitPath = toWorkspaceModuleId(root, serverFn.extractedFilename);
 
-    return `${JSON.stringify(id)}: { functionName: ${JSON.stringify(
-      serverFn.functionName,
-    )}, module: ${JSON.stringify(splitPath)} },`;
-  });
+      return `${JSON.stringify(id)}: { functionName: ${JSON.stringify(
+        serverFn.functionName,
+      )}, module: ${JSON.stringify(splitPath)} },`;
+    },
+  );
 
   return [
     "const manifest = {",
@@ -152,18 +338,20 @@ export async function transformStartServerFunctions(
   fileMap: WorkspaceFileMap,
   options: { root?: string } = {},
 ): Promise<StartServerFunctionsTransform> {
-  const {
-    createStartCompiler,
-    detectKindsInCode,
-  } = await importStartCompilerInternals();
-  const root = options.root ?? path.join(process.cwd(), ".tmp", "tanstack-start-core");
+  const { createHydrateCompilerPlugin, createStartCompiler, detectKindsInCode } =
+    await importStartCompilerInternals();
+  const root =
+    options.root ?? path.join(process.cwd(), ".tmp", "tanstack-start-core");
   const serverFnsById: Record<string, ServerFn> = {};
+  const compilerPlugins = [createHydrateCompilerPlugin()];
   const clientFiles: WorkspaceFileMap = new Map();
   const serverFiles: WorkspaceFileMap = new Map();
   const serverSplits: WorkspaceFileMap = new Map();
   const clientCompiler = createCompiler({
     createStartCompiler,
+    createHydrateCompilerPlugin,
     detectKindsInCode,
+    compilerPlugins,
     fileMap,
     root,
     serverFnsById,
@@ -171,7 +359,9 @@ export async function transformStartServerFunctions(
   });
   const serverCompiler = createCompiler({
     createStartCompiler,
+    createHydrateCompilerPlugin,
     detectKindsInCode,
+    compilerPlugins,
     fileMap,
     root,
     serverFnsById,
@@ -190,7 +380,8 @@ export async function transformStartServerFunctions(
       !code.includes("createMiddleware") &&
       !code.includes("createServerOnlyFn") &&
       !code.includes("createClientOnlyFn") &&
-      !code.includes("createIsomorphicFn")
+      !code.includes("createIsomorphicFn") &&
+      !code.includes("Hydrate")
     ) {
       clientFiles.set(workspacePath, code);
       serverFiles.set(workspacePath, code);
@@ -213,6 +404,39 @@ export async function transformStartServerFunctions(
     serverFiles.set(workspacePath, serverResult?.code ?? code);
   }
 
+  const pendingHydrateModules = [...clientFiles.entries()];
+  const seenHydrateModules = new Set<string>();
+  for (let index = 0; index < pendingHydrateModules.length; index += 1) {
+    const [, code] = pendingHydrateModules[index] ?? [];
+    if (!code) continue;
+    const hydrateModuleIds = [
+      ...code.matchAll(/["']([^"']+\?[^"']*tss-hydrate=[^"']+)["']/g),
+    ].map((match) => match[1]);
+
+    for (const moduleId of hydrateModuleIds) {
+      if (!moduleId || seenHydrateModules.has(moduleId)) continue;
+      seenHydrateModules.add(moduleId);
+      const virtualResult = compilerPlugins[0]?.loadVirtualModule?.({
+        env: "client",
+        envName: "client",
+        id: moduleId,
+        root,
+      });
+      if (!virtualResult?.code) {
+        throw new Error(`Unable to compile deferred Hydrate module ${moduleId}.`);
+      }
+      const compiledVirtualResult = await clientCompiler.compile({
+        code: virtualResult.code,
+        id: moduleId,
+        detectedKinds: detectKindsInCode(virtualResult.code, "client"),
+      });
+      const workspaceModuleId = toWorkspaceModuleId(root, moduleId);
+      const virtualCode = compiledVirtualResult?.code ?? virtualResult.code;
+      clientFiles.set(workspaceModuleId, virtualCode);
+      pendingHydrateModules.push([workspaceModuleId, virtualCode]);
+    }
+  }
+
   for (const serverFn of Object.values(serverFnsById)) {
     const workspacePath = toWorkspacePath(root, serverFn.filename);
     const code = workspacePath ? fileMap.get(workspacePath) : undefined;
@@ -230,15 +454,34 @@ export async function transformStartServerFunctions(
     });
 
     if (splitResult?.code) {
-      serverSplits.set(toWorkspaceModuleId(root, serverFn.extractedFilename), splitResult.code);
+      serverSplits.set(
+        toWorkspaceModuleId(root, serverFn.extractedFilename),
+        splitResult.code,
+      );
     }
   }
 
+  const { clientRouteIds, clientRouteSplits } = await compileRoutes(
+    clientFiles,
+    root,
+    {
+      deleteNodes: new Set(["headers", "server", "ssr"]),
+      stripRouteCssImports: true,
+    },
+  );
+  const { clientRouteSplits: serverRouteSplits } = await compileRoutes(
+    serverFiles,
+    root,
+  );
+
   return {
     clientFiles,
+    clientRouteIds,
+    clientRouteSplits,
     serverFiles,
     serverSplits,
     serverFnsById,
+    serverRouteSplits,
     resolverModule: createServerFnResolverModule(serverFnsById, root),
   };
 }

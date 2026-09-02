@@ -20,6 +20,34 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## TanStack Start runtime tests
+
+Run the compiler and request-host suite with:
+
+```bash
+yarn test:serverless-tanstack-start
+```
+
+The real-browser suite uses Firefox. Install it once, then run the browser checkpoint:
+
+```bash
+yarn playwright install firefox
+yarn test:serverless-tanstack-start-browser
+```
+
+The browser checkpoint covers SSR and hydration, middleware-backed server
+functions, streaming server functions, FormData/File transport, Request body
+forwarding and redirects, deferred loader data, selective SSR, route error and
+not-found UI, loader-derived head metadata, path aliases, custom client/server
+entries, lazy client chunks, route-scoped CSS, React Server Components, and
+server actions. The compiler/request-host suite also verifies revision-pinned
+server entry and route/function chunks inside the reusable Node worker.
+
+See the version-pinned
+[TanStack Start compatibility matrix](./lib/serverless-tanstack-start/TANSTACK_START_COMPATIBILITY.md)
+for the exact supported, partial, unverified, and intentionally out-of-scope
+surface.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
