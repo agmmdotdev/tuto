@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { WorkspaceFile } from "@/lib/ide/types";
 
-export const NEXT_REQUEST_ARTIFACT_VERSION = 3 as const;
+export const NEXT_REQUEST_ARTIFACT_VERSION = 4 as const;
 
 export type NextCompiledModule = {
   canonicalPath: string;
@@ -46,7 +46,17 @@ export type NextRouteDefinition = {
   pattern: string;
 };
 
+export type NextRouteHandlerDefinition = {
+  handler: string;
+  matcher: {
+    params: NextRouteParam[];
+    source: string;
+  };
+  pattern: string;
+};
+
 export type NextRouteManifest = {
+  handlers: NextRouteHandlerDefinition[];
   rootLayout?: string;
   rootNotFound?: string;
   routes: NextRouteDefinition[];

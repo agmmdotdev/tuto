@@ -14,10 +14,12 @@ type WorkerReply = {
   bodyBase64?: string;
   cacheMetrics?: NextCacheMetrics;
   error?: string;
+  headers?: Array<[string, string]>;
   id: string;
   ok: boolean;
   routePattern?: string | null;
   status?: number;
+  statusText?: string;
   type?: undefined;
 };
 
@@ -49,6 +51,15 @@ export type NextFlightWorkerResult = {
   flight: Buffer;
   routePattern: string | null;
   status: number;
+};
+
+export type NextRouteHandlerWorkerResult = {
+  body: Buffer;
+  cacheMetrics: NextCacheMetrics;
+  headers: Array<[string, string]>;
+  routePattern: string | null;
+  status: number;
+  statusText: string;
 };
 
 type Pending = {
@@ -173,7 +184,7 @@ export class NextRscWorkerPool {
   }
 
   private result(reply: WorkerReply): NextFlightWorkerResult {
-    if (!reply.bodyBase64)
+    if (reply.bodyBase64 === undefined)
       throw new Error("Next RSC worker returned no Flight payload.");
     return {
       cacheMetrics: reply.cacheMetrics ?? {
@@ -186,6 +197,26 @@ export class NextRscWorkerPool {
       flight: Buffer.from(reply.bodyBase64, "base64"),
       routePattern: reply.routePattern ?? null,
       status: reply.status ?? 200,
+    };
+  }
+
+  private routeHandlerResult(reply: WorkerReply): NextRouteHandlerWorkerResult {
+    if (reply.bodyBase64 === undefined) {
+      throw new Error("Next RSC worker returned no Route Handler payload.");
+    }
+    return {
+      body: Buffer.from(reply.bodyBase64, "base64"),
+      cacheMetrics: reply.cacheMetrics ?? {
+        hits: 0,
+        misses: 0,
+        revalidations: 0,
+        staleHits: 0,
+        writes: 0,
+      },
+      headers: reply.headers ?? [],
+      routePattern: reply.routePattern ?? null,
+      status: reply.status ?? 200,
+      statusText: reply.statusText ?? "",
     };
   }
 
@@ -219,6 +250,28 @@ export class NextRscWorkerPool {
         ...input,
         generation: artifact.generation,
         type: "action",
+      }),
+    );
+  }
+
+  async invokeRouteHandler(
+    artifact: NextRequestArtifact,
+    input: {
+      bodyBase64?: string;
+      headers: Array<[string, string]>;
+      method: string;
+      url: string;
+    },
+  ) {
+    if (!this.installed.has(artifact.generation)) {
+      await this.send({ artifact, type: "install" });
+      this.installed.add(artifact.generation);
+    }
+    return this.routeHandlerResult(
+      await this.send({
+        ...input,
+        generation: artifact.generation,
+        type: "route-handler",
       }),
     );
   }

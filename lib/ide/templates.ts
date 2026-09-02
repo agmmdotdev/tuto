@@ -2238,9 +2238,9 @@ This checkpoint runs real Next compiler and React Server Components machinery wi
 - An immutable generation is reused when the workspace is unchanged
 - A host-owned adapter stores Next data-cache entries outside student modules
 
-Current checkpoint: nested layouts and static/dynamic/catch-all routes, async Server Components, Client Components, Flight, SSR, hydration, module-level Server Actions, React request memoization, \`unstable_cache\`, Cache Components with \`"use cache"\`/\`cacheLife\`/\`cacheTag\`, patched \`fetch\`, tag invalidation, path invalidation, and stale-while-revalidate.
+Current checkpoint: nested layouts and static/dynamic/catch-all routes, async Server Components, Client Components, Flight, SSR, hydration, module-level Server Actions, App Router Route Handlers, Web \`Request\`/\`Response\`, \`NextRequest\`/\`NextResponse\`, headers/cookies, streaming responses, React request memoization, \`unstable_cache\`, Cache Components with \`"use cache"\`/\`cacheLife\`/\`cacheTag\`, patched \`fetch\`, tag invalidation, path invalidation, and stale-while-revalidate.
 
-Try \`GET /lessons/rsc?mode=practice\`, \`GET /cache\`, \`GET /cache-components\`, and \`GET /fetch-cache\` after the root page. The default cache adapter is process-memory and workspace-scoped: data and fetch entries survive generation edits and worker restarts within one warm host. Cache Component keys include the immutable generation, matching Next's build-ID safety rule. This is not cross-instance durable storage. Route Handlers, middleware/proxy, and captured inline action arguments are deliberately not claimed yet.`,
+Try \`GET /lessons/rsc?mode=practice\`, \`GET /api/lessons/rsc?mode=practice\`, \`POST /api/lessons/rsc\` with a JSON body, \`GET /api/stream\`, \`GET /cache\`, \`GET /cache-components\`, and \`GET /fetch-cache\` after the root page. The default cache adapter is process-memory and workspace-scoped: data and fetch entries survive generation edits and worker restarts within one warm host. Cache Component keys include the immutable generation, matching Next's build-ID safety rule. This is not cross-instance durable storage. Middleware/proxy and captured inline action arguments are deliberately not claimed yet.`,
       },
       {
         path: "package.json",
@@ -2344,7 +2344,7 @@ export default async function Page() {
       </p>
       <Counter initial={0} />
       <p style={{ marginTop: 22 }}>
-        Try these in the request path field: <code>/lessons/rsc?mode=practice</code>, <code>/cache</code>, <code>/cache-components</code>, and <code>/fetch-cache</code>
+        Try these in the request path field: <code>/lessons/rsc?mode=practice</code>, <code>/api/lessons/rsc?mode=practice</code>, <code>/api/stream</code>, <code>/cache</code>, <code>/cache-components</code>, and <code>/fetch-cache</code>
       </p>
     </main>
   );
@@ -2439,6 +2439,71 @@ export default async function LessonPage({ params, searchParams }: LessonPagePro
       <p>This route was selected by Tuto's request router and rendered with real Next RSC transforms.</p>
     </main>
   );
+}
+`,
+      },
+      {
+        path: "app/api/lessons/[lessonId]/route.ts",
+        language: "ts",
+        description:
+          "A dynamic Route Handler using Next request APIs, the data cache, and tag invalidation.",
+        content: `import { revalidateTag, unstable_cache } from "next/cache";
+import { cookies, headers } from "next/headers";
+import { NextRequest, NextResponse } from "next/server";
+
+let reads = 0;
+
+const getApiLesson = unstable_cache(
+  async (lessonId: string) => ({ lessonId, reads: ++reads }),
+  ["api-lesson"],
+  { revalidate: 3600, tags: ["api-lessons"] },
+);
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ lessonId: string }> },
+) {
+  const { lessonId } = await params;
+  const requestHeaders = await headers();
+  const requestCookies = await cookies();
+  const response = NextResponse.json({
+    lesson: await getApiLesson(lessonId),
+    mode: request.nextUrl.searchParams.get("mode") ?? "read",
+    requestId: requestHeaders.get("x-request-id"),
+    session: requestCookies.get("session")?.value ?? null,
+  });
+  response.cookies.set("last-lesson", lessonId, { httpOnly: true, path: "/" });
+  return response;
+}
+
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ lessonId: string }> },
+) {
+  const input = await request.json() as { title: string };
+  revalidateTag("api-lessons", { expire: 0 });
+  return Response.json({
+    lessonId: (await params).lessonId,
+    saved: input.title,
+  }, { status: 202 });
+}
+`,
+      },
+      {
+        path: "app/api/stream/route.ts",
+        language: "ts",
+        description: "A Route Handler returning a Web ReadableStream.",
+        content: `export function GET() {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode("route-handler:"));
+      controller.enqueue(encoder.encode("stream"));
+      controller.close();
+    },
+  }), {
+    headers: { "content-type": "text/plain; charset=utf-8" },
+  });
 }
 `,
       },
@@ -2568,7 +2633,8 @@ export async function getCachedCourse(courseId: string) {
       {
         path: "app/cache-components/actions.ts",
         language: "ts",
-        description: "A Server Action that immediately expires a Cache Component tag.",
+        description:
+          "A Server Action that immediately expires a Cache Component tag.",
         content: `"use server";
 
 import { updateTag } from "next/cache";
@@ -2582,7 +2648,8 @@ export async function expireCourse(courseId: string) {
       {
         path: "app/cache-components/controls.tsx",
         language: "tsx",
-        description: "A Client Component that invalidates the cached course through a Server Action.",
+        description:
+          "A Client Component that invalidates the cached course through a Server Action.",
         content: `"use client";
 
 import { useState } from "react";
@@ -2628,7 +2695,8 @@ export default async function CacheComponentsPage() {
       {
         path: "app/fetch-cache/data.ts",
         language: "ts",
-        description: "A Next-patched fetch with explicit revalidation and tags.",
+        description:
+          "A Next-patched fetch with explicit revalidation and tags.",
         content: `export async function getFetchLesson() {
   const source = encodeURIComponent(JSON.stringify({ lesson: "patched-fetch" }));
   const response = await fetch(\`data:application/json,\${source}\`, {
@@ -2641,7 +2709,8 @@ export default async function CacheComponentsPage() {
       {
         path: "app/fetch-cache/page.tsx",
         language: "tsx",
-        description: "A lesson showing fetch entries in the same host-owned data cache.",
+        description:
+          "A lesson showing fetch entries in the same host-owned data cache.",
         content: `import { getFetchLesson } from "./data";
 
 export default async function FetchCachePage() {
