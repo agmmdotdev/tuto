@@ -2,14 +2,30 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import type { NextRequestArtifact } from "./artifact";
+import {
+  getNextCacheAdapter,
+  type NextCacheGetInput,
+  type NextCacheMetrics,
+  type NextCacheRevalidateInput,
+  type NextCacheSetInput,
+} from "./cache-adapter";
 
 type WorkerReply = {
   bodyBase64?: string;
+  cacheMetrics?: NextCacheMetrics;
   error?: string;
   id: string;
   ok: boolean;
   routePattern?: string | null;
   status?: number;
+  type?: undefined;
+};
+
+type WorkerCacheRequest = {
+  input: NextCacheGetInput | NextCacheRevalidateInput | NextCacheSetInput;
+  operation: "get" | "revalidateTags" | "set";
+  requestId: string;
+  type: "cache-request";
 };
 
 export type NextSerializedActionBody =
@@ -29,6 +45,7 @@ export type NextSerializedActionBody =
     };
 
 export type NextFlightWorkerResult = {
+  cacheMetrics: NextCacheMetrics;
   flight: Buffer;
   routePattern: string | null;
   status: number;
@@ -53,6 +70,36 @@ export class NextRscWorkerPool {
   private installed = new Set<string>();
   private pending = new Map<string, Pending>();
 
+  private async handleCacheRequest(
+    child: ChildProcess,
+    message: WorkerCacheRequest,
+  ) {
+    try {
+      const adapter = getNextCacheAdapter();
+      const value =
+        message.operation === "get"
+          ? await adapter.get(message.input as NextCacheGetInput)
+          : message.operation === "set"
+            ? await adapter.set(message.input as NextCacheSetInput)
+            : await adapter.revalidateTags(
+                message.input as NextCacheRevalidateInput,
+              );
+      child.send({
+        ok: true,
+        requestId: message.requestId,
+        type: "cache-response",
+        value,
+      });
+    } catch (error) {
+      child.send({
+        error: error instanceof Error ? error.message : String(error),
+        ok: false,
+        requestId: message.requestId,
+        type: "cache-response",
+      });
+    }
+  }
+
   private getChild() {
     if (this.child?.connected) return this.child;
     const child = spawn(
@@ -62,7 +109,11 @@ export class NextRscWorkerPool {
         stdio: ["ignore", "ignore", "ignore", "ipc"],
       },
     );
-    child.on("message", (message: WorkerReply) => {
+    child.on("message", (message: WorkerReply | WorkerCacheRequest) => {
+      if (message.type === "cache-request") {
+        void this.handleCacheRequest(child, message);
+        return;
+      }
       const pending = this.pending.get(message.id);
       if (!pending) return;
       clearTimeout(pending.timeout);
@@ -116,6 +167,13 @@ export class NextRscWorkerPool {
     if (!reply.bodyBase64)
       throw new Error("Next RSC worker returned no Flight payload.");
     return {
+      cacheMetrics: reply.cacheMetrics ?? {
+        hits: 0,
+        misses: 0,
+        revalidations: 0,
+        staleHits: 0,
+        writes: 0,
+      },
       flight: Buffer.from(reply.bodyBase64, "base64"),
       routePattern: reply.routePattern ?? null,
       status: reply.status ?? 200,

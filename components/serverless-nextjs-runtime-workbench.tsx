@@ -77,7 +77,7 @@ export function ServerlessNextjsRuntimeWorkbench({
         badge: "NEXT CORE",
         dependencyLabel: "Next SWC + React Flight",
         explorerCopy:
-          "This checkpoint compiles the saved snapshot with Next's SWC transforms, matches nested App Router pages, renders genuine React Flight, hydrates Client Components, and dispatches module-level Server Actions through the hot immutable generation.",
+          "This checkpoint compiles with Next SWC, matches nested App Router pages, renders and hydrates genuine Flight, dispatches Server Actions, and connects Next cache APIs to a workspace-scoped host adapter. Try /cache to inspect hits and invalidation.",
         modeValue: "serverless",
         runtimeValue: "next-rsc",
         requestPathPlaceholder: "/lessons/rsc?mode=practice",

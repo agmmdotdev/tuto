@@ -115,6 +115,7 @@ function responseHeaders(
   return {
     "cache-control": "private, no-store",
     "content-type": contentType,
+    "x-tuto-next-cache": `hit=${result.cacheMetrics.hits}; stale=${result.cacheMetrics.staleHits}; miss=${result.cacheMetrics.misses}; write=${result.cacheMetrics.writes}; revalidate=${result.cacheMetrics.revalidations}`,
     "x-tuto-next-generation": artifact.generation,
     ...(result.routePattern
       ? { "x-tuto-next-route-pattern": result.routePattern }

@@ -2236,10 +2236,11 @@ This checkpoint runs real Next compiler and React Server Components machinery wi
 - A shared precompiled browser kernel contains React, React DOM, and the Flight client
 - Reusable bounded workers render Flight and SSR HTML
 - An immutable generation is reused when the workspace is unchanged
+- A host-owned adapter stores Next data-cache entries outside student modules
 
-Current checkpoint: nested layouts and static/dynamic/catch-all routes, async Server Components, Client Components, Flight, SSR, hydration, and module-level Server Action dispatch with a refreshed Flight tree.
+Current checkpoint: nested layouts and static/dynamic/catch-all routes, async Server Components, Client Components, Flight, SSR, hydration, module-level Server Actions, React request memoization, \`unstable_cache\`, tag invalidation, path invalidation, and stale-while-revalidate.
 
-Try \`GET /lessons/rsc?mode=practice\` after the root page. The action demo uses worker-local state only; it proves the action protocol and re-render, not durable storage. Route Handlers, middleware/proxy, cache invalidation APIs, and captured inline action arguments are deliberately not claimed yet.`,
+Try \`GET /lessons/rsc?mode=practice\` and \`GET /cache\` after the root page. The default cache adapter is process-memory and workspace-scoped: it survives generation edits and worker restarts within one warm host, but it is not cross-instance durable storage. Route Handlers, middleware/proxy, \`"use cache"\`/cache components, fetch caching, and captured inline action arguments are deliberately not claimed yet.`,
       },
       {
         path: "package.json",
@@ -2343,7 +2344,7 @@ export default async function Page() {
       </p>
       <Counter initial={0} />
       <p style={{ marginTop: 22 }}>
-        Try this in the request path field: <code>/lessons/rsc?mode=practice</code>
+        Try these in the request path field: <code>/lessons/rsc?mode=practice</code> and <code>/cache</code>
       </p>
     </main>
   );
@@ -2436,6 +2437,108 @@ export default async function LessonPage({ params, searchParams }: LessonPagePro
       <h1>Lesson: {lessonId}</h1>
       <p>Mode: {mode ?? "read"}</p>
       <p>This route was selected by Tuto's request router and rendered with real Next RSC transforms.</p>
+    </main>
+  );
+}
+`,
+      },
+      {
+        path: "app/cache/data.ts",
+        language: "ts",
+        description:
+          "Next unstable_cache examples with explicit tags and path-derived soft tags.",
+        content: `import { cache } from "react";
+import { unstable_cache } from "next/cache";
+
+let taggedReads = 0;
+let pathReads = 0;
+let memoReads = 0;
+
+export const getRequestMemo = cache(async () => ++memoReads);
+
+export const getTaggedLesson = unstable_cache(
+  async () => ({ generatedAt: new Date().toISOString(), reads: ++taggedReads }),
+  ["lesson-catalog"],
+  { revalidate: 3600, tags: ["lesson-catalog"] },
+);
+
+export const getPathLesson = unstable_cache(
+  async () => ({ generatedAt: new Date().toISOString(), reads: ++pathReads }),
+  ["path-lesson"],
+  { revalidate: 3600 },
+);
+`,
+      },
+      {
+        path: "app/cache/actions.ts",
+        language: "ts",
+        description:
+          "Server Actions demonstrating immediate, SWR, and path invalidation.",
+        content: `"use server";
+
+import { revalidatePath, revalidateTag, updateTag } from "next/cache";
+
+export async function expireCatalogNow() {
+  updateTag("lesson-catalog");
+  return "The catalog tag was expired immediately.";
+}
+
+export async function staleCatalog() {
+  revalidateTag("lesson-catalog", "max");
+  return "The old value was served while a fresh value was generated.";
+}
+
+export async function expireCachePage() {
+  revalidatePath("/cache");
+  return "All data used by /cache was expired through its implicit path tag.";
+}
+`,
+      },
+      {
+        path: "app/cache/cache-controls.tsx",
+        language: "tsx",
+        description: "Client controls that invoke cache-invalidating actions.",
+        content: `"use client";
+
+import { useState } from "react";
+import { expireCachePage, expireCatalogNow, staleCatalog } from "./actions";
+
+export default function CacheControls() {
+  const [result, setResult] = useState("No invalidation action yet.");
+  return (
+    <div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+        <button onClick={async () => setResult(await expireCatalogNow())}>updateTag</button>
+        <button onClick={async () => setResult(await staleCatalog())}>revalidateTag max</button>
+        <button onClick={async () => setResult(await expireCachePage())}>revalidatePath</button>
+      </div>
+      <p data-cache-action-result>{result}</p>
+    </div>
+  );
+}
+`,
+      },
+      {
+        path: "app/cache/page.tsx",
+        language: "tsx",
+        description:
+          "A cache lesson rendered from tagged and path-associated data entries.",
+        content: `import CacheControls from "./cache-controls";
+import { getPathLesson, getRequestMemo, getTaggedLesson } from "./data";
+
+export default async function CacheLessonPage() {
+  const [tagged, path] = await Promise.all([getTaggedLesson(), getPathLesson()]);
+  const memoA = await getRequestMemo();
+  const memoB = await getRequestMemo();
+  return (
+    <main style={{ borderRadius: 24, background: "white", padding: 32 }}>
+      <span style={{ color: "#b34f24", fontWeight: 700 }}>Next data cache</span>
+      <h1>Cache and invalidation</h1>
+      <p data-tagged-cache>Tagged read #{tagged.reads} at {tagged.generatedAt}</p>
+      <p data-path-cache>Path read #{path.reads} at {path.generatedAt}</p>
+      <p data-request-memo>React cache calls in this request: {memoA} and {memoB}</p>
+      <p>Repeat GET /cache to observe cache hits in the runtime output.</p>
+      <CacheControls />
     </main>
   );
 }
