@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { WorkspaceFile } from "@/lib/ide/types";
 
-export const NEXT_REQUEST_ARTIFACT_VERSION = 2 as const;
+export const NEXT_REQUEST_ARTIFACT_VERSION = 3 as const;
 
 export type NextCompiledModule = {
   canonicalPath: string;
@@ -24,6 +24,7 @@ export type NextClientReference = {
 
 export type NextServerActionReference = {
   exportName: string;
+  kind: "action" | "cache";
   modulePath: string;
 };
 

@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { delimiter, resolve } from "node:path";
 import type { NextRequestArtifact } from "./artifact";
 import {
   getNextCacheAdapter,
@@ -106,6 +106,15 @@ export class NextRscWorkerPool {
       process.execPath,
       ["--conditions=react-server", "--max-old-space-size=256", workerPath],
       {
+        env: {
+          ...process.env,
+          NODE_PATH: [
+            process.env.NODE_PATH,
+            resolve(process.cwd(), "node_modules", "next", "dist", "compiled"),
+          ]
+            .filter(Boolean)
+            .join(delimiter),
+        },
         stdio: ["ignore", "ignore", "ignore", "ipc"],
       },
     );

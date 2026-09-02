@@ -68,7 +68,7 @@ function cacheKey(
 ) {
   return createHash("sha256")
     .update(
-      `${PINNED_NEXT_VERSION}\0${target}\0${canonicalPath}\0${actionSalt}\0${source}`,
+      `${PINNED_NEXT_VERSION}\0rsc-cache-components-v3\0${target}\0${canonicalPath}\0${actionSalt}\0${source}`,
     )
     .digest("hex");
 }
@@ -142,7 +142,7 @@ function loaderOptions({
     esm: true,
     filename: canonicalPath,
     hasReactRefresh: false,
-    isCacheComponents: false,
+    isCacheComponents: true,
     isPageFile: /(?:^|\/)page\.[cm]?[jt]sx?$/.test(canonicalPath),
     isServer,
     jsConfig: { compilerOptions: {} },
@@ -159,7 +159,7 @@ function loaderOptions({
     swcPlugins: undefined,
     taintEnabled: false,
     trackDynamicImports: false,
-    useCacheEnabled: false,
+    useCacheEnabled: true,
   });
 }
 
@@ -216,7 +216,7 @@ export async function transformNextModule({
   return { ...value, cacheHit: false };
 }
 
-export const NEXT_COMPILER_FINGERPRINT = `next-swc:${PINNED_NEXT_VERSION}:rsc-v2`;
+export const NEXT_COMPILER_FINGERPRINT = `next-swc:${PINNED_NEXT_VERSION}:rsc-cache-components-v3`;
 export const NEXT_COMPILER_VERSION = PINNED_NEXT_VERSION;
 
 export function canonicalNextWorkspacePath(

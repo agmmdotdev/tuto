@@ -29,6 +29,10 @@ and rerun the compatibility suite.
 | Action refresh                           | The action result and re-rendered route return in one Flight payload and the browser applies both      |
 | React `cache`                            | Repeated calls share one value during a render and recompute for the next RSC request                  |
 | `unstable_cache`                         | Next's own wrapper executes inside its work/request AsyncLocalStorage contexts over a Tuto adapter     |
+| Cache Components                         | Next SWC rewrites `"use cache"` functions and async Server Components through its real cache wrapper |
+| `cacheLife` and `cacheTag`                | Built-in/custom lifetimes and explicit tags are collected inside Next's cache work-unit context        |
+| Cached Client boundaries                 | A cached Server Component can contain a Client Component and round-trip through Flight cache streams   |
+| Patched `fetch`                           | Explicit `next.revalidate`/`next.tags` requests use Next's patched fetch and the host data-cache bridge |
 | Tag invalidation                         | `updateTag` expires immediately; `revalidateTag(..., "max")` serves stale once and refreshes           |
 | Path invalidation                        | `revalidatePath` expires entries through Next-generated implicit path tags                             |
 | Cache generation reuse                   | Entries survive source generations for one workspace while identical keys in other workspaces isolate  |
@@ -43,6 +47,13 @@ IPC into a `NextCacheAdapter` in the trusted host. The default adapter is a
 bounded, workspace-scoped memory store. It survives immutable generation edits
 and RSC worker restarts within a warm host, but not a Fluid Compute instance
 replacement.
+
+Cache Component values are genuine Flight streams. The worker serializes those
+streams for IPC and the host stores them through the same adapter used by
+`unstable_cache` and patched `fetch`. Cache Component keys include the immutable
+artifact generation, following Next's build-ID safeguard against reusing a
+result after the cached implementation changes. Explicit data/fetch cache keys
+remain reusable across generations for the same workspace.
 
 This interface is the correct extension point for R2, but a production R2
 implementation is not included yet. Cache values can live in R2; tag versions
@@ -72,7 +83,6 @@ the expensive event, not every request or ordinary Server Component edit.
 - Full Next segment semantics: parallel/intercepted routes and complete loading, error, and thrown `notFound()` behavior
 - Captured inline Server Action arguments, progressive-enhancement form posts, `useActionState`, redirects, and action transitions
 - Route Handlers in `app/**/route.ts`
-- `"use cache"`, `cacheLife`, `cacheTag`, and patched `fetch` caching
 - Middleware/proxy execution and request rewriting
 - CSS, static assets, metadata, images, fonts, and arbitrary `next/*` imports
 - Durable object storage, signed artifact capabilities, and cross-instance reuse

@@ -2238,9 +2238,9 @@ This checkpoint runs real Next compiler and React Server Components machinery wi
 - An immutable generation is reused when the workspace is unchanged
 - A host-owned adapter stores Next data-cache entries outside student modules
 
-Current checkpoint: nested layouts and static/dynamic/catch-all routes, async Server Components, Client Components, Flight, SSR, hydration, module-level Server Actions, React request memoization, \`unstable_cache\`, tag invalidation, path invalidation, and stale-while-revalidate.
+Current checkpoint: nested layouts and static/dynamic/catch-all routes, async Server Components, Client Components, Flight, SSR, hydration, module-level Server Actions, React request memoization, \`unstable_cache\`, Cache Components with \`"use cache"\`/\`cacheLife\`/\`cacheTag\`, patched \`fetch\`, tag invalidation, path invalidation, and stale-while-revalidate.
 
-Try \`GET /lessons/rsc?mode=practice\` and \`GET /cache\` after the root page. The default cache adapter is process-memory and workspace-scoped: it survives generation edits and worker restarts within one warm host, but it is not cross-instance durable storage. Route Handlers, middleware/proxy, \`"use cache"\`/cache components, fetch caching, and captured inline action arguments are deliberately not claimed yet.`,
+Try \`GET /lessons/rsc?mode=practice\`, \`GET /cache\`, \`GET /cache-components\`, and \`GET /fetch-cache\` after the root page. The default cache adapter is process-memory and workspace-scoped: data and fetch entries survive generation edits and worker restarts within one warm host. Cache Component keys include the immutable generation, matching Next's build-ID safety rule. This is not cross-instance durable storage. Route Handlers, middleware/proxy, and captured inline action arguments are deliberately not claimed yet.`,
       },
       {
         path: "package.json",
@@ -2344,7 +2344,7 @@ export default async function Page() {
       </p>
       <Counter initial={0} />
       <p style={{ marginTop: 22 }}>
-        Try these in the request path field: <code>/lessons/rsc?mode=practice</code> and <code>/cache</code>
+        Try these in the request path field: <code>/lessons/rsc?mode=practice</code>, <code>/cache</code>, <code>/cache-components</code>, and <code>/fetch-cache</code>
       </p>
     </main>
   );
@@ -2539,6 +2539,118 @@ export default async function CacheLessonPage() {
       <p data-request-memo>React cache calls in this request: {memoA} and {memoB}</p>
       <p>Repeat GET /cache to observe cache hits in the runtime output.</p>
       <CacheControls />
+    </main>
+  );
+}
+`,
+      },
+      {
+        path: "app/cache-components/data.ts",
+        language: "ts",
+        description:
+          "A genuine compiler-generated Cache Component function with cache lifetime and tags.",
+        content: `import { cacheLife, cacheTag } from "next/cache";
+
+let reads = 0;
+
+export async function getCachedCourse(courseId: string) {
+  "use cache";
+  cacheLife("hours");
+  cacheTag(\`course-\${courseId}\`);
+  return {
+    courseId,
+    generatedAt: new Date().toISOString(),
+    reads: ++reads,
+  };
+}
+`,
+      },
+      {
+        path: "app/cache-components/actions.ts",
+        language: "ts",
+        description: "A Server Action that immediately expires a Cache Component tag.",
+        content: `"use server";
+
+import { updateTag } from "next/cache";
+
+export async function expireCourse(courseId: string) {
+  updateTag(\`course-\${courseId}\`);
+  return \`Expired course-\${courseId}\`;
+}
+`,
+      },
+      {
+        path: "app/cache-components/controls.tsx",
+        language: "tsx",
+        description: "A Client Component that invalidates the cached course through a Server Action.",
+        content: `"use client";
+
+import { useState } from "react";
+import { expireCourse } from "./actions";
+
+export default function CacheComponentControls() {
+  const [result, setResult] = useState("The Cache Component is still warm.");
+  return (
+    <div>
+      <button onClick={async () => setResult(await expireCourse("next-rsc"))}>
+        Expire Cache Component tag
+      </button>
+      <p>{result}</p>
+    </div>
+  );
+}
+`,
+      },
+      {
+        path: "app/cache-components/page.tsx",
+        language: "tsx",
+        description: "A lesson using the compiler-generated use-cache wrapper.",
+        content: `import CacheComponentControls from "./controls";
+import { getCachedCourse } from "./data";
+
+export default async function CacheComponentsPage() {
+  const first = await getCachedCourse("next-rsc");
+  const second = await getCachedCourse("next-rsc");
+  return (
+    <main style={{ borderRadius: 24, background: "white", padding: 32 }}>
+      <span style={{ color: "#b34f24", fontWeight: 700 }}>Cache Components</span>
+      <h1>Compiler-generated use cache</h1>
+      <p>Course: {first.courseId}</p>
+      <p>Origin reads: {first.reads} and {second.reads}</p>
+      <p>Generated at: {first.generatedAt}</p>
+      <p>Repeat GET /cache-components and inspect the cache hit metrics.</p>
+      <CacheComponentControls />
+    </main>
+  );
+}
+`,
+      },
+      {
+        path: "app/fetch-cache/data.ts",
+        language: "ts",
+        description: "A Next-patched fetch with explicit revalidation and tags.",
+        content: `export async function getFetchLesson() {
+  const source = encodeURIComponent(JSON.stringify({ lesson: "patched-fetch" }));
+  const response = await fetch(\`data:application/json,\${source}\`, {
+    next: { revalidate: 3600, tags: ["fetch-lesson"] },
+  });
+  return response.json() as Promise<{ lesson: string }>;
+}
+`,
+      },
+      {
+        path: "app/fetch-cache/page.tsx",
+        language: "tsx",
+        description: "A lesson showing fetch entries in the same host-owned data cache.",
+        content: `import { getFetchLesson } from "./data";
+
+export default async function FetchCachePage() {
+  const result = await getFetchLesson();
+  return (
+    <main style={{ borderRadius: 24, background: "white", padding: 32 }}>
+      <span style={{ color: "#b34f24", fontWeight: 700 }}>Patched fetch</span>
+      <h1>{result.lesson}</h1>
+      <p>Repeat GET /fetch-cache. The first request writes and the next request hits the host cache.</p>
     </main>
   );
 }

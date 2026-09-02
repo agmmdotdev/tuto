@@ -341,7 +341,13 @@ export async function compileNextRequestWorkspaceWithStatus(
     for (const [actionId, exportName] of Object.entries(
       transformed.metadata.actionIds,
     )) {
-      actionManifest[actionId] = { exportName, modulePath: source.path };
+      actionManifest[actionId] = {
+        exportName,
+        kind: exportName.startsWith("$$RSC_SERVER_CACHE_")
+          ? "cache"
+          : "action",
+        modulePath: source.path,
+      };
     }
     serverModules[source.path] = {
       canonicalPath: source.canonicalPath,
