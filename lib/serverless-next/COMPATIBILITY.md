@@ -11,32 +11,38 @@ and rerun the compatibility suite.
 
 ## Verified in the current checkpoint
 
-| Capability                               | Evidence                                                                                               |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Root `app/layout.tsx` and `app/page.tsx` | Next SWC server transforms render genuine Flight and SSR HTML                                          |
-| Async Server Components                  | Promise-backed page content is present in Flight and HTML                                              |
-| Nested App Router pages                  | Static, dynamic, catch-all, and optional catch-all matchers select pages without `next build`          |
-| Layout composition                       | Root and nested layouts wrap the matched page; route groups are omitted from URL patterns              |
-| `params` and `searchParams`              | Next 16-style promised props are resolved for pages and route params are decoded                       |
-| `"use client"` boundary                  | Next's server transform produces its client-reference proxy                                            |
-| Client Component bundle                  | Only the student client closure is bundled against the shared kernel                                   |
-| Browser hydration                        | A Playwright checkpoint verifies `hydrateRoot` and a stateful click when a browser binary is installed |
-| Immutable generations                    | Source, compiler, kernel, workspace identity, and action salt determine the revision                   |
-| Unchanged request reuse                  | The hot artifact cache returns the same immutable artifact                                             |
-| Server-only edit                         | A new generation changes only the edited server module; the client manifest and bundle are reused      |
-| Boundary enforcement                     | A client graph importing `server-only` is rejected                                                     |
-| Module-level Server Actions              | Next SWC emits genuine action IDs and browser proxies; Flight `encodeReply`/`decodeReply` carries args |
-| Action refresh                           | The action result and re-rendered route return in one Flight payload and the browser applies both      |
-| React `cache`                            | Repeated calls share one value during a render and recompute for the next RSC request                  |
-| `unstable_cache`                         | Next's own wrapper executes inside its work/request AsyncLocalStorage contexts over a Tuto adapter     |
-| Cache Components                         | Next SWC rewrites `"use cache"` functions and async Server Components through its real cache wrapper |
-| `cacheLife` and `cacheTag`                | Built-in/custom lifetimes and explicit tags are collected inside Next's cache work-unit context        |
-| Cached Client boundaries                 | A cached Server Component can contain a Client Component and round-trip through Flight cache streams   |
-| Patched `fetch`                           | Explicit `next.revalidate`/`next.tags` requests use Next's patched fetch and the host data-cache bridge |
-| Tag invalidation                         | `updateTag` expires immediately; `revalidateTag(..., "max")` serves stale once and refreshes           |
-| Path invalidation                        | `revalidatePath` expires entries through Next-generated implicit path tags                             |
-| Cache generation reuse                   | Entries survive source generations for one workspace while identical keys in other workspaces isolate  |
-| Bounded execution                        | Reusable RSC and SSR child workers have a 256 MB V8 heap cap and a 15 second request timeout           |
+| Capability                               | Evidence                                                                                                |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Root `app/layout.tsx` and `app/page.tsx` | Next SWC server transforms render genuine Flight and SSR HTML                                           |
+| Async Server Components                  | Promise-backed page content is present in Flight and HTML                                               |
+| Nested App Router pages                  | Static, dynamic, catch-all, and optional catch-all matchers select pages without `next build`           |
+| Layout composition                       | Root and nested layouts wrap the matched page; route groups are omitted from URL patterns               |
+| `params` and `searchParams`              | Next 16-style promised props are resolved for pages and route params are decoded                        |
+| `app/**/route.ts`                        | Route-only workspaces and static/dynamic/catch-all handlers are discovered in the immutable manifest    |
+| Web request APIs                         | Handlers receive Next's real `NextRequest`; native `Request`/`Response` and `NextResponse` execute      |
+| Route methods                            | Next's own method resolver supplies `HEAD`, `OPTIONS`, 405, and invalid-method behavior                 |
+| Handler context                          | Promised dynamic `params`, URL/search params, request headers, cookies, and request bodies are verified |
+| Route response semantics                 | Status, status text, headers, multiple cookies, JSON, and Web `ReadableStream` bodies cross IPC         |
+| Handler cache/invalidation               | `unstable_cache` and `revalidateTag(tag, { expire: 0 })` share the host-owned adapter                   |
+| `"use client"` boundary                  | Next's server transform produces its client-reference proxy                                             |
+| Client Component bundle                  | Only the student client closure is bundled against the shared kernel                                    |
+| Browser hydration                        | A Playwright checkpoint verifies `hydrateRoot` and a stateful click when a browser binary is installed  |
+| Immutable generations                    | Source, compiler, kernel, workspace identity, and action salt determine the revision                    |
+| Unchanged request reuse                  | The hot artifact cache returns the same immutable artifact                                              |
+| Server-only edit                         | A new generation changes only the edited server module; the client manifest and bundle are reused       |
+| Boundary enforcement                     | A client graph importing `server-only` is rejected                                                      |
+| Module-level Server Actions              | Next SWC emits genuine action IDs and browser proxies; Flight `encodeReply`/`decodeReply` carries args  |
+| Action refresh                           | The action result and re-rendered route return in one Flight payload and the browser applies both       |
+| React `cache`                            | Repeated calls share one value during a render and recompute for the next RSC request                   |
+| `unstable_cache`                         | Next's own wrapper executes inside its work/request AsyncLocalStorage contexts over a Tuto adapter      |
+| Cache Components                         | Next SWC rewrites `"use cache"` functions and async Server Components through its real cache wrapper    |
+| `cacheLife` and `cacheTag`               | Built-in/custom lifetimes and explicit tags are collected inside Next's cache work-unit context         |
+| Cached Client boundaries                 | A cached Server Component can contain a Client Component and round-trip through Flight cache streams    |
+| Patched `fetch`                          | Explicit `next.revalidate`/`next.tags` requests use Next's patched fetch and the host data-cache bridge |
+| Tag invalidation                         | `updateTag` expires immediately; `revalidateTag(..., "max")` serves stale once and refreshes            |
+| Path invalidation                        | `revalidatePath` expires entries through Next-generated implicit path tags                              |
+| Cache generation reuse                   | Entries survive source generations for one workspace while identical keys in other workspaces isolate   |
+| Bounded execution                        | Reusable RSC and SSR child workers have a 256 MB V8 heap cap and a 15 second request timeout            |
 
 The generated browser kernel contains React, React DOM, and Next's compiled
 Flight browser client. Its content hash is part of every artifact identity.
@@ -54,6 +60,14 @@ streams for IPC and the host stores them through the same adapter used by
 artifact generation, following Next's build-ID safeguard against reusing a
 result after the cached implementation changes. Explicit data/fetch cache keys
 remain reusable across generations for the same workspace.
+
+Route Handler modules are compiled by the same pinned Next SWC server transform
+as pages. The worker evaluates their named method exports, then uses Next's
+`autoImplementMethods`, `NextRequest`, request-store AsyncLocalStorage, and
+mutable-cookie adapter. Tuto owns route matching and the IPC boundary. Streaming
+handlers can produce genuine Web streams, but this checkpoint buffers the stream
+before returning it across IPC; chunk-by-chunk host transport remains future
+work. The workbench's complete JSON execution envelope is limited to 6 MiB.
 
 This interface is the correct extension point for R2, but a production R2
 implementation is not included yet. Cache values can live in R2; tag versions
@@ -82,7 +96,6 @@ the expensive event, not every request or ordinary Server Component edit.
 
 - Full Next segment semantics: parallel/intercepted routes and complete loading, error, and thrown `notFound()` behavior
 - Captured inline Server Action arguments, progressive-enhancement form posts, `useActionState`, redirects, and action transitions
-- Route Handlers in `app/**/route.ts`
 - Middleware/proxy execution and request rewriting
 - CSS, static assets, metadata, images, fonts, and arbitrary `next/*` imports
 - Durable object storage, signed artifact capabilities, and cross-instance reuse
@@ -106,7 +119,8 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next vertical slice should add Route Handlers with Web `Request`/`Response`
-normalization. A durable cache adapter should follow once Tuto chooses the
-cross-instance metadata coordinator; that storage decision should not be hidden
-inside the student runtime.
+The next vertical slice should add middleware/proxy execution with matcher,
+rewrite, redirect, request-header, response-header, and cookie semantics. A
+durable cache adapter should follow once Tuto chooses the cross-instance
+metadata coordinator; that storage decision should not be hidden inside the
+student runtime.

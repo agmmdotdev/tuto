@@ -17,6 +17,7 @@ import { clearNextTransformCacheForTests } from "../../lib/serverless-next/next-
 import { clearNextCacheAdapterForTests } from "../../lib/serverless-next/cache-adapter";
 import {
   invokeNextServerAction,
+  invokeNextRouteHandler,
   renderHydratableNextRequestArtifact,
   renderNextRequestArtifact,
   serializeNextActionBody,
@@ -316,6 +317,73 @@ export default async function FetchPage() {
 }`,
       language: "tsx",
       path: "app/fetch/page.tsx",
+    },
+  ];
+}
+
+function routeHandlerWorkspace(): WorkspaceFile[] {
+  return [
+    {
+      content: `import { revalidateTag, unstable_cache } from "next/cache";
+import { cookies, headers } from "next/headers";
+import { NextRequest, NextResponse } from "next/server";
+
+let reads = 0;
+const getLesson = unstable_cache(
+  async (lessonId: string) => ({ lessonId, reads: ++reads }),
+  ["route-handler-lesson"],
+  { revalidate: 3600, tags: ["route-handler-lessons"] },
+);
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ lessonId: string }> },
+) {
+  const { lessonId } = await params;
+  const requestHeaders = await headers();
+  const requestCookies = await cookies();
+  const lesson = await getLesson(lessonId);
+  requestCookies.set("tuto-visited", lessonId, { httpOnly: true, path: "/" });
+  const response = NextResponse.json(
+    {
+      cookie: requestCookies.get("session")?.value ?? null,
+      header: requestHeaders.get("x-lesson-mode"),
+      lesson,
+      query: request.nextUrl.searchParams.get("mode"),
+    },
+    { status: 201, headers: { "x-route-kind": "lesson" } },
+  );
+  response.cookies.set("response-cookie", "next-response");
+  return response;
+}
+
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ lessonId: string }> },
+) {
+  const input = await request.json() as { title: string };
+  revalidateTag("route-handler-lessons", { expire: 0 });
+  return Response.json(
+    { lessonId: (await params).lessonId, method: request.method, title: input.title },
+    { status: 202 },
+  );
+}`,
+      language: "ts",
+      path: "app/api/lessons/[lessonId]/route.ts",
+    },
+    {
+      content: `export function GET() {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode("first:"));
+      controller.enqueue(encoder.encode("second"));
+      controller.close();
+    },
+  }), { headers: { "content-type": "text/plain; charset=utf-8" } });
+}`,
+      language: "ts",
+      path: "app/api/stream/route.ts",
     },
   ];
 }
@@ -695,7 +763,10 @@ describe("request-compiled Next RSC runtime", () => {
 
     const editedFiles = cacheComponentsWorkspace().map((file) =>
       file.path === "app/components/page.tsx"
-        ? { ...file, content: `${file.content}\nexport const lessonEdit = "v2";` }
+        ? {
+            ...file,
+            content: `${file.content}\nexport const lessonEdit = "v2";`,
+          }
         : file,
     );
     const edited = await compileNextRequestWorkspace(editedFiles, {
@@ -764,15 +835,144 @@ describe("request-compiled Next RSC runtime", () => {
     }
   });
 
+  test("executes real App Router Route Handlers with Next request APIs and cache invalidation", async () => {
+    const artifact = await compileNextRequestWorkspace(
+      routeHandlerWorkspace(),
+      {
+        serverReferenceHashSalt: actionSalt,
+        workspaceKey: "route-handler-lessons",
+      },
+    );
+    expect(artifact.router.routes).toEqual([]);
+    expect(
+      artifact.router.handlers.map((handler) => ({
+        handler: handler.handler,
+        pattern: handler.pattern,
+      })),
+    ).toEqual([
+      {
+        handler: "app/api/lessons/[lessonId]/route.ts",
+        pattern: "/api/lessons/[lessonId]",
+      },
+      { handler: "app/api/stream/route.ts", pattern: "/api/stream" },
+    ]);
+
+    const getLesson = () =>
+      invokeNextRouteHandler(artifact, {
+        headers: {
+          cookie: "session=student-a",
+          "x-lesson-mode": "guided",
+        },
+        method: "GET",
+        url: "/api/lessons/rsc?mode=practice",
+      });
+    const cold = await getLesson();
+    expect(cold.status).toBe(201);
+    expect(cold.headers.get("x-route-kind")).toBe("lesson");
+    expect(cold.headers.get("x-tuto-next-route-pattern")).toBe(
+      "/api/lessons/[lessonId]",
+    );
+    expect(cold.headers.get("set-cookie")).toContain("response-cookie");
+    expect(cold.headers.get("set-cookie")).toContain("tuto-visited=rsc");
+    expect(await cold.json()).toEqual({
+      cookie: "student-a",
+      header: "guided",
+      lesson: { lessonId: "rsc", reads: 1 },
+      query: "practice",
+    });
+    expect(cold.headers.get("x-tuto-next-cache")).toContain("miss=1");
+
+    const hot = await getLesson();
+    expect((await hot.json()).lesson.reads).toBe(1);
+    expect(hot.headers.get("x-tuto-next-cache")).toContain("hit=1");
+
+    const mutation = await invokeNextRouteHandler(artifact, {
+      body: JSON.stringify({ title: "Route Handlers" }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+      url: "/api/lessons/rsc",
+    });
+    expect(mutation.status).toBe(202);
+    expect(await mutation.json()).toEqual({
+      lessonId: "rsc",
+      method: "POST",
+      title: "Route Handlers",
+    });
+    expect(mutation.headers.get("x-tuto-next-cache")).toContain("revalidate=1");
+
+    const afterInvalidation = await getLesson();
+    expect((await afterInvalidation.json()).lesson.reads).toBe(2);
+    expect(afterInvalidation.headers.get("x-tuto-next-cache")).toContain(
+      "miss=1",
+    );
+  });
+
+  test("uses Next method defaults and transports streaming Route Handler responses", async () => {
+    const artifact = await compileNextRequestWorkspace(
+      routeHandlerWorkspace(),
+      {
+        serverReferenceHashSalt: actionSalt,
+        workspaceKey: "route-handler-methods",
+      },
+    );
+    const url = "/api/lessons/methods";
+
+    const head = await invokeNextRouteHandler(artifact, {
+      method: "HEAD",
+      url,
+    });
+    expect(head.status).toBe(201);
+    expect(await head.text()).toBe("");
+    expect(head.headers.get("x-route-kind")).toBe("lesson");
+
+    const options = await invokeNextRouteHandler(artifact, {
+      method: "OPTIONS",
+      url,
+    });
+    expect(options.status).toBe(204);
+    expect(options.headers.get("allow")).toBe("GET, HEAD, OPTIONS, POST");
+
+    const unsupported = await invokeNextRouteHandler(artifact, {
+      method: "DELETE",
+      url,
+    });
+    expect(unsupported.status).toBe(405);
+
+    const invalid = await invokeNextRouteHandler(artifact, {
+      method: "TRACE",
+      url,
+    });
+    expect(invalid.status).toBe(400);
+
+    const stream = await invokeNextRouteHandler(artifact, {
+      method: "GET",
+      url: "/api/stream",
+    });
+    expect(stream.headers.get("content-type")).toContain("text/plain");
+    expect(await stream.text()).toBe("first:second");
+  });
+
   test("serves the Tuto workbench template through the integrated request route", async () => {
     const template = getServerlessNextjsRuntimeTemplate();
     expect(template).toBeDefined();
-    const requestWorkbench = (requestPath: string) =>
+    const requestWorkbench = (
+      requestPath: string,
+      options: {
+        body?: string;
+        headers?: Record<string, string>;
+        method?: string;
+      } = {},
+    ) =>
       requestRoute(
         new Request("http://tuto.local/api/serverless/nextjs-runtime/request", {
           body: JSON.stringify({
             files: template!.files,
-            request: { method: "GET", path: requestPath },
+            request: {
+              body: options.body,
+              headers: options.headers,
+              method: options.method ?? "GET",
+              path: requestPath,
+            },
             workspaceKey: "workbench-checkpoint",
           }),
           headers: { "content-type": "application/json" },
@@ -806,6 +1006,43 @@ describe("request-compiled Next RSC runtime", () => {
     expect(hotCache.logs.some((log) => log.message.includes("hit=2"))).toBe(
       true,
     );
+
+    const apiResult = (await (
+      await requestWorkbench("/api/lessons/rsc?mode=practice", {
+        headers: {
+          cookie: "session=workbench-student",
+          "x-request-id": "request-42",
+        },
+      })
+    ).json()) as {
+      logs: Array<{ message: string }>;
+      response: { body: string; headers: Record<string, string> };
+    };
+    expect(JSON.parse(apiResult.response.body)).toEqual({
+      lesson: { lessonId: "rsc", reads: 1 },
+      mode: "practice",
+      requestId: "request-42",
+      session: "workbench-student",
+    });
+    expect(apiResult.response.headers["set-cookie"]).toContain(
+      "last-lesson=rsc",
+    );
+    expect(
+      apiResult.logs.some((log) => log.message.includes("2 Route Handler")),
+    ).toBe(true);
+
+    const apiMutation = (await (
+      await requestWorkbench("/api/lessons/rsc", {
+        body: JSON.stringify({ title: "Web responses" }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      })
+    ).json()) as { response: { body: string; status: number } };
+    expect(apiMutation.response.status).toBe(202);
+    expect(JSON.parse(apiMutation.response.body)).toEqual({
+      lessonId: "rsc",
+      saved: "Web responses",
+    });
   });
 
   test("rejects a server-only dependency below a client boundary", async () => {

@@ -1,12 +1,19 @@
 import path from "node:path";
 import type {
   NextRouteDefinition,
+  NextRouteHandlerDefinition,
   NextRouteManifest,
   NextRouteParam,
 } from "./artifact";
 
 const sourceExtensions = [".tsx", ".ts", ".jsx", ".js"] as const;
-type RouteFileName = "error" | "layout" | "loading" | "not-found" | "page";
+type RouteFileName =
+  | "error"
+  | "layout"
+  | "loading"
+  | "not-found"
+  | "page"
+  | "route";
 
 function routeFile(
   paths: Set<string>,
@@ -105,7 +112,10 @@ function segmentRank(segment: string) {
   return 4;
 }
 
-function compareRoutes(left: NextRouteDefinition, right: NextRouteDefinition) {
+function compareRoutes(
+  left: Pick<NextRouteDefinition, "pattern">,
+  right: Pick<NextRouteDefinition, "pattern">,
+) {
   const leftSegments = left.pattern.split("/").filter(Boolean);
   const rightSegments = right.pattern.split("/").filter(Boolean);
   for (
@@ -133,9 +143,14 @@ export function buildNextRouteManifest(
       modulePath.endsWith(`/page${extension}`),
     ),
   );
-  if (pagePaths.length === 0) {
+  const handlerPaths = [...paths].filter((modulePath) =>
+    sourceExtensions.some((extension) =>
+      modulePath.endsWith(`/route${extension}`),
+    ),
+  );
+  if (pagePaths.length === 0 && handlerPaths.length === 0) {
     throw new Error(
-      "The Next workspace requires at least one app/**/page file.",
+      "The Next workspace requires at least one app/**/page or app/**/route file.",
     );
   }
 
@@ -163,6 +178,14 @@ export function buildNextRouteManifest(
     };
   });
 
+  const handlers = handlerPaths.map((handler): NextRouteHandlerDefinition => {
+    const directory = path.posix.dirname(handler);
+    const { matcher, pattern } = matcherFor(
+      directory === "app" ? [] : directory.slice(4).split("/"),
+    );
+    return { handler, matcher, pattern };
+  });
+
   const patterns = new Map<string, string>();
   for (const route of routes) {
     const existing = patterns.get(route.pattern);
@@ -173,9 +196,20 @@ export function buildNextRouteManifest(
     }
     patterns.set(route.pattern, route.page);
   }
+  for (const route of handlers) {
+    const existing = patterns.get(route.pattern);
+    if (existing) {
+      throw new Error(
+        `Routes ${existing} and ${route.handler} resolve to the same URL pattern ${route.pattern}.`,
+      );
+    }
+    patterns.set(route.pattern, route.handler);
+  }
   routes.sort(compareRoutes);
+  handlers.sort(compareRoutes);
 
   return {
+    handlers,
     ...(routeFile(paths, "app", "layout")
       ? { rootLayout: routeFile(paths, "app", "layout") }
       : {}),
@@ -186,8 +220,10 @@ export function buildNextRouteManifest(
   };
 }
 
-export function matchNextRoute(manifest: NextRouteManifest, url: URL) {
-  for (const route of manifest.routes) {
+function matchDefinitions<
+  T extends Pick<NextRouteDefinition, "matcher" | "pattern">,
+>(definitions: T[], url: URL) {
+  for (const route of definitions) {
     const match = new RegExp(route.matcher.source).exec(url.pathname);
     if (!match) continue;
     const params: Record<string, string | string[] | undefined> = {};
@@ -203,6 +239,14 @@ export function matchNextRoute(manifest: NextRouteManifest, url: URL) {
     return { params, route };
   }
   return null;
+}
+
+export function matchNextRoute(manifest: NextRouteManifest, url: URL) {
+  return matchDefinitions(manifest.routes, url);
+}
+
+export function matchNextRouteHandler(manifest: NextRouteManifest, url: URL) {
+  return matchDefinitions(manifest.handlers, url);
 }
 
 export function nextSearchParams(url: URL) {

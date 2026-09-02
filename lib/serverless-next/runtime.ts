@@ -12,6 +12,12 @@ export type NextRuntimeRequest = {
   url?: string;
 };
 
+export type NextRouteHandlerRequest = NextRuntimeRequest & {
+  body?: string | Uint8Array;
+  headers?: HeadersInit;
+  method?: string;
+};
+
 async function flightToHtml(
   artifact: NextRequestArtifact,
   result: NextFlightWorkerResult,
@@ -218,4 +224,40 @@ export async function invokeNextServerAction(
     },
     status: result.status,
   });
+}
+
+export async function invokeNextRouteHandler(
+  artifact: NextRequestArtifact,
+  options: NextRouteHandlerRequest = {},
+) {
+  const headers = new Headers(options.headers);
+  const body =
+    typeof options.body === "string"
+      ? Buffer.from(options.body)
+      : options.body
+        ? Buffer.from(options.body)
+        : undefined;
+  const result = await getNextRscWorkerPool().invokeRouteHandler(artifact, {
+    ...(body ? { bodyBase64: body.toString("base64") } : {}),
+    headers: [...headers.entries()],
+    method: (options.method ?? "GET").toUpperCase(),
+    url: options.url ?? "/",
+  });
+  const responseHeaders = new Headers(result.headers);
+  responseHeaders.set(
+    "x-tuto-next-cache",
+    `hit=${result.cacheMetrics.hits}; stale=${result.cacheMetrics.staleHits}; miss=${result.cacheMetrics.misses}; write=${result.cacheMetrics.writes}; revalidate=${result.cacheMetrics.revalidations}`,
+  );
+  responseHeaders.set("x-tuto-next-generation", artifact.generation);
+  if (result.routePattern) {
+    responseHeaders.set("x-tuto-next-route-pattern", result.routePattern);
+  }
+  return new Response(
+    result.body.length > 0 ? Uint8Array.from(result.body) : null,
+    {
+      headers: responseHeaders,
+      status: result.status,
+      statusText: result.statusText,
+    },
+  );
 }
