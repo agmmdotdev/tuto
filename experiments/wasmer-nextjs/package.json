@@ -1,0 +1,14 @@
+{
+  "name": "tuto-wasmer-nextjs-benchmark",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "smoke": "node --experimental-wasm-jspi smoke.mjs",
+    "smoke:production:host": "node host-production-smoke.mjs",
+    "benchmark": "node --experimental-wasm-jspi benchmark.mjs",
+    "benchmark:production": "node --experimental-wasm-jspi production-benchmark.mjs"
+  },
+  "dependencies": {
+    "@wasmer/sdk": "0.11.0"
+  }
+}

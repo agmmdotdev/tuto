@@ -1,0 +1,73 @@
+{
+  "responses": {
+    "first": {
+      "status": 200,
+      "contentType": "text/html; charset=utf-8",
+      "bytes": 5870,
+      "snapshot": {
+        "value": 0,
+        "cacheExecutions": 1
+      }
+    },
+    "second": {
+      "status": 200,
+      "contentType": "text/html; charset=utf-8",
+      "bytes": 5870,
+      "snapshot": {
+        "value": 0,
+        "cacheExecutions": 1
+      }
+    },
+    "action": {
+      "status": 200,
+      "contentType": "text/html; charset=utf-8",
+      "bytes": 4979,
+      "snapshot": {
+        "value": 1,
+        "cacheExecutions": 2
+      }
+    },
+    "afterAction": {
+      "status": 200,
+      "contentType": "text/html; charset=utf-8",
+      "bytes": 5870,
+      "snapshot": {
+        "value": 1,
+        "cacheExecutions": 3
+      }
+    },
+    "afterActionHit": {
+      "status": 200,
+      "contentType": "text/html; charset=utf-8",
+      "bytes": 5870,
+      "snapshot": {
+        "value": 1,
+        "cacheExecutions": 3
+      }
+    }
+  },
+  "timings": {
+    "firstMs": 711.22,
+    "secondMs": 61.29,
+    "actionMs": 110.27,
+    "afterActionMs": 58.16,
+    "afterActionHitMs": 28.53
+  },
+  "cacheDebugLines": [
+    "DefaultCacheHandler: get [\"BmOCRlCGV3LIHcPokIbDR\",\"80cadba99275da13e85be0218897eb4c803df0f9b8\",[]] not found",
+    "DefaultCacheHandler: set [\"BmOCRlCGV3LIHcPokIbDR\",\"80cadba99275da13e85be0218897eb4c803df0f9b8\",[]] start",
+    "DefaultCacheHandler: set [\"BmOCRlCGV3LIHcPokIbDR\",\"80cadba99275da13e85be0218897eb4c803df0f9b8\",[]] done",
+    "DefaultCacheHandler: get [\"BmOCRlCGV3LIHcPokIbDR\",\"80cadba99275da13e85be0218897eb4c803df0f9b8\",[]] found {",
+    "DefaultCacheHandler: getExpiration {",
+    "DefaultCacheHandler: updateTags { tags: [ 'tuto-counter' ], timestamp: 1788332607861 }",
+    "DefaultCacheHandler: get [\"BmOCRlCGV3LIHcPokIbDR\",\"80cadba99275da13e85be0218897eb4c803df0f9b8\",[]] had expired tag",
+    "DefaultCacheHandler: set [\"BmOCRlCGV3LIHcPokIbDR\",\"80cadba99275da13e85be0218897eb4c803df0f9b8\",[]] start",
+    "DefaultCacheHandler: set [\"BmOCRlCGV3LIHcPokIbDR\",\"80cadba99275da13e85be0218897eb4c803df0f9b8\",[]] done",
+    "DefaultCacheHandler: updateTags { tags: [ 'tuto-counter' ], timestamp: 1788332607882 }",
+    "DefaultCacheHandler: get [\"BmOCRlCGV3LIHcPokIbDR\",\"80cadba99275da13e85be0218897eb4c803df0f9b8\",[]] had expired tag",
+    "DefaultCacheHandler: set [\"BmOCRlCGV3LIHcPokIbDR\",\"80cadba99275da13e85be0218897eb4c803df0f9b8\",[]] start",
+    "DefaultCacheHandler: set [\"BmOCRlCGV3LIHcPokIbDR\",\"80cadba99275da13e85be0218897eb4c803df0f9b8\",[]] done",
+    "DefaultCacheHandler: get [\"BmOCRlCGV3LIHcPokIbDR\",\"80cadba99275da13e85be0218897eb4c803df0f9b8\",[]] found {",
+    "DefaultCacheHandler: getExpiration {"
+  ]
+}

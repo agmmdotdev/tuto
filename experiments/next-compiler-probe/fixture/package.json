@@ -1,0 +1,18 @@
+{
+  "name": "tuto-next-compiler-feature-fixture",
+  "private": true,
+  "scripts": {
+    "build": "next build --webpack",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "16.2.6",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.37",
+    "@types/react": "19.2.18",
+    "typescript": "5.9.3"
+  }
+}

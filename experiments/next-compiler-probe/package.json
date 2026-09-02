@@ -1,0 +1,15 @@
+{
+  "name": "tuto-next-internal-compiler-probe",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "install:fixtures": "npm --prefix fixture ci && npm --prefix cache-runtime-fixture ci",
+    "probe": "node compiler-probe.mjs",
+    "build": "npm --prefix fixture run build",
+    "build:fixed-actions": "env NEXT_SERVER_ACTIONS_ENCRYPTION_KEY=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY= npm --prefix fixture run build",
+    "build:cache": "npm --prefix cache-runtime-fixture run build",
+    "inspect": "node inspect-build.mjs",
+    "runtime": "node runtime-smoke.mjs",
+    "runtime:cache": "node cache-runtime-smoke.mjs"
+  }
+}

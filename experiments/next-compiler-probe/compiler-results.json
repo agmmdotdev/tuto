@@ -1,0 +1,366 @@
+{
+  "environment": {
+    "node": "v24.19.0",
+    "next": "16.2.6",
+    "platform": "linux-x64"
+  },
+  "timings": {
+    "loadBindingsMs": 74.32
+  },
+  "transforms": {
+    "server-component": {
+      "ok": true,
+      "expectedError": false,
+      "wallMs": 26.49,
+      "inputBytes": 164,
+      "outputBytes": 438,
+      "actionIds": [],
+      "rscMetadata": {
+        "type": "server",
+        "clientRefs": [],
+        "isClientRef": false
+      },
+      "registersServerReference": false,
+      "validatesServerEntryExports": false,
+      "usesCacheWrapper": false,
+      "output": "import { jsxDEV as _jsxDEV } from \"react/jsx-dev-runtime\";\nexport default async function Page() {\n    const value = await Promise.resolve(\"server-component\");\n    return /*#__PURE__*/ _jsxDEV(\"h1\", {\n        children: value\n    }, void 0, false, {\n        fileName: \"/workspace/scratch/93a784955aaa/tuto/experiments/next-compiler-probe/fixture/app/virtual-server-page.tsx\",\n        lineNumber: 4,\n        columnNumber: 16\n    }, this);\n}\n"
+    },
+    "client-component-seen-from-rsc": {
+      "ok": true,
+      "expectedError": false,
+      "wallMs": 7.49,
+      "inputBytes": 193,
+      "outputBytes": 261,
+      "actionIds": [],
+      "rscMetadata": {
+        "type": "client",
+        "clientRefs": [
+          "default"
+        ],
+        "clientEntryType": "auto",
+        "isClientRef": true
+      },
+      "registersServerReference": false,
+      "validatesServerEntryExports": false,
+      "usesCacheWrapper": false,
+      "output": "/* __next_internal_client_entry_do_not_use__ default auto */ const { createProxy } = require(\"private-next-rsc-mod-ref-proxy\");\nmodule.exports = createProxy(\"/workspace/scratch/93a784955aaa/tuto/experiments/next-compiler-probe/fixture/app/virtual-client.tsx\");\n"
+    },
+    "client-component-browser": {
+      "ok": true,
+      "expectedError": false,
+      "wallMs": 6.79,
+      "inputBytes": 193,
+      "outputBytes": 748,
+      "actionIds": [],
+      "rscMetadata": {
+        "type": "client",
+        "isClientRef": true
+      },
+      "registersServerReference": false,
+      "validatesServerEntryExports": false,
+      "usesCacheWrapper": false,
+      "output": "/* __next_internal_client_entry_do_not_use__ default auto */ import { _ as _sliced_to_array } from \"@swc/helpers/_/_sliced_to_array\";\nimport { jsxDEV as _jsxDEV } from \"react/jsx-dev-runtime\";\nvar _s = $RefreshSig$();\nimport { useState } from \"react\";\nexport default function Counter() {\n    _s();\n    var _useState = _sliced_to_array(useState(0), 1), count = _useState[0];\n    return /*#__PURE__*/ _jsxDEV(\"button\", {\n        children: count\n    }, void 0, false, {\n        fileName: \"/workspace/scratch/93a784955aaa/tuto/experiments/next-compiler-probe/fixture/app/virtual-client.tsx\",\n        lineNumber: 6,\n        columnNumber: 16\n    }, this);\n}\n_s(Counter, \"Y89bt/pi8lrdHE1hdS9fijgV/R0=\");\n_c = Counter;\nvar _c;\n$RefreshReg$(_c, \"Counter\");\n"
+    },
+    "client-imports-server-only-graph-violation": {
+      "ok": false,
+      "expectedError": false,
+      "wallMs": 5.77,
+      "error": "  x You're importing a module that depends on \"server-only\" into a React Client Component module. This API is only available in Server Components but one of its parents is marked with \"use client\", so this module is also a Client Component.\n  | Learn more: https://nextjs.org/docs/app/building-your-application/rendering\n  |\n\n   ,-[/workspace/scratch/93a784955aaa/tuto/experiments/next-compiler-probe/fixture/app/invalid-client.tsx:3:1]\n 1 | \n 2 |       \"use client\";\n 3 |       import \"server-only\";\n   :       ^^^^^^^^^^^^^^^^^^^^^\n 4 |       export default function InvalidClient() {\n 5 |         return <p>Direct SWC does not resolve the forbidden import</p>;\n 6 |       }\n   `----\n"
+    },
+    "server-action-file": {
+      "ok": true,
+      "expectedError": false,
+      "wallMs": 3.01,
+      "inputBytes": 212,
+      "outputBytes": 715,
+      "actionIds": [
+        "40210b4a523945c5533c0062d3246bdb6459289909",
+        "40b8d95cc5989f24225c0c81ebbdb736c5e8884bc9"
+      ],
+      "actionMetadata": {
+        "40210b4a523945c5533c0062d3246bdb6459289909": {
+          "name": "createPost"
+        },
+        "40b8d95cc5989f24225c0c81ebbdb736c5e8884bc9": {
+          "name": "deletePost"
+        }
+      },
+      "rscMetadata": {
+        "type": "server",
+        "actionIds": {
+          "40210b4a523945c5533c0062d3246bdb6459289909": {
+            "name": "createPost"
+          },
+          "40b8d95cc5989f24225c0c81ebbdb736c5e8884bc9": {
+            "name": "deletePost"
+          }
+        },
+        "clientRefs": [],
+        "isClientRef": false
+      },
+      "registersServerReference": true,
+      "validatesServerEntryExports": true,
+      "usesCacheWrapper": false,
+      "output": "/* __next_internal_action_entry_do_not_use__ {\"40210b4a523945c5533c0062d3246bdb6459289909\":{\"name\":\"createPost\"},\"40b8d95cc5989f24225c0c81ebbdb736c5e8884bc9\":{\"name\":\"deletePost\"}} */ import { registerServerReference } from \"private-next-rsc-server-reference\";\nexport async function createPost(formData) {\n    return formData.get(\"title\");\n}\nexport async function deletePost(id) {\n    return id;\n}\nimport { ensureServerEntryExports } from \"private-next-rsc-action-validate\";\nensureServerEntryExports([\n    createPost,\n    deletePost\n]);\nregisterServerReference(createPost, \"40210b4a523945c5533c0062d3246bdb6459289909\", null);\nregisterServerReference(deletePost, \"40b8d95cc5989f24225c0c81ebbdb736c5e8884bc9\", null);\n"
+    },
+    "inline-server-action": {
+      "ok": true,
+      "expectedError": false,
+      "wallMs": 2.04,
+      "inputBytes": 247,
+      "outputBytes": 1138,
+      "actionIds": [
+        "40666a0c9ac2aacb37893a95f4bd8282c35d379eae"
+      ],
+      "actionMetadata": {
+        "40666a0c9ac2aacb37893a95f4bd8282c35d379eae": {
+          "name": "$$RSC_SERVER_ACTION_0"
+        }
+      },
+      "rscMetadata": {
+        "type": "server",
+        "actionIds": {
+          "40666a0c9ac2aacb37893a95f4bd8282c35d379eae": {
+            "name": "$$RSC_SERVER_ACTION_0"
+          }
+        },
+        "clientRefs": [],
+        "isClientRef": false
+      },
+      "registersServerReference": true,
+      "validatesServerEntryExports": false,
+      "usesCacheWrapper": false,
+      "output": "import { jsxDEV as _jsxDEV } from \"react/jsx-dev-runtime\";\nimport { registerServerReference } from \"private-next-rsc-server-reference\";\nexport const $$RSC_SERVER_ACTION_0 = async function save(formData) {\n    return formData.get(\"title\");\n};\nregisterServerReference($$RSC_SERVER_ACTION_0, \"40666a0c9ac2aacb37893a95f4bd8282c35d379eae\", null);\n/* __next_internal_action_entry_do_not_use__ {\"40666a0c9ac2aacb37893a95f4bd8282c35d379eae\":{\"name\":\"$$RSC_SERVER_ACTION_0\"}} */ export default async function Page() {\n    var save = $$RSC_SERVER_ACTION_0;\n    return /*#__PURE__*/ _jsxDEV(\"form\", {\n        action: save,\n        children: /*#__PURE__*/ _jsxDEV(\"button\", {\n            children: \"Save\"\n        }, void 0, false, {\n            fileName: \"/workspace/scratch/93a784955aaa/tuto/experiments/next-compiler-probe/fixture/app/virtual-inline/page.tsx\",\n            lineNumber: 7,\n            columnNumber: 36\n        }, this)\n    }, void 0, false, {\n        fileName: \"/workspace/scratch/93a784955aaa/tuto/experiments/next-compiler-probe/fixture/app/virtual-inline/page.tsx\",\n        lineNumber: 7,\n        columnNumber: 16\n    }, this);\n}\n"
+    },
+    "use-cache-function-and-component": {
+      "ok": true,
+      "expectedError": false,
+      "wallMs": 2.65,
+      "inputBytes": 462,
+      "outputBytes": 1846,
+      "actionIds": [
+        "c08ee0191738f564306e8fb5b5fb97dfd464130f89",
+        "c0e1c2dc88165985377c11ae14373aaabc08ccfb1d"
+      ],
+      "actionMetadata": {
+        "c08ee0191738f564306e8fb5b5fb97dfd464130f89": {
+          "name": "$$RSC_SERVER_CACHE_0"
+        },
+        "c0e1c2dc88165985377c11ae14373aaabc08ccfb1d": {
+          "name": "$$RSC_SERVER_CACHE_1"
+        }
+      },
+      "rscMetadata": {
+        "type": "server",
+        "actionIds": {
+          "c08ee0191738f564306e8fb5b5fb97dfd464130f89": {
+            "name": "$$RSC_SERVER_CACHE_0"
+          },
+          "c0e1c2dc88165985377c11ae14373aaabc08ccfb1d": {
+            "name": "$$RSC_SERVER_CACHE_1"
+          }
+        },
+        "clientRefs": [],
+        "isClientRef": false
+      },
+      "registersServerReference": true,
+      "validatesServerEntryExports": false,
+      "usesCacheWrapper": true,
+      "output": "import { jsx as _jsx } from \"react/jsx-runtime\";\nimport { registerServerReference } from \"private-next-rsc-server-reference\";\nimport { cache as $$cache__ } from \"private-next-rsc-cache-wrapper\";\nimport { cache as $$reactCache__ } from \"react\";\n/* __next_internal_action_entry_do_not_use__ {\"c08ee0191738f564306e8fb5b5fb97dfd464130f89\":{\"name\":\"$$RSC_SERVER_CACHE_0\"},\"c0e1c2dc88165985377c11ae14373aaabc08ccfb1d\":{\"name\":\"$$RSC_SERVER_CACHE_1\"}} */ import { cacheLife, cacheTag } from \"next/cache\";\nconst $$RSC_SERVER_CACHE_0_INNER = async function getPost(id) {\n    cacheLife(\"minutes\");\n    cacheTag(\"post-\" + id);\n    return {\n        id,\n        title: \"cached\"\n    };\n};\nexport var $$RSC_SERVER_CACHE_0 = $$reactCache__(function getPost() {\n    return $$cache__(\"default\", \"c08ee0191738f564306e8fb5b5fb97dfd464130f89\", 0, $$RSC_SERVER_CACHE_0_INNER, Array.prototype.slice.call(arguments, 0, 1));\n});\nregisterServerReference($$RSC_SERVER_CACHE_0, \"c08ee0191738f564306e8fb5b5fb97dfd464130f89\", null);\nObject[\"defineProperty\"]($$RSC_SERVER_CACHE_0, \"name\", {\n    value: \"getPost\"\n});\nexport var getPost = $$RSC_SERVER_CACHE_0;\nconst $$RSC_SERVER_CACHE_1_INNER = async function CachedCard({ id }) {\n    cacheLife({\n        stale: 30,\n        revalidate: 60,\n        expire: 300\n    });\n    return /*#__PURE__*/ _jsx(\"article\", {\n        children: (await getPost(id)).title\n    });\n};\nexport var $$RSC_SERVER_CACHE_1 = $$reactCache__(function CachedCard() {\n    return $$cache__(\"default\", \"c0e1c2dc88165985377c11ae14373aaabc08ccfb1d\", 0, $$RSC_SERVER_CACHE_1_INNER, Array.prototype.slice.call(arguments, 0, 1));\n});\nregisterServerReference($$RSC_SERVER_CACHE_1, \"c0e1c2dc88165985377c11ae14373aaabc08ccfb1d\", null);\nObject[\"defineProperty\"]($$RSC_SERVER_CACHE_1, \"name\", {\n    value: \"CachedCard\"\n});\nexport var CachedCard = $$RSC_SERVER_CACHE_1;\n"
+    },
+    "fixture-actions-after-addition": {
+      "ok": true,
+      "expectedError": false,
+      "wallMs": 2.11,
+      "inputBytes": 439,
+      "outputBytes": 1003,
+      "actionIds": [
+        "4096928209b8d504ec5855321a3fda18d9000f54a2",
+        "40d8d0c5cf50d8627e71f5bdc11dab9d86b3fb8a2f"
+      ],
+      "actionMetadata": {
+        "4096928209b8d504ec5855321a3fda18d9000f54a2": {
+          "name": "createLesson"
+        },
+        "40d8d0c5cf50d8627e71f5bdc11dab9d86b3fb8a2f": {
+          "name": "archiveLesson"
+        }
+      },
+      "rscMetadata": {
+        "type": "server",
+        "actionIds": {
+          "4096928209b8d504ec5855321a3fda18d9000f54a2": {
+            "name": "createLesson"
+          },
+          "40d8d0c5cf50d8627e71f5bdc11dab9d86b3fb8a2f": {
+            "name": "archiveLesson"
+          }
+        },
+        "clientRefs": [],
+        "isClientRef": false
+      },
+      "registersServerReference": true,
+      "validatesServerEntryExports": true,
+      "usesCacheWrapper": false,
+      "output": "/* __next_internal_action_entry_do_not_use__ {\"4096928209b8d504ec5855321a3fda18d9000f54a2\":{\"name\":\"createLesson\"},\"40d8d0c5cf50d8627e71f5bdc11dab9d86b3fb8a2f\":{\"name\":\"archiveLesson\"}} */ import { registerServerReference } from \"private-next-rsc-server-reference\";\nimport { redirect } from \"next/navigation\";\nexport async function createLesson(formData) {\n    const title = String(formData.get(\"title\") ?? \"missing\");\n    redirect(`/action-result?title=${encodeURIComponent(title)}`);\n}\nexport async function archiveLesson(formData) {\n    const title = String(formData.get(\"title\") ?? \"missing\");\n    redirect(`/action-result?title=archived-${encodeURIComponent(title)}`);\n}\nimport { ensureServerEntryExports } from \"private-next-rsc-action-validate\";\nensureServerEntryExports([\n    createLesson,\n    archiveLesson\n]);\nregisterServerReference(createLesson, \"4096928209b8d504ec5855321a3fda18d9000f54a2\", null);\nregisterServerReference(archiveLesson, \"40d8d0c5cf50d8627e71f5bdc11dab9d86b3fb8a2f\", null);\n"
+    },
+    "fixture-actions-before-addition-simulated": {
+      "ok": true,
+      "expectedError": false,
+      "wallMs": 1.95,
+      "inputBytes": 283,
+      "outputBytes": 634,
+      "actionIds": [
+        "4096928209b8d504ec5855321a3fda18d9000f54a2"
+      ],
+      "actionMetadata": {
+        "4096928209b8d504ec5855321a3fda18d9000f54a2": {
+          "name": "createLesson"
+        }
+      },
+      "rscMetadata": {
+        "type": "server",
+        "actionIds": {
+          "4096928209b8d504ec5855321a3fda18d9000f54a2": {
+            "name": "createLesson"
+          }
+        },
+        "clientRefs": [],
+        "isClientRef": false
+      },
+      "registersServerReference": true,
+      "validatesServerEntryExports": true,
+      "usesCacheWrapper": false,
+      "output": "/* __next_internal_action_entry_do_not_use__ {\"4096928209b8d504ec5855321a3fda18d9000f54a2\":{\"name\":\"createLesson\"}} */ import { registerServerReference } from \"private-next-rsc-server-reference\";\nimport { redirect } from \"next/navigation\";\nexport async function createLesson(formData) {\n    const title = String(formData.get(\"title\") ?? \"missing\");\n    redirect(`/action-result?title=${encodeURIComponent(title)}`);\n}\nimport { ensureServerEntryExports } from \"private-next-rsc-action-validate\";\nensureServerEntryExports([\n    createLesson\n]);\nregisterServerReference(createLesson, \"4096928209b8d504ec5855321a3fda18d9000f54a2\", null);\n"
+    },
+    "fixture-new-route": {
+      "ok": true,
+      "expectedError": false,
+      "wallMs": 1.65,
+      "inputBytes": 335,
+      "outputBytes": 2004,
+      "actionIds": [],
+      "rscMetadata": {
+        "type": "server",
+        "clientRefs": [],
+        "isClientRef": false
+      },
+      "registersServerReference": false,
+      "validatesServerEntryExports": false,
+      "usesCacheWrapper": false,
+      "output": "import { jsxDEV as _jsxDEV } from \"react/jsx-dev-runtime\";\nimport { archiveLesson } from \"../actions\";\nexport default function NewStudentRoute() {\n    return /*#__PURE__*/ _jsxDEV(\"main\", {\n        children: [\n            /*#__PURE__*/ _jsxDEV(\"h1\", {\n                children: \"Student-created route\"\n            }, void 0, false, {\n                fileName: \"/workspace/scratch/93a784955aaa/tuto/experiments/next-compiler-probe/fixture/app/new-route/page.tsx\",\n                lineNumber: 6,\n                columnNumber: 7\n            }, this),\n            /*#__PURE__*/ _jsxDEV(\"form\", {\n                action: archiveLesson,\n                children: [\n                    /*#__PURE__*/ _jsxDEV(\"input\", {\n                        name: \"title\",\n                        defaultValue: \"new-action-worked\"\n                    }, void 0, false, {\n                        fileName: \"/workspace/scratch/93a784955aaa/tuto/experiments/next-compiler-probe/fixture/app/new-route/page.tsx\",\n                        lineNumber: 8,\n                        columnNumber: 9\n                    }, this),\n                    /*#__PURE__*/ _jsxDEV(\"button\", {\n                        type: \"submit\",\n                        children: \"Archive lesson\"\n                    }, void 0, false, {\n                        fileName: \"/workspace/scratch/93a784955aaa/tuto/experiments/next-compiler-probe/fixture/app/new-route/page.tsx\",\n                        lineNumber: 9,\n                        columnNumber: 9\n                    }, this)\n                ]\n            }, void 0, true, {\n                fileName: \"/workspace/scratch/93a784955aaa/tuto/experiments/next-compiler-probe/fixture/app/new-route/page.tsx\",\n                lineNumber: 7,\n                columnNumber: 7\n            }, this)\n        ]\n    }, void 0, true, {\n        fileName: \"/workspace/scratch/93a784955aaa/tuto/experiments/next-compiler-probe/fixture/app/new-route/page.tsx\",\n        lineNumber: 5,\n        columnNumber: 5\n    }, this);\n}\n"
+    },
+    "app-route-handler": {
+      "ok": true,
+      "expectedError": false,
+      "wallMs": 1.6,
+      "inputBytes": 264,
+      "outputBytes": 224,
+      "actionIds": [],
+      "rscMetadata": {
+        "type": "server",
+        "clientRefs": [],
+        "isClientRef": false
+      },
+      "registersServerReference": false,
+      "validatesServerEntryExports": false,
+      "usesCacheWrapper": false,
+      "output": "import { NextResponse } from \"next/server\";\nexport async function GET() {\n    return NextResponse.json({\n        ok: true\n    });\n}\nexport async function POST(request) {\n    return NextResponse.json(await request.json());\n}\n"
+    },
+    "pages-api-route": {
+      "ok": true,
+      "expectedError": false,
+      "wallMs": 1.02,
+      "inputBytes": 217,
+      "outputBytes": 108,
+      "actionIds": [],
+      "rscMetadata": {
+        "type": "client",
+        "isClientRef": false
+      },
+      "registersServerReference": false,
+      "validatesServerEntryExports": false,
+      "usesCacheWrapper": false,
+      "output": "export default function handler(req, res) {\n    res.status(200).json({\n        method: req.method\n    });\n}\n"
+    },
+    "middleware": {
+      "ok": true,
+      "expectedError": false,
+      "wallMs": 0.9,
+      "inputBytes": 200,
+      "outputBytes": 185,
+      "actionIds": [],
+      "rscMetadata": {
+        "type": "client",
+        "isClientRef": false
+      },
+      "registersServerReference": false,
+      "validatesServerEntryExports": false,
+      "usesCacheWrapper": false,
+      "output": "import { NextResponse } from \"next/server\";\nexport function middleware() {\n    return NextResponse.next();\n}\nexport const config = {\n    matcher: [\n        \"/dashboard/:path*\"\n    ]\n};\n"
+    },
+    "invalid-sync-server-action": {
+      "ok": false,
+      "expectedError": true,
+      "wallMs": 1.22,
+      "error": "  x Server Actions must be async functions.\n\n   ,-[/workspace/scratch/93a784955aaa/tuto/experiments/next-compiler-probe/fixture/app/invalid-actions.ts:3:1]\n 1 | \n 2 |       \"use server\";\n 3 |       export function notAsync() {\n   :                       ^^^^^^^^\n 4 |         return \"invalid\";\n 5 |       }\n 6 |     \n   `----\n"
+    }
+  },
+  "analysis": {
+    "directories": {
+      "pagesDir": "/workspace/scratch/93a784955aaa/tuto/experiments/next-compiler-probe/fixture/pages",
+      "appDir": "/workspace/scratch/93a784955aaa/tuto/experiments/next-compiler-probe/fixture/app"
+    },
+    "appPage": {
+      "type": "app",
+      "hadUnsupportedValue": false
+    },
+    "appRouteHandler": {
+      "type": "app",
+      "hadUnsupportedValue": false
+    },
+    "pagesApi": {
+      "type": "pages",
+      "hadUnsupportedValue": false
+    },
+    "middleware": {
+      "type": "pages",
+      "getStaticProps": false,
+      "getServerSideProps": false,
+      "rsc": "server",
+      "config": {
+        "config": {}
+      },
+      "middleware": {
+        "matchers": [
+          {
+            "regexp": "^(?:\\/(_next\\/data\\/[^/]{1,}))?(?:\\/((?!_next\\/static|_next\\/image|favicon.ico).*))(\\.json|\\.rsc|\\.segments\\/.+\\.segment\\.rsc)?[\\/#\\?]?$",
+            "originalSource": "/((?!_next/static|_next/image|favicon.ico).*)"
+          }
+        ]
+      },
+      "hadUnsupportedValue": false
+    }
+  },
+  "routing": {
+    "normalized": "/posts/[id]",
+    "regexSource": "^\\/posts\\/([^/]+?)(?:\\/)?$",
+    "groups": {
+      "id": {
+        "pos": 1,
+        "repeat": false,
+        "optional": false
+      }
+    },
+    "positiveMatch": {
+      "id": "compiler-probe"
+    },
+    "negativeMatch": false
+  },
+  "entries": {
+    "dynamicPost": {
+      "import": "next-app-loader?name=app%2Fposts%2F%5Bid%5D%2Fpage&page=%2Fposts%2F%5Bid%5D%2Fpage&pagePath=private-next-app-dir%2Fposts%2F%5Bid%5D%2Fpage.tsx&appDir=%2Fworkspace%2Fscratch%2F93a784955aaa%2Ftuto%2Fexperiments%2Fnext-compiler-probe%2Ffixture%2Fapp&appPaths=%2Fposts%2F%5Bid%5D%2Fpage&allNormalizedAppPaths=%2Fpage&allNormalizedAppPaths=%2Fposts%2F%5Bid%5D%2Fpage&preferredRegion=&pageExtensions=tsx&pageExtensions=ts&pageExtensions=jsx&pageExtensions=js&assetPrefix=&rootDir=%2Fworkspace%2Fscratch%2F93a784955aaa%2Ftuto%2Fexperiments%2Fnext-compiler-probe%2Ffixture&basePath=&nextConfigOutput=standalone&middlewareConfig=e30%3D&isGlobalNotFoundEnabled=!",
+      "layer": "rsc"
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "tuto-student-next-app",
+  "private": true,
+  "scripts": {
+    "build": "next build --webpack",
+    "dev": "WATCHPACK_POLLING=true next dev --webpack",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@next/swc-wasm-nodejs": "16.2.6",
+    "next": "16.2.6",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  }
+}

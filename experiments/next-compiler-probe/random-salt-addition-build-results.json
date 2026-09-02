@@ -1,0 +1,150 @@
+{
+  "buildId": "NuF_8LJ5BJiY59coX52L4",
+  "routes": {
+    "appPathToRoute": {
+      "/_not-found/page": "/_not-found",
+      "/api/hello/route": "/api/hello",
+      "/action-result/page": "/action-result",
+      "/new-route/page": "/new-route",
+      "/page": "/",
+      "/posts/[id]/page": "/posts/[id]"
+    },
+    "appPathToBundle": {
+      "/_not-found/page": "app/_not-found/page.js",
+      "/api/hello/route": "app/api/hello/route.js",
+      "/action-result/page": "app/action-result/page.js",
+      "/new-route/page": "app/new-route/page.js",
+      "/page": "app/page.js",
+      "/posts/[id]/page": "app/posts/[id]/page.js"
+    },
+    "pagesPathToBundle": {
+      "/_app": "pages/_app.js",
+      "/_error": "pages/_error.js",
+      "/api/legacy": "pages/api/legacy.js",
+      "/_document": "pages/_document.js",
+      "/404": "pages/404.html"
+    },
+    "static": [
+      {
+        "page": "/",
+        "regex": "^/(?:/)?$"
+      },
+      {
+        "page": "/_not-found",
+        "regex": "^/_not\\-found(?:/)?$"
+      },
+      {
+        "page": "/action-result",
+        "regex": "^/action\\-result(?:/)?$"
+      },
+      {
+        "page": "/api/hello",
+        "regex": "^/api/hello(?:/)?$"
+      },
+      {
+        "page": "/api/legacy",
+        "regex": "^/api/legacy(?:/)?$"
+      },
+      {
+        "page": "/new-route",
+        "regex": "^/new\\-route(?:/)?$"
+      }
+    ],
+    "dynamic": [
+      {
+        "page": "/posts/[id]",
+        "regex": "^/posts/([^/]+?)(?:/)?$",
+        "routeKeys": {
+          "nxtPid": "nxtPid"
+        }
+      }
+    ]
+  },
+  "serverActions": {
+    "count": 2,
+    "node": {
+      "4099816625578715214d586c274bf8f5e95913d35b": {
+        "workers": {
+          "app/new-route/page": {
+            "moduleId": "6250",
+            "async": false
+          },
+          "app/page": {
+            "moduleId": "6250",
+            "async": false
+          }
+        },
+        "filename": "app/actions.ts",
+        "exportedName": "createLesson"
+      },
+      "40a9fda9ae8937bbbe74190be8db200cee7030f0c1": {
+        "workers": {
+          "app/new-route/page": {
+            "moduleId": "6250",
+            "async": false
+          },
+          "app/page": {
+            "moduleId": "6250",
+            "async": false
+          }
+        },
+        "filename": "app/actions.ts",
+        "exportedName": "archiveLesson"
+      }
+    },
+    "edge": {},
+    "encryptionKeySha256": "25e60d4f0498069309c59fa58abeba04633001ff5988a782e6ac359187a4431f"
+  },
+  "middleware": {
+    "names": [
+      "/"
+    ],
+    "sorted": [
+      "/"
+    ],
+    "entries": {
+      "/": {
+        "files": [
+          "server/edge-runtime-webpack.js",
+          "server/middleware.js"
+        ],
+        "entrypoint": "server/middleware.js",
+        "matchers": [
+          {
+            "regexp": "^(?:\\/(_next\\/data\\/[^/]{1,}))?(?:\\/((?!_next\\/static|_next\\/image|favicon.ico).*))(\\.json|\\.rsc|\\.segments\\/.+\\.segment\\.rsc)?[\\/#\\?]?$",
+            "originalSource": "/((?!_next/static|_next/image|favicon.ico).*)"
+          }
+        ],
+        "wasmCount": 0,
+        "assetCount": 0
+      }
+    }
+  },
+  "homeClientReferences": {
+    "clientModuleCount": 17,
+    "studentClientModules": [
+      {
+        "path": "app/components/counter.tsx",
+        "id": 1435,
+        "name": "*",
+        "chunks": [
+          "974",
+          "static/chunks/app/page-0c4640f0fad30f8b.js"
+        ],
+        "async": false
+      }
+    ],
+    "ssrMappingCount": 9,
+    "rscMappingCount": 9
+  },
+  "artifact": {
+    "files": 2165,
+    "bytes": 160385487,
+    "mebibytes": 152.96
+  },
+  "standalone": {
+    "files": 2024,
+    "bytes": 63190442,
+    "mebibytes": 60.26
+  }
+}
