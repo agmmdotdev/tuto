@@ -70,31 +70,33 @@ export function ServerlessNextjsRuntimeWorkbench({
   return (
     <ServerlessExpressIdeWorkbench
       config={{
-        storageKey: "tuto-serverless-nextjs-runtime-workspace-v1",
+        storageKey: "tuto-serverless-nextjs-runtime-workspace-v2",
         defaultFilePath: "app/page.tsx",
         htmlPreviewSource: "tuto-serverless-nextjs-runtime-preview-log",
-        title: "Stateless Next Runtime",
-        badge: "EXPERIMENTAL",
-        dependencyLabel: "Short-lived real Next process",
+        title: "Request-compiled Next RSC Runtime",
+        badge: "NEXT CORE",
+        dependencyLabel: "Next SWC + React Flight",
         explorerCopy:
-          "This route writes the saved snapshot into a temp workspace, boots a short-lived real Next runtime for one request, captures the HTML or API response, then tears the server down. The preview pane is a static SSR capture, not a live hydrated dev server.",
+          "This route compiles the saved snapshot with Next's own SWC transforms, renders genuine React Flight in a reusable bounded worker, then hydrates Client Components with a shared precompiled browser kernel. The current checkpoint supports GET /.",
         modeValue: "serverless",
-        runtimeValue: "next",
-        requestPathPlaceholder: "/api/hello",
+        runtimeValue: "next-rsc",
+        requestPathPlaceholder: "/",
         requestRoute: "/api/serverless/nextjs-runtime/request",
         typeLibrariesUrl: "/api/serverless/types",
         extraTypeLibraries: nextTypeLibraries,
         packageJsonSeed: "serverless-next-runtime-root-types",
         sessionId: "serverless-nextjs-runtime",
-        responseHeading: "Runtime Response",
+        responseHeading: "RSC Response",
         responseEmptyPreview:
-          "Send a request that returns HTML to inspect the static SSR preview.",
+          "Send GET / to compile, render, and hydrate the workspace.",
         responseEmptyBody: "Send a request to inspect the response.",
-        outputHeading: "Build and runtime output",
-        footerMode: "serverless-next-runtime",
+        outputHeading: "Artifact, compile, and runtime output",
+        footerMode: "request-compiled-next",
         footerHint: "Ctrl+S saves and reruns the active request",
-        previewTitle: "Stateless Next runtime preview",
-        showPreviewAsStatic: true,
+        previewTitle: "Hydrated Next RSC preview",
+        showPreviewAsStatic: false,
+        defaultCompiler: "esbuild",
+        compilerOptions: [{ value: "esbuild", label: "Next SWC" }],
       }}
       initialFiles={initialFiles}
     />

@@ -1,0 +1,154 @@
+import { createHash } from "node:crypto";
+import type { WorkspaceFile } from "@/lib/ide/types";
+
+export const NEXT_REQUEST_ARTIFACT_VERSION = 1 as const;
+
+export type NextCompiledModule = {
+  canonicalPath: string;
+  code: string;
+  dependencies: string[];
+  hash: string;
+  path: string;
+};
+
+export type NextClientModule = NextCompiledModule & {
+  id: string;
+};
+
+export type NextClientReference = {
+  async: boolean;
+  chunks: string[];
+  id: string;
+  name: string;
+};
+
+export type NextServerActionReference = {
+  exportName: string;
+  modulePath: string;
+};
+
+export type NextRequestArtifact = {
+  actionManifest: Record<string, NextServerActionReference>;
+  buildMetrics: {
+    browserTransformCacheHits: number;
+    browserTransforms: number;
+    durationMs: number;
+    serverTransformCacheHits: number;
+    serverTransforms: number;
+  };
+  clientBundle: {
+    code: string;
+    entryIds: string[];
+    hash: string;
+  };
+  clientModules: Record<string, NextClientModule>;
+  clientReferenceManifest: Record<string, NextClientReference>;
+  entries: {
+    layout?: string;
+    page: string;
+  };
+  generation: string;
+  kernelId: string;
+  nextVersion: string;
+  revision: string;
+  serverModules: Record<string, NextCompiledModule>;
+  version: typeof NEXT_REQUEST_ARTIFACT_VERSION;
+  workspaceKey: string;
+};
+
+export type NextArtifactDiff = {
+  actionManifestChanged: boolean;
+  clientBundleChanged: boolean;
+  clientManifestChanged: boolean;
+  changedClientModules: string[];
+  changedServerModules: string[];
+  removedClientModules: string[];
+  removedServerModules: string[];
+};
+
+const artifactCacheKey = Symbol.for("tuto.serverless-next.artifacts.v1");
+const maxArtifacts = 32;
+
+function artifactCache() {
+  const globals = globalThis as typeof globalThis & {
+    [artifactCacheKey]?: Map<string, NextRequestArtifact>;
+  };
+  globals[artifactCacheKey] ??= new Map();
+  return globals[artifactCacheKey];
+}
+
+export function createNextWorkspaceRevision(
+  files: WorkspaceFile[],
+  workspaceKey: string,
+  compilerFingerprint: string,
+) {
+  const hash = createHash("sha256");
+  hash.update(`${NEXT_REQUEST_ARTIFACT_VERSION}\0${compilerFingerprint}\0`);
+  hash.update(workspaceKey);
+  for (const file of [...files].sort((left, right) =>
+    left.path.localeCompare(right.path),
+  )) {
+    hash.update("\0");
+    hash.update(file.path.replaceAll("\\", "/"));
+    hash.update("\0");
+    hash.update(file.language);
+    hash.update("\0");
+    hash.update(file.content);
+  }
+  return hash.digest("hex");
+}
+
+export function putNextRequestArtifact(artifact: NextRequestArtifact) {
+  const cache = artifactCache();
+  cache.delete(artifact.revision);
+  cache.set(artifact.revision, artifact);
+  while (cache.size > maxArtifacts) {
+    const oldest = cache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    cache.delete(oldest);
+  }
+}
+
+export function getNextRequestArtifact(revision: string) {
+  const cache = artifactCache();
+  const artifact = cache.get(revision);
+  if (!artifact) return null;
+  cache.delete(revision);
+  cache.set(revision, artifact);
+  return artifact;
+}
+
+export function diffNextRequestArtifacts(
+  before: NextRequestArtifact,
+  after: NextRequestArtifact,
+): NextArtifactDiff {
+  const changed = <T extends { hash: string }>(
+    previous: Record<string, T>,
+    next: Record<string, T>,
+  ) =>
+    Object.keys(next)
+      .filter((path) => previous[path]?.hash !== next[path]?.hash)
+      .sort();
+  const removed = <T>(previous: Record<string, T>, next: Record<string, T>) =>
+    Object.keys(previous)
+      .filter((path) => !(path in next))
+      .sort();
+
+  return {
+    actionManifestChanged:
+      JSON.stringify(before.actionManifest) !==
+      JSON.stringify(after.actionManifest),
+    clientBundleChanged: before.clientBundle.hash !== after.clientBundle.hash,
+    clientManifestChanged:
+      JSON.stringify(before.clientReferenceManifest) !==
+      JSON.stringify(after.clientReferenceManifest),
+    changedClientModules: changed(before.clientModules, after.clientModules),
+    changedServerModules: changed(before.serverModules, after.serverModules),
+    removedClientModules: removed(before.clientModules, after.clientModules),
+    removedServerModules: removed(before.serverModules, after.serverModules),
+  };
+}
+
+export function clearNextRequestArtifactsForTests() {
+  artifactCache().clear();
+}

@@ -1,0 +1,131 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
+import type { NextRequestArtifact } from "./artifact";
+
+type WorkerReply = {
+  bodyBase64?: string;
+  error?: string;
+  id: string;
+  ok: boolean;
+};
+
+type Pending = {
+  reject(error: Error): void;
+  resolve(value: WorkerReply): void;
+  timeout: NodeJS.Timeout;
+};
+
+const workerPath = resolve(
+  /* turbopackIgnore: true */ process.cwd(),
+  "lib",
+  "serverless-next",
+  "rsc-runtime-worker.cjs",
+);
+const workerTimeoutMs = 15_000;
+
+export class NextRscWorkerPool {
+  private child: ChildProcess | undefined;
+  private installed = new Set<string>();
+  private pending = new Map<string, Pending>();
+
+  private getChild() {
+    if (this.child?.connected) return this.child;
+    const child = spawn(
+      process.execPath,
+      ["--conditions=react-server", "--max-old-space-size=256", workerPath],
+      {
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
+      },
+    );
+    child.on("message", (message: WorkerReply) => {
+      const pending = this.pending.get(message.id);
+      if (!pending) return;
+      clearTimeout(pending.timeout);
+      this.pending.delete(message.id);
+      if (message.ok) pending.resolve(message);
+      else
+        pending.reject(new Error(message.error ?? "Next RSC worker failed."));
+    });
+    child.once("exit", (code) => {
+      const error = new Error(
+        `Next RSC worker exited with code ${code ?? -1}.`,
+      );
+      for (const pending of this.pending.values()) {
+        clearTimeout(pending.timeout);
+        pending.reject(error);
+      }
+      this.pending.clear();
+      this.installed.clear();
+      this.child = undefined;
+    });
+    this.child = child;
+    return child;
+  }
+
+  private send(message: Record<string, unknown>) {
+    const child = this.getChild();
+    const id = randomUUID();
+    return new Promise<WorkerReply>((resolveReply, rejectReply) => {
+      const timeout = setTimeout(() => {
+        this.pending.delete(id);
+        rejectReply(new Error("Next RSC worker request timed out."));
+        this.child?.kill();
+      }, workerTimeoutMs);
+      this.pending.set(id, {
+        reject: rejectReply,
+        resolve: resolveReply,
+        timeout,
+      });
+      child.send({ ...message, id }, (error) => {
+        if (!error) return;
+        const pending = this.pending.get(id);
+        if (!pending) return;
+        clearTimeout(pending.timeout);
+        this.pending.delete(id);
+        rejectReply(error);
+      });
+    });
+  }
+
+  async render(artifact: NextRequestArtifact) {
+    if (!this.installed.has(artifact.generation)) {
+      await this.send({ artifact, type: "install" });
+      this.installed.add(artifact.generation);
+    }
+    const reply = await this.send({
+      generation: artifact.generation,
+      type: "render",
+    });
+    if (!reply.bodyBase64)
+      throw new Error("Next RSC worker returned no Flight payload.");
+    return Buffer.from(reply.bodyBase64, "base64");
+  }
+
+  async close() {
+    const child = this.child;
+    this.child = undefined;
+    this.installed.clear();
+    if (!child) return;
+    child.disconnect();
+    child.kill();
+  }
+}
+
+const poolKey = Symbol.for("tuto.serverless-next.rsc-worker-pool.v1");
+
+export function getNextRscWorkerPool() {
+  const globals = globalThis as typeof globalThis & {
+    [poolKey]?: NextRscWorkerPool;
+  };
+  globals[poolKey] ??= new NextRscWorkerPool();
+  return globals[poolKey];
+}
+
+export async function closeNextRscWorkerPoolForTests() {
+  const globals = globalThis as typeof globalThis & {
+    [poolKey]?: NextRscWorkerPool;
+  };
+  await globals[poolKey]?.close();
+  delete globals[poolKey];
+}

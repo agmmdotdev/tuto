@@ -5,10 +5,14 @@ import { existsSync, readFileSync } from "node:fs";
 
 const require = createRequire(import.meta.url);
 const projectRoot = process.cwd();
-const isVercel = process.env.VERCEL === "1";
-
+const enableNextRequestRuntimeTrace =
+  process.env.VERCEL !== "1" ||
+  process.env.TUTO_NEXT_REQUEST_RUNTIME_ENABLED === "1";
 function toProjectGlob(absoluteDirectoryPath: string) {
-  const relativePath = relative(projectRoot, absoluteDirectoryPath).replaceAll("\\", "/");
+  const relativePath = relative(projectRoot, absoluteDirectoryPath).replaceAll(
+    "\\",
+    "/",
+  );
   return `./${relativePath}/**/*`;
 }
 
@@ -103,20 +107,16 @@ const serverlessCompileTraceGlobs = [
 const serverlessExpressRequestTraceGlobs = [
   "./lib/serverless-express/**/*.cjs",
   "./node_modules/@esbuild/**/*",
-  ...collectRuntimePackageGlobs([
-    "esbuild",
-    "express",
-    "rolldown",
-  ]),
+  ...collectRuntimePackageGlobs(["esbuild", "express", "rolldown"]),
 ];
 
 const serverlessNextjsRuntimeRequestTraceGlobs = [
+  "./lib/serverless-next/**/*.cjs",
+  "./lib/serverless-next/**/*.generated.js",
+  "./lib/serverless-next/**/*.generated.json",
+  "./node_modules/@esbuild/**/*",
   "./lib/serverless-nextjs-runtime/**/*.cjs",
-  ...collectRuntimePackageGlobs([
-    "next",
-    "react",
-    "react-dom",
-  ]),
+  ...collectRuntimePackageGlobs(["next", "react", "react-dom"]),
 ];
 
 const serverlessTypeTraceGlobs = collectRuntimePackageGlobs([
@@ -134,28 +134,19 @@ const serverlessExpressTypeTraceGlobs = collectRuntimePackageGlobs([
 ]);
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: [
-    "127.0.0.1",
-    "::1",
-  ],
-  serverExternalPackages: [
-    "esbuild",
-  ],
+  allowedDevOrigins: ["127.0.0.1", "::1"],
+  serverExternalPackages: ["esbuild"],
   outputFileTracingIncludes: {
     "/api/serverless/compile": serverlessCompileTraceGlobs,
     "/api/serverless/expressjs/request": serverlessExpressRequestTraceGlobs,
     "/api/serverless/expressjs/types": serverlessExpressTypeTraceGlobs,
     "/api/serverless/next-lite/request": [
       "./node_modules/@esbuild/**/*",
-      ...collectRuntimePackageGlobs([
-        "esbuild",
-        "react",
-        "react-dom",
-      ]),
+      ...collectRuntimePackageGlobs(["esbuild", "react", "react-dom"]),
     ],
     "/api/serverless/tanstack-start/core-rpc": serverlessCompileTraceGlobs,
     "/api/serverless/types": serverlessTypeTraceGlobs,
-    ...(!isVercel
+    ...(enableNextRequestRuntimeTrace
       ? {
           "/api/serverless/nextjs-runtime/request":
             serverlessNextjsRuntimeRequestTraceGlobs,

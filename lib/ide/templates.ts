@@ -2227,17 +2227,17 @@ export default function PostPage({ params, searchParams }: PageProps) {
         path: "README.md",
         language: "md",
         description:
-          "A stateless real-Next runtime experiment using a short-lived temp workspace.",
+          "The supported surface and architecture of the request-compiled Next checkpoint.",
         content: `# Serverless Next Runtime Playground
 
-This route is an experiment in running a real Next app without keeping a long-lived session runtime alive.
+This checkpoint runs real Next compiler and React Server Components machinery without \`next build\`, \`next dev\`, or a server per student.
 
-- A saved file snapshot is written into a temp workspace
-- A short-lived child process boots Next for one request
-- The response is captured and returned to the workbench
-- The workspace is then abandoned for later cleanup
+- Next's SWC transform compiles Server and Client Component views
+- A shared precompiled browser kernel contains React, React DOM, and the Flight client
+- Reusable bounded workers render Flight and SSR HTML
+- An immutable generation is reused when the workspace is unchanged
 
-This is closer to real Next than the lightweight \`/serverless/nextjs\` route, but it is still request-scoped rather than an always-on dev server.`,
+Current checkpoint: root \`app/layout.tsx\`, root \`app/page.tsx\`, Client Components, Flight, SSR, and hydration. Nested routes, Route Handlers, Server Action dispatch, middleware/proxy, and Next cache APIs are deliberately not claimed yet.`,
       },
       {
         path: "package.json",
@@ -2288,9 +2288,8 @@ This is closer to real Next than the lightweight \`/serverless/nextjs\` route, b
       {
         path: "app/layout.tsx",
         language: "tsx",
-        description: "Root layout for the real runtime experiment.",
+        description: "Root Server Component layout compiled with Next SWC.",
         content: `import type { ReactNode } from "react";
-import "./globals.css";
 
 export default function RootLayout({
   children,
@@ -2299,8 +2298,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>
-        <div className="shell">{children}</div>
+      <body style={{ margin: 0, fontFamily: "system-ui", background: "#f4eee7" }}>
+        <div style={{ margin: "0 auto", maxWidth: 760, padding: 32 }}>
+          {children}
+        </div>
       </body>
     </html>
   );
@@ -2310,12 +2311,13 @@ export default function RootLayout({
       {
         path: "app/page.tsx",
         language: "tsx",
-        description: "A server component page for the runtime experiment.",
-        content: `import Link from "next/link";
+        description:
+          "An async Server Component importing a Client Component boundary.",
+        content: `import Counter from "./counter";
 
 async function getGreeting() {
   return {
-    text: "Hello from a real Next request runtime.",
+    text: "Hello from real Next core APIs.",
     renderedAt: new Date().toISOString(),
   };
 }
@@ -2324,62 +2326,48 @@ export default async function Page() {
   const greeting = await getGreeting();
 
   return (
-    <main className="panel">
-      <span className="eyebrow">Runtime experiment</span>
-      <h1>{greeting.text}</h1>
+    <main style={{ borderRadius: 24, background: "white", padding: 32 }}>
+      <span style={{ color: "#b34f24", fontWeight: 700 }}>RSC checkpoint</span>
+      <h1 style={{ fontSize: 42 }}>{greeting.text}</h1>
       <p>
-        This page is rendered by a short-lived Next process on the server. Save
-        the file, send a request, and the workbench will capture the fresh HTML.
+        This async page rendered through genuine React Flight. Edit this Server
+        Component and save: the Client Component bundle stays reusable.
       </p>
-      <div className="meta-grid">
-        <article>
-          <strong>Rendered at</strong>
-          <span>{greeting.renderedAt}</span>
-        </article>
-        <article>
-          <strong>API route</strong>
-          <span>Try GET /api/hello in the request panel.</span>
-        </article>
-        <article>
-          <strong>Tradeoff</strong>
-          <span>No persistent dev server or HMR.</span>
-        </article>
-      </div>
-      <Link className="cta" href="/api/hello">
-        Open the JSON route
-      </Link>
+      <p style={{ color: "#666" }}>Rendered at {greeting.renderedAt}</p>
+      <Counter initial={0} />
     </main>
   );
 }
 `,
       },
       {
-        path: "app/api/hello/route.ts",
-        language: "ts",
-        description: "A simple route handler for API request testing.",
-        content: `export async function GET() {
-  return Response.json({
-    ok: true,
-    message: "Hello from app/api/hello/route.ts",
-    timestamp: new Date().toISOString(),
-  });
-}
+        path: "app/counter.tsx",
+        language: "tsx",
+        description:
+          "A hydrated Client Component compiled from the same snapshot.",
+        content: `"use client";
 
-export async function POST(request: Request) {
-  const body = await request.json().catch(() => null);
+import { useState } from "react";
 
-  return Response.json({
-    ok: true,
-    echo: body,
-    timestamp: new Date().toISOString(),
-  });
+export default function Counter({ initial }: { initial: number }) {
+  const [count, setCount] = useState(initial);
+  return (
+    <button
+      data-client="counter"
+      onClick={() => setCount((value) => value + 1)}
+      style={{ marginTop: 18, border: 0, borderRadius: 999, padding: "12px 18px" }}
+    >
+      Client count: {count}
+    </button>
+  );
 }
 `,
       },
       {
         path: "app/globals.css",
         language: "css",
-        description: "Styles for the runtime experiment.",
+        description:
+          "Future CSS checkpoint; the current RSC slice uses inline styles and does not load this file.",
         content: `:root {
   color-scheme: light;
   --bg: #f3e6d5;

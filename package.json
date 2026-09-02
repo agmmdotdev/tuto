@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "build:serverless-tanstack-start-transform": "esbuild lib/serverless-tanstack-start/server-functions-transform.ts --bundle --platform=node --format=cjs --target=node22 --outfile=lib/serverless-tanstack-start/server-functions-transform.generated.cjs --external:@tanstack/router-plugin --external:@tanstack/start-plugin-core",
+    "build:serverless-next-kernel": "node scripts/build-serverless-next-kernel.mjs",
     "build:serverless-tanstack-start-runners": "node scripts/build-serverless-tanstack-start-runners.mjs",
     "build:serverless-tanstack-start-runtime": "yarn build:serverless-tanstack-start-transform && yarn build:serverless-tanstack-start-runners",
     "start": "next start",
@@ -15,6 +16,8 @@
     "measure:tanstack-start-kernels": "yarn build:serverless-tanstack-start-runtime && node scripts/measure-tanstack-start-kernels.mjs",
     "experiment:tanstack-real-runtime": "yarn build:serverless-tanstack-start-transform && node scripts/experiment-tanstack-real-runtime.mjs",
     "test:serverless-nextjs-runtime": "vitest run --config vitest.serverless-nextjs-runtime.config.mjs",
+    "test:serverless-next": "vitest run --config vitest.serverless-next.config.mjs",
+    "test:serverless-next-browser": "playwright test --config playwright.serverless-next.config.ts",
     "test:serverless-tanstack-start": "yarn build:serverless-tanstack-start-runtime && vitest run --config vitest.serverless-tanstack-start.config.mjs",
     "test:serverless-tanstack-start-browser": "yarn build:serverless-tanstack-start-runtime && playwright test --config playwright.serverless-tanstack-start.config.ts"
   },
