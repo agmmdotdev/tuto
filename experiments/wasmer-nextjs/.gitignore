@@ -1,0 +1,6 @@
+node_modules/
+.wasmer-cache/
+.wasmer-benchmark-cache/
+.wasmer-production-cache/
+fixture/node_modules/
+fixture/.next/

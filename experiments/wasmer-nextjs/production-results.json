@@ -1,0 +1,133 @@
+{
+  "environment": {
+    "node": "v24.19.0",
+    "platform": "linux-x64",
+    "logicalCpus": 9,
+    "edgePackage": "wasmer/edgejs@0.2.0",
+    "next": "16.2.6",
+    "sdk": "0.11.0",
+    "requiredNodeFlag": "--experimental-wasm-jspi",
+    "nextMode": "production-standalone"
+  },
+  "phases": {
+    "artifactRead": {
+      "wallMs": 73.21,
+      "cpuUserMs": 65.24,
+      "cpuSystemMs": 43.04,
+      "cpuTotalMs": 108.27,
+      "rssStartMiB": 42.01,
+      "rssEndMiB": 82.14,
+      "rssPeakMiB": 82.14,
+      "pssEndMiB": 63.09,
+      "privateEndMiB": 56.01,
+      "threadsEnd": 7
+    },
+    "clientAndSandbox": {
+      "wallMs": 3422.17,
+      "cpuUserMs": 3427,
+      "cpuSystemMs": 103.7,
+      "cpuTotalMs": 3530.7,
+      "rssStartMiB": 82.14,
+      "rssEndMiB": 219.09,
+      "rssPeakMiB": 327.15,
+      "pssEndMiB": 198.83,
+      "privateEndMiB": 190.62,
+      "threadsEnd": 11
+    },
+    "serverReady": {
+      "wallMs": 1686.16,
+      "cpuUserMs": 3033.99,
+      "cpuSystemMs": 215.6,
+      "cpuTotalMs": 3249.59,
+      "rssStartMiB": 219.59,
+      "rssEndMiB": 607.8,
+      "rssPeakMiB": 607.8,
+      "pssEndMiB": 585.98,
+      "privateEndMiB": 576.08,
+      "threadsEnd": 15
+    },
+    "pagesRequest": {
+      "wallMs": 757.72,
+      "cpuUserMs": 1566.22,
+      "cpuSystemMs": 309.33,
+      "cpuTotalMs": 1875.55,
+      "rssStartMiB": 607.92,
+      "rssEndMiB": 770.63,
+      "rssPeakMiB": 771.8,
+      "pssEndMiB": 748.82,
+      "privateEndMiB": 738.8,
+      "threadsEnd": 19
+    },
+    "steadyPagesRequest": {
+      "wallMs": 517,
+      "cpuUserMs": 488.04,
+      "cpuSystemMs": 180.38,
+      "cpuTotalMs": 668.42,
+      "rssStartMiB": 770.63,
+      "rssEndMiB": 820.82,
+      "rssPeakMiB": 820.82,
+      "pssEndMiB": 801.39,
+      "privateEndMiB": 791.38,
+      "threadsEnd": 19
+    },
+    "rscHtmlRequest": {
+      "wallMs": 321.86,
+      "cpuUserMs": 405.59,
+      "cpuSystemMs": 92.28,
+      "cpuTotalMs": 497.87,
+      "rssStartMiB": 823.32,
+      "rssEndMiB": 822.58,
+      "rssPeakMiB": 852.7,
+      "pssEndMiB": 800.65,
+      "privateEndMiB": 790.63,
+      "threadsEnd": 19
+    },
+    "coldTotalThroughFirstRsc": {
+      "wallMs": 6732.18,
+      "cpuUserMs": 8951.97,
+      "cpuSystemMs": 951.78,
+      "cpuTotalMs": 9903.75,
+      "rssStartMiB": 82.14,
+      "rssEndMiB": 822.58,
+      "rssPeakMiB": 852.82,
+      "pssEndMiB": 800.65,
+      "privateEndMiB": 790.63,
+      "threadsEnd": 19
+    }
+  },
+  "responses": {
+    "pages": {
+      "status": 200,
+      "containsMarker": true,
+      "bytes": 1202
+    },
+    "steadyPages": {
+      "status": 200,
+      "containsMarker": true,
+      "bytes": 1202
+    },
+    "rscHtml": {
+      "status": 500,
+      "containsMarker": false,
+      "bytes": 2138
+    }
+  },
+  "artifact": {
+    "fileCount": 1952,
+    "bytes": 28784607
+  },
+  "failure": {
+    "name": "AssertionError",
+    "message": "Expected values to be strictly equal:\n\n500 !== 200\n",
+    "stack": "AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n\n500 !== 200\n\n    at runProductionSandbox (file:///workspace/scratch/93a784955aaa/tuto/experiments/wasmer-nextjs/production-benchmark.mjs:100:12)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async file:///workspace/scratch/93a784955aaa/tuto/experiments/wasmer-nextjs/production-benchmark.mjs:46:3",
+    "logs": [
+      "[guest:stdout] \u001b[1m\u001b[38;2;173;127;168m▲ Next.js 16.2.6\u001b[39m\u001b[22m",
+      "[guest:stdout] - Local:         http://localhost:38289",
+      "[guest:stdout] - Network:       http://0.0.0.0:38289",
+      "[guest:stdout] \u001b[32m\u001b[1m✓\u001b[22m\u001b[39m Ready in 0ms",
+      "[guest:stderr] \u001b[31m\u001b[1m⨯\u001b[22m\u001b[39m RangeError: Maximum call stack size exceeded",
+      "[guest:stderr]     at Reflect.get (<anonymous>)"
+    ]
+  },
+  "completed": false
+}

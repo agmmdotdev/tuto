@@ -1,0 +1,48 @@
+{
+  "environment": {
+    "node": "v24.19.0",
+    "next": "16.2.6",
+    "bundler": "webpack",
+    "logicalCpus": 9
+  },
+  "successfulBuilds": [
+    {
+      "name": "baseline-one-action",
+      "wallMs": 82590,
+      "cpuUserMs": 98670,
+      "cpuSystemMs": 27470,
+      "reportedCompileMs": 17100,
+      "reportedTypeScriptMs": 6200,
+      "reportedStaticGenerationMs": 1606,
+      "appRouteCount": 5,
+      "serverActionCount": 1
+    },
+    {
+      "name": "new-route-and-new-action-random-salt",
+      "wallMs": 85800,
+      "cpuUserMs": 103240,
+      "cpuSystemMs": 30440,
+      "reportedCompileMs": 17200,
+      "reportedTypeScriptMs": 6400,
+      "reportedStaticGenerationMs": 1785,
+      "appRouteCount": 6,
+      "serverActionCount": 2
+    },
+    {
+      "name": "new-route-and-new-action-fixed-salt",
+      "wallMs": 78640,
+      "cpuUserMs": 95250,
+      "cpuSystemMs": 26530,
+      "reportedCompileMs": 16700,
+      "reportedTypeScriptMs": 5800,
+      "reportedStaticGenerationMs": 1280,
+      "appRouteCount": 6,
+      "serverActionCount": 2
+    }
+  ],
+  "notes": [
+    "Dependency installation and the failed TypeScript 7 auto-install build are excluded.",
+    "All successful builds ran on the same host and fixture.",
+    "The fixed salt is test-only and must be stored as a secret in production."
+  ]
+}

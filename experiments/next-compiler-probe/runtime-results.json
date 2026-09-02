@@ -1,0 +1,83 @@
+{
+  "responses": {
+    "home": {
+      "status": 200,
+      "bytes": 5145,
+      "contentType": "text/html; charset=utf-8",
+      "middlewareHeader": "hit",
+      "middlewarePath": "/"
+    },
+    "rscFlight": {
+      "status": 200,
+      "bytes": 3061,
+      "contentType": "text/x-component",
+      "middlewareHeader": "hit",
+      "middlewarePath": "/"
+    },
+    "dynamicRoute": {
+      "status": 200,
+      "bytes": 5031,
+      "contentType": "text/html; charset=utf-8",
+      "middlewareHeader": "hit",
+      "middlewarePath": "/posts/compiler-42"
+    },
+    "studentCreatedRoute": {
+      "status": 200,
+      "bytes": 5116,
+      "contentType": "text/html; charset=utf-8",
+      "middlewareHeader": "hit",
+      "middlewarePath": "/new-route"
+    },
+    "appRouteGet": {
+      "status": 200,
+      "bytes": 39,
+      "contentType": "application/json",
+      "middlewareHeader": "hit",
+      "middlewarePath": "/api/hello"
+    },
+    "appRoutePost": {
+      "status": 200,
+      "bytes": 59,
+      "contentType": "application/json",
+      "middlewareHeader": "hit",
+      "middlewarePath": "/api/hello"
+    },
+    "pagesApi": {
+      "status": 200,
+      "bytes": 35,
+      "contentType": "application/json; charset=utf-8",
+      "middlewareHeader": "hit",
+      "middlewarePath": "/api/legacy"
+    },
+    "serverAction": {
+      "status": 200,
+      "bytes": 4629,
+      "contentType": "text/html; charset=utf-8",
+      "middlewareHeader": "hit",
+      "middlewarePath": "/action-result",
+      "finalUrl": "http://127.0.0.1:40065/action-result?title=compiler-action-worked",
+      "actionField": "$ACTION_ID_4096928209b8d504ec5855321a3fda18d9000f54a2"
+    },
+    "studentCreatedAction": {
+      "status": 200,
+      "bytes": 4649,
+      "contentType": "text/html; charset=utf-8",
+      "middlewareHeader": "hit",
+      "middlewarePath": "/action-result",
+      "finalUrl": "http://127.0.0.1:40065/action-result?title=archived-new-action-worked",
+      "actionField": "$ACTION_ID_40d8d0c5cf50d8627e71f5bdc11dab9d86b3fb8a2f"
+    }
+  },
+  "timings": {
+    "serverReadyMs": 792.33,
+    "homeMs": 919.25,
+    "rscFlightMs": 42.27,
+    "dynamicRouteMs": 191.98,
+    "studentCreatedRouteMs": 29.79,
+    "appRouteGetMs": 41.88,
+    "appRoutePostMs": 27.45,
+    "pagesApiMs": 46.02,
+    "serverActionMs": 113.06,
+    "studentCreatedActionMs": 76.53
+  }
+}

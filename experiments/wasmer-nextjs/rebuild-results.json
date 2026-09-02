@@ -1,0 +1,72 @@
+{
+  "edit": {
+    "file": "fixture/app/rsc/page.js",
+    "beforeMarker": "rsc-v1",
+    "afterMarker": "rsc-v2-student-edit"
+  },
+  "warmBaselineBuild": {
+    "wallMs": 15260,
+    "cpuUserMs": 20620,
+    "cpuSystemMs": 3300,
+    "reportedCompileMs": 2500
+  },
+  "studentEditBuild": {
+    "wallMs": 16420,
+    "cpuUserMs": 21300,
+    "cpuSystemMs": 4290,
+    "reportedCompileMs": 2900
+  },
+  "serverActionBodyEditBuild": {
+    "wallMs": 16970,
+    "cpuUserMs": 22510,
+    "cpuSystemMs": 3030,
+    "reportedCompileMs": 2700
+  },
+  "selectedOutputComparison": {
+    "changed": [
+      {
+        "path": ".next/standalone/.next/server/app/rsc/page.js",
+        "beforeSha256": "c84b28ceb1d06b4ec09c849d69d88947ead90115eb6ae5fc572d38991835cc50",
+        "afterSha256": "c770a0132901507b65db77f9c02a13f8779d32e96f6b859f974ace426d07608f",
+        "afterBytes": 57817
+      }
+    ],
+    "unchanged": [
+      ".next/static/chunks/app/rsc/page-631fa8e964f56276.js",
+      ".next/standalone/.next/server/app/rsc/page_client-reference-manifest.js",
+      ".next/standalone/.next/server/app/rsc/page.js.nft.json",
+      ".next/standalone/.next/server/server-reference-manifest.json",
+      ".next/standalone/.next/server/app-paths-manifest.json"
+    ],
+    "stableServerActionId": "4090b179d7ad2f41eb46505a65b1288e7ec51037ac"
+  },
+  "serverActionBodyOutputComparison": {
+    "changed": {
+      "path": ".next/standalone/.next/server/app/rsc/page.js",
+      "beforeSha256": "c770a0132901507b65db77f9c02a13f8779d32e96f6b859f974ace426d07608f",
+      "afterSha256": "5127b2da0694a1ca935c4134aba8c8b7e4a5073abaaafb3098886da495465992",
+      "afterBytes": 57827
+    },
+    "serverReferenceManifestChanged": false,
+    "clientReferenceManifestChanged": false,
+    "clientChunkChanged": false,
+    "serverActionIdChanged": false
+  },
+  "nativeNodeControl": {
+    "serverReadyMs": 209.45,
+    "pagesMs": 154.77,
+    "rscMs": 56.5,
+    "serverActionAndRedirectMs": 27.95,
+    "pagesStatus": 200,
+    "rscStatus": 200,
+    "serverActionStatus": 200
+  },
+  "nativeNodeAfterActionEdit": {
+    "serverReadyMs": 210.37,
+    "pagesMs": 114.77,
+    "rscMs": 107.29,
+    "serverActionAndRedirectMs": 28.36,
+    "serverActionStatus": 200,
+    "finalPath": "/rsc?action=action-v2-server-action-worked"
+  }
+}
