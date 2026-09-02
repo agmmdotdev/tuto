@@ -13,6 +13,7 @@ import {
   compileNextRequestWorkspaceWithStatus,
 } from "../../lib/serverless-next/compiler";
 import { clearNextTransformCacheForTests } from "../../lib/serverless-next/next-compiler-adapter";
+import { clearNextCacheAdapterForTests } from "../../lib/serverless-next/cache-adapter";
 import {
   invokeNextServerAction,
   renderHydratableNextRequestArtifact,
@@ -161,10 +162,60 @@ export default function ActionButton() {
   ];
 }
 
+function cacheWorkspace(): WorkspaceFile[] {
+  return [
+    {
+      content: `export default function Layout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}`,
+      language: "tsx",
+      path: "app/layout.tsx",
+    },
+    {
+      content: `import { cache } from "react";
+import { unstable_cache } from "next/cache";
+let tagReads = 0;
+let pathReads = 0;
+let memoReads = 0;
+export const getMemoizedValue = cache(async () => ++memoReads);
+export const getTaggedValue = unstable_cache(async () => ++tagReads, ["tagged-value"], {
+  revalidate: 3600,
+  tags: ["lesson-posts"],
+});
+export const getPathValue = unstable_cache(async () => ++pathReads, ["path-value"], {
+  revalidate: 3600,
+});`,
+      language: "ts",
+      path: "app/cache/data.ts",
+    },
+    {
+      content: `"use server";
+import { revalidatePath, revalidateTag, updateTag } from "next/cache";
+export async function expireTag() { updateTag("lesson-posts"); return "expired"; }
+export async function staleTag() { revalidateTag("lesson-posts", "max"); return "stale"; }
+export async function expirePath() { revalidatePath("/cache"); return "path"; }`,
+      language: "ts",
+      path: "app/cache/actions.ts",
+    },
+    {
+      content: `import { getMemoizedValue, getPathValue, getTaggedValue } from "./data";
+export default async function CachePage() {
+  const [tagged, path] = await Promise.all([getTaggedValue(), getPathValue()]);
+  const memoA = await getMemoizedValue();
+  const memoB = await getMemoizedValue();
+  return <main><p>tag-read:{tagged}</p><p>path-read:{path}</p><p>memo-read:{memoA}:{memoB}</p></main>;
+}`,
+      language: "tsx",
+      path: "app/cache/page.tsx",
+    },
+  ];
+}
+
 describe("request-compiled Next RSC runtime", () => {
   beforeEach(() => {
     clearNextRequestArtifactsForTests();
     clearNextTransformCacheForTests();
+    clearNextCacheAdapterForTests();
   });
 
   afterAll(async () => {
@@ -366,20 +417,123 @@ describe("request-compiled Next RSC runtime", () => {
     expect(refreshedHtml).toContain("server-total:<!-- -->3");
   });
 
+  test("uses Next cache APIs with tag, path, and stale-while-revalidate semantics", async () => {
+    const artifact = await compileNextRequestWorkspace(cacheWorkspace(), {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "cache-lessons",
+    });
+    const actionId = (exportName: string) => {
+      const entry = Object.entries(artifact.actionManifest).find(
+        ([, action]) => action.exportName === exportName,
+      );
+      expect(entry, `missing ${exportName} action`).toBeDefined();
+      return entry![0];
+    };
+    const invoke = async (exportName: string) =>
+      invokeNextServerAction(artifact, {
+        actionId: actionId(exportName),
+        body: await serializeNextActionBody(await rscClient.encodeReply([])),
+        url: "/cache",
+      });
+
+    const cold = await renderNextRequestArtifact(artifact, { url: "/cache" });
+    const coldHtml = await cold.text();
+    expect(coldHtml).toContain("tag-read:<!-- -->1");
+    expect(coldHtml).toContain("path-read:<!-- -->1");
+    expect(coldHtml).toContain("memo-read:<!-- -->1<!-- -->:<!-- -->1");
+    expect(cold.headers.get("x-tuto-next-cache")).toContain("miss=2");
+    expect(cold.headers.get("x-tuto-next-cache")).toContain("write=2");
+
+    const hot = await renderNextRequestArtifact(artifact, { url: "/cache" });
+    const hotHtml = await hot.text();
+    expect(hotHtml).toContain("tag-read:<!-- -->1");
+    expect(hotHtml).toContain("path-read:<!-- -->1");
+    expect(hotHtml).toContain("memo-read:<!-- -->2<!-- -->:<!-- -->2");
+    expect(hot.headers.get("x-tuto-next-cache")).toContain("hit=2");
+
+    const expiredTag = await invoke("expireTag");
+    const expiredTagFlight = await expiredTag.text();
+    expect(expiredTagFlight).toContain("tag-read:");
+    expect(expiredTagFlight).toContain("2");
+    expect(expiredTag.headers.get("x-tuto-next-cache")).toContain(
+      "revalidate=1",
+    );
+    expect(expiredTag.headers.get("x-tuto-next-cache")).toContain("miss=1");
+    expect(expiredTag.headers.get("x-tuto-next-cache")).toContain("hit=1");
+
+    const staleTag = await invoke("staleTag");
+    const staleFlight = await staleTag.text();
+    expect(staleFlight).toContain("tag-read:");
+    expect(staleTag.headers.get("x-tuto-next-cache")).toContain("stale=1");
+    expect(staleTag.headers.get("x-tuto-next-cache")).toContain("write=1");
+
+    const refreshed = await renderNextRequestArtifact(artifact, {
+      url: "/cache",
+    });
+    expect(await refreshed.text()).toContain("tag-read:<!-- -->3");
+
+    const expiredPath = await invoke("expirePath");
+    const pathFlight = await expiredPath.text();
+    expect(pathFlight).toContain("path-read:");
+    expect(expiredPath.headers.get("x-tuto-next-cache")).toContain("miss=2");
+    expect(expiredPath.headers.get("x-tuto-next-cache")).toContain(
+      "revalidate=1",
+    );
+  });
+
+  test("preserves data cache entries across generations while isolating workspaces", async () => {
+    const originalFiles = cacheWorkspace();
+    const first = await compileNextRequestWorkspace(originalFiles, {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "cache-generation-a",
+    });
+    await (await renderNextRequestArtifact(first, { url: "/cache" })).text();
+
+    const editedFiles = originalFiles.map((file) =>
+      file.path === "app/cache/page.tsx"
+        ? {
+            ...file,
+            content: `${file.content}\nexport const lessonEdit = "v2";`,
+          }
+        : file,
+    );
+    const edited = await compileNextRequestWorkspace(editedFiles, {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "cache-generation-a",
+    });
+    const reused = await renderNextRequestArtifact(edited, { url: "/cache" });
+    expect(edited.generation).not.toBe(first.generation);
+    expect(await reused.text()).toContain("tag-read:<!-- -->1");
+    expect(reused.headers.get("x-tuto-next-cache")).toContain("hit=2");
+
+    const isolated = await compileNextRequestWorkspace(originalFiles, {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "cache-generation-b",
+    });
+    const isolatedResponse = await renderNextRequestArtifact(isolated, {
+      url: "/cache",
+    });
+    expect(isolatedResponse.headers.get("x-tuto-next-cache")).toContain(
+      "miss=2",
+    );
+  });
+
   test("serves the Tuto workbench template through the integrated request route", async () => {
     const template = getServerlessNextjsRuntimeTemplate();
     expect(template).toBeDefined();
-    const response = await requestRoute(
-      new Request("http://tuto.local/api/serverless/nextjs-runtime/request", {
-        body: JSON.stringify({
-          files: template!.files,
-          request: { method: "GET", path: "/" },
-          workspaceKey: "workbench-checkpoint",
+    const requestWorkbench = (requestPath: string) =>
+      requestRoute(
+        new Request("http://tuto.local/api/serverless/nextjs-runtime/request", {
+          body: JSON.stringify({
+            files: template!.files,
+            request: { method: "GET", path: requestPath },
+            workspaceKey: "workbench-checkpoint",
+          }),
+          headers: { "content-type": "application/json" },
+          method: "POST",
         }),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-      }),
-    );
+      );
+    const response = await requestWorkbench("/");
     const responseText = await response.text();
     const result = JSON.parse(responseText) as {
       response?: { body?: string };
@@ -391,6 +545,21 @@ describe("request-compiled Next RSC runtime", () => {
     expect(result.response?.body).toContain("Hello from real Next core APIs.");
     expect(result.response?.body).toContain('data-client="counter"');
     expect(result.response?.body).toContain("__TUTO_NEXT_HYDRATED__");
+
+    const coldCache = (await (await requestWorkbench("/cache")).json()) as {
+      logs: Array<{ message: string }>;
+      response: { body: string };
+    };
+    expect(coldCache.response.body).toContain("Cache and invalidation");
+    expect(coldCache.logs.some((log) => log.message.includes("miss=2"))).toBe(
+      true,
+    );
+    const hotCache = (await (await requestWorkbench("/cache")).json()) as {
+      logs: Array<{ message: string }>;
+    };
+    expect(hotCache.logs.some((log) => log.message.includes("hit=2"))).toBe(
+      true,
+    );
   });
 
   test("rejects a server-only dependency below a client boundary", async () => {

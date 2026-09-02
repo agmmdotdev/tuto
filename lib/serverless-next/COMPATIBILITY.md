@@ -27,10 +27,28 @@ and rerun the compatibility suite.
 | Boundary enforcement                     | A client graph importing `server-only` is rejected                                                     |
 | Module-level Server Actions              | Next SWC emits genuine action IDs and browser proxies; Flight `encodeReply`/`decodeReply` carries args |
 | Action refresh                           | The action result and re-rendered route return in one Flight payload and the browser applies both      |
+| React `cache`                            | Repeated calls share one value during a render and recompute for the next RSC request                  |
+| `unstable_cache`                         | Next's own wrapper executes inside its work/request AsyncLocalStorage contexts over a Tuto adapter     |
+| Tag invalidation                         | `updateTag` expires immediately; `revalidateTag(..., "max")` serves stale once and refreshes           |
+| Path invalidation                        | `revalidatePath` expires entries through Next-generated implicit path tags                             |
+| Cache generation reuse                   | Entries survive source generations for one workspace while identical keys in other workspaces isolate  |
 | Bounded execution                        | Reusable RSC and SSR child workers have a 256 MB V8 heap cap and a 15 second request timeout           |
 
 The generated browser kernel contains React, React DOM, and Next's compiled
 Flight browser client. Its content hash is part of every artifact identity.
+
+The cache boundary is host-owned. Student modules call the real `next/cache`
+functions in the RSC worker, while cache reads, writes, and tag mutations cross
+IPC into a `NextCacheAdapter` in the trusted host. The default adapter is a
+bounded, workspace-scoped memory store. It survives immutable generation edits
+and RSC worker restarts within a warm host, but not a Fluid Compute instance
+replacement.
+
+This interface is the correct extension point for R2, but a production R2
+implementation is not included yet. Cache values can live in R2; tag versions
+and concurrent invalidation need a coordinated metadata strategy (for example
+a Durable Object, Redis, or conditional object writes). Treating R2 as only a
+plain key/value drop-in would make concurrent tag invalidation unreliable.
 
 ## Local checkpoint measurement
 
@@ -54,7 +72,7 @@ the expensive event, not every request or ordinary Server Component edit.
 - Full Next segment semantics: parallel/intercepted routes and complete loading, error, and thrown `notFound()` behavior
 - Captured inline Server Action arguments, progressive-enhancement form posts, `useActionState`, redirects, and action transitions
 - Route Handlers in `app/**/route.ts`
-- `cache`, `unstable_cache`, `revalidatePath`, `revalidateTag`, and cache tags
+- `"use cache"`, `cacheLife`, `cacheTag`, and patched `fetch` caching
 - Middleware/proxy execution and request rewriting
 - CSS, static assets, metadata, images, fonts, and arbitrary `next/*` imports
 - Durable object storage, signed artifact capabilities, and cross-instance reuse
@@ -78,7 +96,7 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next vertical slice should add a Tuto-owned cache adapter and exercise
-request memoization, persistent data cache entries, tags, `revalidatePath`, and
-`revalidateTag`. Route Handlers should follow because they share request/response
-normalization but do not need to block the cache lessons.
+The next vertical slice should add Route Handlers with Web `Request`/`Response`
+normalization. A durable cache adapter should follow once Tuto chooses the
+cross-instance metadata coordinator; that storage decision should not be hidden
+inside the student runtime.
