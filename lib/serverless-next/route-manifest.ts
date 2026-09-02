@@ -148,6 +148,16 @@ export function buildNextRouteManifest(
       modulePath.endsWith(`/route${extension}`),
     ),
   );
+  const proxyPaths = ["proxy", "middleware", "src/proxy", "src/middleware"]
+    .flatMap((basename) =>
+      sourceExtensions.map((extension) => `${basename}${extension}`),
+    )
+    .filter((modulePath) => paths.has(modulePath));
+  if (proxyPaths.length > 1) {
+    throw new Error(
+      `The Next workspace can define only one proxy.ts or middleware.ts entry: ${proxyPaths.join(", ")}.`,
+    );
+  }
   if (pagePaths.length === 0 && handlerPaths.length === 0) {
     throw new Error(
       "The Next workspace requires at least one app/**/page or app/**/route file.",
@@ -210,6 +220,20 @@ export function buildNextRouteManifest(
 
   return {
     handlers,
+    ...(proxyPaths[0]
+      ? {
+          proxy: {
+            kind:
+              proxyPaths[0].endsWith("middleware.ts") ||
+              proxyPaths[0].endsWith("middleware.tsx") ||
+              proxyPaths[0].endsWith("middleware.js") ||
+              proxyPaths[0].endsWith("middleware.jsx")
+                ? ("middleware" as const)
+                : ("proxy" as const),
+            modulePath: proxyPaths[0],
+          },
+        }
+      : {}),
     ...(routeFile(paths, "app", "layout")
       ? { rootLayout: routeFile(paths, "app", "layout") }
       : {}),

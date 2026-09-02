@@ -77,7 +77,7 @@ export function ServerlessNextjsRuntimeWorkbench({
         badge: "NEXT CORE",
         dependencyLabel: "Next SWC + React Flight",
         explorerCopy:
-          "This checkpoint compiles with Next SWC, renders and hydrates genuine Flight, dispatches Server Actions and Route Handlers, and connects Next cache APIs to a workspace-scoped host adapter. Try GET /api/lessons/rsc or POST JSON to the same route.",
+          "This checkpoint compiles with Next SWC, renders Flight, dispatches Server Actions and Route Handlers, runs proxy.ts matchers/rewrites/redirects, and connects Next cache APIs to a host adapter. Try GET /proxy-rewrite or /proxy-response.",
         modeValue: "serverless",
         runtimeValue: "next-rsc",
         requestPathPlaceholder: "/lessons/rsc?mode=practice",

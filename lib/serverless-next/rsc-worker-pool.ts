@@ -17,10 +17,14 @@ type WorkerReply = {
   headers?: Array<[string, string]>;
   id: string;
   ok: boolean;
+  proxyMatched?: boolean;
+  proxyOutcome?: "next" | "redirect" | "response" | "rewrite";
+  requestHeaders?: Array<[string, string]>;
   routePattern?: string | null;
   status?: number;
   statusText?: string;
   type?: undefined;
+  url?: string;
 };
 
 type WorkerCacheRequest = {
@@ -60,6 +64,17 @@ export type NextRouteHandlerWorkerResult = {
   routePattern: string | null;
   status: number;
   statusText: string;
+};
+
+export type NextProxyWorkerResult = {
+  body: Buffer;
+  headers: Array<[string, string]>;
+  matched: boolean;
+  outcome: "next" | "redirect" | "response" | "rewrite";
+  requestHeaders: Array<[string, string]>;
+  status: number;
+  statusText: string;
+  url: string;
 };
 
 type Pending = {
@@ -220,13 +235,18 @@ export class NextRscWorkerPool {
     };
   }
 
-  async render(artifact: NextRequestArtifact, url: string) {
+  async render(
+    artifact: NextRequestArtifact,
+    url: string,
+    headers: Array<[string, string]> = [],
+  ) {
     if (!this.installed.has(artifact.generation)) {
       await this.send({ artifact, type: "install" });
       this.installed.add(artifact.generation);
     }
     const reply = await this.send({
       generation: artifact.generation,
+      headers,
       type: "render",
       url,
     });
@@ -274,6 +294,45 @@ export class NextRscWorkerPool {
         type: "route-handler",
       }),
     );
+  }
+
+  async invokeProxy(
+    artifact: NextRequestArtifact,
+    input: {
+      bodyBase64?: string;
+      headers: Array<[string, string]>;
+      method: string;
+      url: string;
+    },
+  ): Promise<NextProxyWorkerResult> {
+    if (!this.installed.has(artifact.generation)) {
+      await this.send({ artifact, type: "install" });
+      this.installed.add(artifact.generation);
+    }
+    const reply = await this.send({
+      ...input,
+      generation: artifact.generation,
+      type: "proxy",
+    });
+    if (
+      reply.bodyBase64 === undefined ||
+      reply.proxyMatched === undefined ||
+      !reply.proxyOutcome ||
+      !reply.requestHeaders ||
+      !reply.url
+    ) {
+      throw new Error("Next RSC worker returned an incomplete proxy result.");
+    }
+    return {
+      body: Buffer.from(reply.bodyBase64, "base64"),
+      headers: reply.headers ?? [],
+      matched: reply.proxyMatched,
+      outcome: reply.proxyOutcome,
+      requestHeaders: reply.requestHeaders,
+      status: reply.status ?? 200,
+      statusText: reply.statusText ?? "",
+      url: reply.url,
+    };
   }
 
   async close() {
