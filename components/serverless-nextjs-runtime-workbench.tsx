@@ -99,6 +99,7 @@ export function ServerlessNextjsRuntimeWorkbench({
         previewTitle: "Hydrated Next RSC preview",
         showPreviewAsStatic: false,
         virtualNavigation: true,
+        streamingPreview: true,
         defaultCompiler: "esbuild",
         compilerOptions: [{ value: "esbuild", label: "Next SWC" }],
       }}

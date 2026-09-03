@@ -5,6 +5,7 @@ import { matchNextRouteHandler } from "./route-manifest";
 import {
   getNextRscWorkerPool,
   type NextFlightWorkerResult,
+  type NextFlightStreamWorkerResult,
   type NextSerializedActionBody,
 } from "./rsc-worker-pool";
 import { getNextSsrWorkerPool } from "./ssr-worker-pool";
@@ -24,6 +25,7 @@ export type NextExecuteRequest = NextRouteHandlerRequest & {
   actionEndpoint?: string;
   hydrate?: boolean;
   loading?: boolean;
+  stream?: boolean;
 };
 
 async function flightToHtml(
@@ -37,7 +39,16 @@ async function flightToHtml(
     result.formState,
     url,
   );
-  const styleElements = result.stylePaths
+  const styles = styleElements(artifact, result.stylePaths);
+  if (!styles) return html;
+  if (html.includes("</head>")) {
+    return html.replace("</head>", `${styles}</head>`);
+  }
+  return `${styles}${html}`;
+}
+
+function styleElements(artifact: NextRequestArtifact, stylePaths: string[]) {
+  return stylePaths
     .map((stylePath) => {
       const style = artifact.styles[stylePath];
       if (!style) return "";
@@ -49,11 +60,40 @@ async function flightToHtml(
       return `<style data-tuto-next-style="${safePath}">${style.css.replaceAll("</style", "<\\/style")}</style>`;
     })
     .join("");
-  if (!styleElements) return html;
-  if (html.includes("</head>")) {
-    return html.replace("</head>", `${styleElements}</head>`);
+}
+
+async function readableStreamBuffer(stream: ReadableStream<Uint8Array>) {
+  const chunks: Buffer[] = [];
+  const reader = stream.getReader();
+  for (;;) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    chunks.push(Buffer.from(chunk.value));
   }
-  return `${styleElements}${html}`;
+  return Buffer.concat(chunks);
+}
+
+async function prefetchReadableStream(stream: ReadableStream<Uint8Array>) {
+  const reader = stream.getReader();
+  const first = await reader.read();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (first.done) controller.close();
+      else controller.enqueue(first.value);
+    },
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (chunk.done) controller.close();
+        else controller.enqueue(chunk.value);
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
 }
 
 function inlineScript(code: string) {
@@ -278,9 +318,116 @@ async function hydratableDocument(
     : `${html}${scripts}`;
 }
 
+function transformHydratableHtmlStream(
+  html: ReadableStream<Uint8Array>,
+  options: {
+    actionEndpoint?: string;
+    scripts: Promise<string>;
+    styles: string;
+    revision: string;
+    url: string;
+  },
+) {
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffered = "";
+  let injectedStyles = false;
+
+  const processHtml = (value: string) => {
+    let next = wireProgressiveActionForms(value, {
+      actionEndpoint: options.actionEndpoint,
+      revision: options.revision,
+      url: options.url,
+    });
+    if (!injectedStyles && next.includes("</head>")) {
+      next = next.replace("</head>", `${options.styles}</head>`);
+      injectedStyles = true;
+    }
+    return next;
+  };
+
+  return html.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        buffered += decoder.decode(chunk, { stream: true });
+        const bodyClose = buffered.indexOf("</body>");
+        const lastOpeningBracket = buffered.lastIndexOf("<");
+        const lastClosingBracket = buffered.lastIndexOf(">");
+        const emitLength =
+          bodyClose >= 0
+            ? bodyClose
+            : lastOpeningBracket > lastClosingBracket
+              ? lastOpeningBracket
+              : buffered.length;
+        if (emitLength <= 0) return;
+        const value = processHtml(buffered.slice(0, emitLength));
+        buffered = buffered.slice(emitLength);
+        controller.enqueue(encoder.encode(value));
+      },
+      async flush(controller) {
+        buffered += decoder.decode();
+        let value = processHtml(buffered);
+        if (!injectedStyles && options.styles) {
+          value = `${options.styles}${value}`;
+        }
+        const scripts = await options.scripts;
+        value = value.includes("</body>")
+          ? value.replace("</body>", `${scripts}</body>`)
+          : `${value}${scripts}`;
+        controller.enqueue(encoder.encode(value));
+      },
+    }),
+  );
+}
+
+async function hydratableDocumentStream(
+  artifact: NextRequestArtifact,
+  result: NextFlightStreamWorkerResult,
+  config: {
+    actionEndpoint?: string;
+    headers: Array<[string, string]>;
+    url: string;
+  },
+) {
+  const [ssrFlight, hydrationFlight] = result.flight.tee();
+  const flight = readableStreamBuffer(hydrationFlight);
+  const rendered = await getNextSsrWorkerPool().renderStream(
+    artifact,
+    ssrFlight,
+    result.formState,
+    config.url,
+  );
+  const scripts = Promise.all([flight, readClientKernel()]).then(
+    ([flightBody, clientKernel]) =>
+      `<script>${inlineScript(clientKernel)}</script>\n<script>${inlineScript(artifact.clientBundle.code)}</script>\n<script type="module">${inlineScript(
+        hydrationBootstrap(flightBody, {
+          actionEndpoint: config.actionEndpoint,
+          formState: result.formState,
+          generation: artifact.generation,
+          headers: config.headers,
+          revision: artifact.revision,
+          url: config.url,
+        }),
+      )}</script>`,
+  );
+  const stream = transformHydratableHtmlStream(rendered.stream, {
+    actionEndpoint: config.actionEndpoint,
+    revision: artifact.revision,
+    scripts,
+    styles: styleElements(artifact, result.stylePaths),
+    url: config.url,
+  });
+  const final = Promise.all([result.final, rendered.final]);
+  void final.catch(() => undefined);
+  return {
+    final,
+    stream: await prefetchReadableStream(stream),
+  };
+}
+
 function responseHeaders(
   artifact: NextRequestArtifact,
-  result: NextFlightWorkerResult,
+  result: Omit<NextFlightWorkerResult, "flight">,
   contentType: string,
 ) {
   return {
@@ -296,7 +443,7 @@ function responseHeaders(
 
 function flightResultHeaders(
   artifact: NextRequestArtifact,
-  result: NextFlightWorkerResult,
+  result: Omit<NextFlightWorkerResult, "flight">,
   contentType: string,
 ) {
   const headers = new Headers(responseHeaders(artifact, result, contentType));
@@ -330,6 +477,40 @@ export async function renderHydratableNextRequestArtifact(
     url,
   });
   return new Response(document, {
+    headers: flightResultHeaders(artifact, result, "text/html; charset=utf-8"),
+    status: result.status,
+  });
+}
+
+export async function renderHydratableNextRequestArtifactStream(
+  artifact: NextRequestArtifact,
+  options: NextRuntimeRequest & { actionEndpoint?: string } = {},
+) {
+  const url = options.url ?? "/";
+  const requestHeaders = [...new Headers(options.headers).entries()];
+  const result = await getNextRscWorkerPool().renderStream(
+    artifact,
+    url,
+    requestHeaders,
+  );
+  if (!result.contentType.startsWith("text/x-component")) {
+    return new Response(result.flight, {
+      headers: flightResultHeaders(artifact, result, result.contentType),
+      status: result.status,
+    });
+  }
+  let document;
+  try {
+    document = await hydratableDocumentStream(artifact, result, {
+      actionEndpoint: options.actionEndpoint,
+      headers: requestHeaders,
+      url,
+    });
+  } catch {
+    await result.final.catch(() => undefined);
+    return renderHydratableNextRequestArtifact(artifact, options);
+  }
+  return new Response(document.stream, {
     headers: flightResultHeaders(artifact, result, "text/html; charset=utf-8"),
     status: result.status,
   });
@@ -399,6 +580,46 @@ export async function renderNextRequestArtifact(
   }
   const html = await flightToHtml(artifact, result, options.url ?? "/");
   return new Response(html, {
+    headers: flightResultHeaders(artifact, result, "text/html; charset=utf-8"),
+    status: result.status,
+  });
+}
+
+export async function renderNextRequestArtifactStream(
+  artifact: NextRequestArtifact,
+  options: NextRuntimeRequest & { flight?: boolean } = {},
+) {
+  const result = await getNextRscWorkerPool().renderStream(
+    artifact,
+    options.url ?? "/",
+    [...new Headers(options.headers).entries()],
+  );
+  if (!result.contentType.startsWith("text/x-component") || options.flight) {
+    return new Response(result.flight, {
+      headers: flightResultHeaders(artifact, result, result.contentType),
+      status: result.status,
+    });
+  }
+  let rendered;
+  try {
+    rendered = await getNextSsrWorkerPool().renderStream(
+      artifact,
+      result.flight,
+      result.formState,
+      options.url ?? "/",
+    );
+    rendered = {
+      ...rendered,
+      stream: await prefetchReadableStream(rendered.stream),
+    };
+  } catch {
+    await Promise.allSettled([
+      result.final,
+      ...(rendered ? [rendered.final] : []),
+    ]);
+    return renderNextRequestArtifact(artifact, options);
+  }
+  return new Response(rendered.stream, {
     headers: flightResultHeaders(artifact, result, "text/html; charset=utf-8"),
     status: result.status,
   });
@@ -685,6 +906,42 @@ export async function invokeNextRouteHandler(
   );
 }
 
+export async function invokeNextRouteHandlerStream(
+  artifact: NextRequestArtifact,
+  options: NextRouteHandlerRequest = {},
+) {
+  const headers = new Headers(options.headers);
+  const body =
+    typeof options.body === "string"
+      ? Buffer.from(options.body)
+      : options.body
+        ? Buffer.from(options.body)
+        : undefined;
+  const result = await getNextRscWorkerPool().invokeRouteHandlerStream(
+    artifact,
+    {
+      ...(body ? { bodyBase64: body.toString("base64") } : {}),
+      headers: [...headers.entries()],
+      method: (options.method ?? "GET").toUpperCase(),
+      url: options.url ?? "/",
+    },
+  );
+  const responseHeaders = new Headers(result.headers);
+  responseHeaders.set(
+    "x-tuto-next-cache",
+    `hit=${result.cacheMetrics.hits}; stale=${result.cacheMetrics.staleHits}; miss=${result.cacheMetrics.misses}; write=${result.cacheMetrics.writes}; revalidate=${result.cacheMetrics.revalidations}`,
+  );
+  responseHeaders.set("x-tuto-next-generation", artifact.generation);
+  if (result.routePattern) {
+    responseHeaders.set("x-tuto-next-route-pattern", result.routePattern);
+  }
+  return new Response(result.body, {
+    headers: responseHeaders,
+    status: result.status,
+    statusText: result.statusText,
+  });
+}
+
 function requestBody(options: NextRouteHandlerRequest) {
   if (typeof options.body === "string") return Buffer.from(options.body);
   if (options.body) return Buffer.from(options.body);
@@ -803,12 +1060,19 @@ export async function executeNextRequestArtifact(
     // Public files are immutable bytes inside this compiled generation. The
     // URL remains revalidated because a later generation may change the file.
   } else if (matchedHandler) {
-    response = await invokeNextRouteHandler(artifact, {
-      body: options.body,
-      headers,
-      method,
-      url,
-    });
+    response = await (options.stream
+      ? invokeNextRouteHandlerStream(artifact, {
+          body: options.body,
+          headers,
+          method,
+          url,
+        })
+      : invokeNextRouteHandler(artifact, {
+          body: options.body,
+          headers,
+          method,
+          url,
+        }));
     response.headers.set("x-tuto-next-runtime-kind", "route-handler");
   } else if (method === "GET" || method === "HEAD") {
     response = options.loading
@@ -817,13 +1081,21 @@ export async function executeNextRequestArtifact(
           headers,
           url,
         })
+      : options.hydrate && options.stream
+        ? await renderHydratableNextRequestArtifactStream(artifact, {
+            actionEndpoint: options.actionEndpoint,
+            headers,
+            url,
+          })
       : options.hydrate
         ? await renderHydratableNextRequestArtifact(artifact, {
             actionEndpoint: options.actionEndpoint,
             headers,
             url,
           })
-        : await renderNextRequestArtifact(artifact, { headers, url });
+        : options.stream
+          ? await renderNextRequestArtifactStream(artifact, { headers, url })
+          : await renderNextRequestArtifact(artifact, { headers, url });
     response.headers.set(
       "x-tuto-next-runtime-kind",
       options.loading ? "page-loading" : "page",

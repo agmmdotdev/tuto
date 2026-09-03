@@ -35,7 +35,10 @@ import {
 } from "../../lib/serverless-next/runtime";
 import { closeNextRscWorkerPoolForTests } from "../../lib/serverless-next/rsc-worker-pool";
 import { closeNextSsrWorkerPoolForTests } from "../../lib/serverless-next/ssr-worker-pool";
-import { POST as requestRoute } from "../../app/api/serverless/nextjs-runtime/request/route";
+import {
+  GET as previewRoute,
+  POST as requestRoute,
+} from "../../app/api/serverless/nextjs-runtime/request/route";
 
 const actionSalt = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
 const runtimeRequire = createRequire(path.join(process.cwd(), "package.json"));
@@ -2339,6 +2342,7 @@ describe("request-compiled Next RSC runtime", () => {
         body?: string;
         headers?: Record<string, string>;
         method?: string;
+        streamPreview?: boolean;
       } = {},
     ) =>
       requestRoute(
@@ -2351,6 +2355,7 @@ describe("request-compiled Next RSC runtime", () => {
               method: options.method ?? "GET",
               path: requestPath,
             },
+            streamPreview: options.streamPreview,
             workspaceKey: "workbench-checkpoint",
           }),
           headers: { "content-type": "application/json" },
@@ -2360,7 +2365,7 @@ describe("request-compiled Next RSC runtime", () => {
     const response = await requestWorkbench("/");
     const responseText = await response.text();
     const result = JSON.parse(responseText) as {
-      response?: { body?: string };
+      response?: { body?: string; previewUrl?: string };
       success?: boolean;
     };
 
@@ -2369,6 +2374,44 @@ describe("request-compiled Next RSC runtime", () => {
     expect(result.response?.body).toContain("Hello from real Next core APIs.");
     expect(result.response?.body).toContain('data-client="counter"');
     expect(result.response?.body).toContain("__TUTO_NEXT_HYDRATED__");
+    expect(result.response?.previewUrl).toMatch(/\?preview=/);
+    const streamedPreview = await previewRoute(
+      new Request(
+        new URL(result.response!.previewUrl!, "http://tuto.local"),
+      ),
+    );
+    const streamedHtml = await streamedPreview.text();
+    expect(streamedPreview.status).toBe(200);
+    expect(streamedPreview.headers.get("content-type")).toContain("text/html");
+    expect(streamedHtml).toContain("Hello from real Next core APIs.");
+    expect(streamedHtml).toContain("__TUTO_NEXT_HYDRATED__");
+    expect(streamedHtml).toContain(
+      "tuto-serverless-nextjs-runtime-preview-log",
+    );
+
+    const streamingControl = (await (
+      await requestWorkbench("/", { streamPreview: true })
+    ).json()) as {
+      response: { body: string; previewUrl: string };
+    };
+    expect(streamingControl.response.body).toBe(
+      "Preview body is delivered by the streaming URL.",
+    );
+    const singleRenderPreview = await previewRoute(
+      new Request(
+        new URL(streamingControl.response.previewUrl, "http://tuto.local"),
+      ),
+    );
+    expect(await singleRenderPreview.text()).toContain(
+      "Hello from real Next core APIs.",
+    );
+    expect(
+      await previewRoute(
+        new Request(
+          "http://tuto.local/api/serverless/nextjs-runtime/request?preview=invalid",
+        ),
+      ),
+    ).toMatchObject({ status: 410 });
 
     const coldCache = (await (await requestWorkbench("/cache")).json()) as {
       logs: Array<{ message: string }>;
@@ -2409,6 +2452,24 @@ describe("request-compiled Next RSC runtime", () => {
     expect(
       apiResult.logs.some((log) => log.message.includes("2 Route Handler")),
     ).toBe(true);
+
+    const streamingApiControl = (await (
+      await requestWorkbench("/api/lessons/rsc?mode=practice", {
+        headers: { "x-request-id": "stream-request" },
+        streamPreview: true,
+      })
+    ).json()) as { response: { body: string; previewUrl: string } };
+    expect(streamingApiControl.response.previewUrl).toMatch(/\?preview=/);
+    const streamingApi = await previewRoute(
+      new Request(
+        new URL(streamingApiControl.response.previewUrl, "http://tuto.local"),
+      ),
+    );
+    expect(streamingApi.status).toBe(200);
+    expect(await streamingApi.json()).toMatchObject({
+      mode: "practice",
+      requestId: "stream-request",
+    });
 
     const apiMutation = (await (
       await requestWorkbench("/api/lessons/rsc", {

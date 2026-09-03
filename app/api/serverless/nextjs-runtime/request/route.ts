@@ -7,7 +7,10 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const saltKey = Symbol.for("tuto.serverless-next.action-salt.v1");
+const previewKey = Symbol.for("tuto.serverless-next.preview-capabilities.v1");
 const maxRequestBytes = 6 * 1024 * 1024;
+const maxPreviewCapabilities = 128;
+const previewCapabilityTtlMs = 5 * 60 * 1_000;
 const previewBridgeScript = `<script>
 (() => {
   const previewSource = "tuto-serverless-nextjs-runtime-preview-log";
@@ -57,6 +60,77 @@ function injectPreviewBridge(html: string) {
     : `${html}${previewBridgeScript}`;
 }
 
+type PreviewCapability = {
+  expiresAt: number;
+  headers: Array<[string, string]>;
+  revision: string;
+  url: string;
+};
+
+function previewCapabilities() {
+  const globals = globalThis as typeof globalThis & {
+    [previewKey]?: Map<string, PreviewCapability>;
+  };
+  globals[previewKey] ??= new Map();
+  return globals[previewKey];
+}
+
+function issuePreviewCapability(capability: Omit<PreviewCapability, "expiresAt">) {
+  const capabilities = previewCapabilities();
+  const token = randomBytes(24).toString("base64url");
+  capabilities.set(token, {
+    ...capability,
+    expiresAt: Date.now() + previewCapabilityTtlMs,
+  });
+  while (capabilities.size > maxPreviewCapabilities) {
+    capabilities.delete(capabilities.keys().next().value!);
+  }
+  return token;
+}
+
+function resolvePreviewCapability(token: string | null) {
+  if (!token) return undefined;
+  const capabilities = previewCapabilities();
+  const capability = capabilities.get(token);
+  if (!capability) return undefined;
+  if (capability.expiresAt <= Date.now()) {
+    capabilities.delete(token);
+    return undefined;
+  }
+  capabilities.delete(token);
+  capabilities.set(token, capability);
+  return capability;
+}
+
+function injectPreviewBridgeStream(body: ReadableStream<Uint8Array>) {
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffered = "";
+  return body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        buffered += decoder.decode(chunk, { stream: true });
+        const bodyClose = buffered.indexOf("</body>");
+        const lastOpeningBracket = buffered.lastIndexOf("<");
+        const lastClosingBracket = buffered.lastIndexOf(">");
+        const emitLength =
+          bodyClose >= 0
+            ? bodyClose
+            : lastOpeningBracket > lastClosingBracket
+              ? lastOpeningBracket
+              : buffered.length;
+        if (emitLength <= 0) return;
+        controller.enqueue(encoder.encode(buffered.slice(0, emitLength)));
+        buffered = buffered.slice(emitLength);
+      },
+      flush(controller) {
+        buffered += decoder.decode();
+        controller.enqueue(encoder.encode(injectPreviewBridge(buffered)));
+      },
+    }),
+  );
+}
+
 async function readPayload(request: Request) {
   const text = await request.text();
   if (new TextEncoder().encode(text).byteLength > maxRequestBytes) {
@@ -81,6 +155,7 @@ async function readPayload(request: Request) {
       loading?: boolean;
     };
     workspaceKey?: string;
+    streamPreview?: boolean;
   };
 }
 
@@ -119,6 +194,57 @@ export function OPTIONS() {
     },
     status: 204,
   });
+}
+
+export async function GET(request: Request) {
+  try {
+    assertNextProductionExecutionIsolated();
+    const capability = resolvePreviewCapability(
+      new URL(request.url).searchParams.get("preview"),
+    );
+    if (!capability) {
+      return new Response("The preview capability is invalid or expired.", {
+        headers: { "cache-control": "no-store" },
+        status: 410,
+      });
+    }
+    const [{ getNextRequestArtifact }, nextRuntime] = await Promise.all([
+      import("../../../../../lib/serverless-next/artifact"),
+      import("../../../../../lib/serverless-next/runtime"),
+    ]);
+    const artifact = getNextRequestArtifact(capability.revision);
+    if (!artifact) {
+      return new Response("The preview generation is no longer hot.", {
+        headers: { "cache-control": "no-store" },
+        status: 409,
+      });
+    }
+    let response = await nextRuntime.executeNextRequestArtifact(artifact, {
+      actionEndpoint: request.url,
+      headers: capability.headers,
+      hydrate: true,
+      method: "GET",
+      stream: true,
+      url: capability.url,
+    });
+    if (
+      response.body &&
+      (response.headers.get("content-type") ?? "").startsWith("text/html")
+    ) {
+      response = new Response(injectPreviewBridgeStream(response.body), {
+        headers: response.headers,
+        status: response.status,
+        statusText: response.statusText,
+      });
+    }
+    response.headers.set("cache-control", "no-store");
+    return virtualizeActionCookies(response);
+  } catch (error) {
+    return new Response(error instanceof Error ? error.message : String(error), {
+      headers: { "cache-control": "no-store" },
+      status: 400,
+    });
+  }
 }
 
 export async function POST(request: Request) {
@@ -254,9 +380,10 @@ export async function POST(request: Request) {
     }
 
     const startedAt = performance.now();
-    const [compiler, nextRuntime] = await Promise.all([
+    const [compiler, nextRuntime, routeManifest] = await Promise.all([
       import("../../../../../lib/serverless-next/compiler"),
       import("../../../../../lib/serverless-next/runtime"),
+      import("../../../../../lib/serverless-next/route-manifest"),
     ]);
     const { artifact, artifactCache } =
       await compiler.compileNextRequestWorkspaceWithStatus(
@@ -267,21 +394,61 @@ export async function POST(request: Request) {
         },
       );
     const url = `${routeUrl.pathname}${routeUrl.search}`;
-    const response = await nextRuntime.executeNextRequestArtifact(artifact, {
-      actionEndpoint: request.url,
-      body: payload.request?.body,
-      headers: payload.request?.headers,
-      hydrate: true,
-      loading: payload.request?.loading,
-      method,
-      url,
-    });
+    const directHandler = routeManifest.matchNextRouteHandler(
+      artifact.router,
+      routeUrl,
+    );
+    const directAsset = artifact.staticAssets[routeUrl.pathname];
+    const streamPreview =
+      payload.streamPreview === true &&
+      method === "GET" &&
+      !payload.request?.loading &&
+      !directAsset;
+    const response = streamPreview
+      ? new Response("Preview body is delivered by the streaming URL.", {
+          headers: {
+            "cache-control": "private, no-store",
+            "content-type": directHandler
+              ? "application/octet-stream"
+              : "text/html; charset=utf-8",
+            "x-tuto-next-cache": "streaming-preview",
+            "x-tuto-next-generation": artifact.generation,
+            "x-tuto-next-proxy": artifact.router.proxy
+              ? "deferred-to-stream"
+              : "absent",
+            "x-tuto-next-runtime-kind": directHandler
+              ? "route-handler"
+              : "page",
+          },
+        })
+      : await nextRuntime.executeNextRequestArtifact(artifact, {
+          actionEndpoint: request.url,
+          body: payload.request?.body,
+          headers: payload.request?.headers,
+          hydrate: true,
+          loading: payload.request?.loading,
+          method,
+          url,
+        });
     const responseBody = await response.text();
     const body =
-      response.headers.get("x-tuto-next-runtime-kind") === "page" ||
-      response.headers.get("x-tuto-next-runtime-kind") === "page-loading"
+      !streamPreview &&
+      (response.headers.get("x-tuto-next-runtime-kind") === "page" ||
+        response.headers.get("x-tuto-next-runtime-kind") === "page-loading")
         ? injectPreviewBridge(responseBody)
         : responseBody;
+    const runtimeKind = response.headers.get("x-tuto-next-runtime-kind");
+    const previewUrl =
+      method === "GET" &&
+      (runtimeKind === "page" || runtimeKind === "route-handler")
+        ? `${new URL(request.url).pathname}?preview=${encodeURIComponent(
+            issuePreviewCapability({
+              headers: [...new Headers(payload.request?.headers).entries()],
+              revision: artifact.revision,
+              url,
+            }),
+          )}`
+        : undefined;
     const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
 
     return NextResponse.json(
@@ -336,6 +503,7 @@ export async function POST(request: Request) {
           body,
           contentType:
             response.headers.get("content-type") ?? "text/html; charset=utf-8",
+          previewUrl,
         },
       },
       { headers: { "cache-control": "no-store" } },

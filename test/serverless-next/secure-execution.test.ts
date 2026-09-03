@@ -7,7 +7,11 @@ import {
   assertNextProductionExecutionIsolated,
   getNextExecutionMode,
 } from "../../lib/serverless-next/execution-mode";
-import { renderNextRequestArtifact } from "../../lib/serverless-next/runtime";
+import {
+  executeNextRequestArtifact,
+  invokeNextRouteHandlerStream,
+  renderNextRequestArtifact,
+} from "../../lib/serverless-next/runtime";
 import { closeNextRscWorkerPoolForTests } from "../../lib/serverless-next/rsc-worker-pool";
 import { NextSecureExecWorkspacePool } from "../../lib/serverless-next/secure-exec-worker";
 import { closeNextSsrWorkerPoolForTests } from "../../lib/serverless-next/ssr-worker-pool";
@@ -32,6 +36,27 @@ async function compile(workspaceKey: string, page: string) {
     serverReferenceHashSalt: actionSalt,
     workspaceKey,
   });
+}
+
+function streamingWorkspace(route: string): WorkspaceFile[] {
+  return [
+    {
+      content:
+        "export default function Layout({ children }: { children: React.ReactNode }) { return <html><body>{children}</body></html>; }",
+      language: "tsx",
+      path: "app/layout.tsx",
+    },
+    {
+      content: "export default function Page() { return <main>streaming</main>; }",
+      language: "tsx",
+      path: "app/page.tsx",
+    },
+    {
+      content: route,
+      language: "ts",
+      path: "app/api/stream/route.ts",
+    },
+  ];
 }
 
 describe.sequential("SecureExec Next execution", () => {
@@ -160,6 +185,155 @@ export default function Page() { return <main>{String(forbidden)}</main>; }`,
     } finally {
       await pool.close();
     }
+  });
+
+  test("streams Suspense HTML before a delayed Server Component completes", async () => {
+    const artifact = await compile(
+      "streamed-rsc",
+      `import { Suspense } from "react";
+async function Slow({ delay }: { delay: number }) {
+  await new Promise((resolve) => setTimeout(resolve, delay));
+  return <p>slow-content</p>;
+}
+export default async function Page({ searchParams }: {
+  searchParams: Promise<{ delay?: string }>;
+}) {
+  const delay = Number((await searchParams).delay || 0);
+  return <main><h1>shell-content</h1><Suspense fallback={<p>fallback-content</p>}><Slow delay={delay} /></Suspense></main>;
+}`,
+    );
+    await (
+      await executeNextRequestArtifact(artifact, {
+        hydrate: true,
+        stream: true,
+        url: "/?delay=0",
+      })
+    ).text();
+
+    const startedAt = performance.now();
+    const response = await executeNextRequestArtifact(artifact, {
+      hydrate: true,
+      stream: true,
+      url: "/?delay=800",
+    });
+    const reader = response.body!.getReader();
+    const first = await reader.read();
+    const firstByteMs = performance.now() - startedAt;
+    const firstHtml = Buffer.from(first.value ?? []).toString("utf8");
+    const chunks = [Buffer.from(first.value ?? [])];
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      chunks.push(Buffer.from(chunk.value));
+    }
+    const totalMs = performance.now() - startedAt;
+    const html = Buffer.concat(chunks).toString("utf8");
+
+    expect(first.done).toBe(false);
+    expect(firstByteMs).toBeLessThan(500);
+    expect(firstHtml).toContain("shell-content");
+    expect(firstHtml).toContain("fallback-content");
+    expect(firstHtml).not.toContain("slow-content");
+    expect(totalMs).toBeGreaterThanOrEqual(650);
+    expect(html).toContain("shell-content");
+    expect(html).toContain("fallback-content");
+    expect(html).toContain("slow-content");
+  });
+
+  test("falls back before the first byte for redirect and not-found control flow", async () => {
+    const redirected = await compile(
+      "streamed-redirect",
+      `import { redirect } from "next/navigation";
+export default function Page() { redirect("/target"); }`,
+    );
+    const redirectResponse = await executeNextRequestArtifact(redirected, {
+      stream: true,
+    });
+    expect(redirectResponse.status).toBe(307);
+    expect(redirectResponse.headers.get("location")).toBe("/target");
+
+    const missing = await compile(
+      "streamed-not-found",
+      `import { notFound } from "next/navigation";
+export default function Page() { notFound(); }`,
+    );
+    const notFoundResponse = await executeNextRequestArtifact(missing, {
+      stream: true,
+    });
+    expect(notFoundResponse.status).toBe(404);
+    expect(await notFoundResponse.text()).toContain("Not Found");
+  });
+
+  test("preserves Route Handler chunk timing and releases a cancelled stream lease", async () => {
+    process.env.TUTO_NEXT_SECURE_WORKERS = "1";
+    const artifact = await compileNextRequestWorkspace(
+      streamingWorkspace(`export function GET(request: Request) {
+  const encoder = new TextEncoder();
+  const delay = Number(new URL(request.url).searchParams.get("delay") || 0);
+  return new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode("first:"));
+      setTimeout(() => {
+        controller.enqueue(encoder.encode("second"));
+        controller.close();
+      }, delay);
+    },
+  }), { headers: { "content-type": "text/plain; charset=utf-8" } });
+}`),
+      { serverReferenceHashSalt: actionSalt, workspaceKey: "streamed-handler" },
+    );
+    await (
+      await invokeNextRouteHandlerStream(artifact, {
+        method: "GET",
+        url: "/api/stream?delay=0",
+      })
+    ).text();
+    const startedAt = performance.now();
+    const response = await invokeNextRouteHandlerStream(artifact, {
+      method: "GET",
+      url: "/api/stream?delay=300",
+    });
+    const reader = response.body!.getReader();
+    const first = await reader.read();
+    const firstByteMs = performance.now() - startedAt;
+    expect(Buffer.from(first.value ?? []).toString()).toBe("first:");
+    expect(firstByteMs).toBeLessThan(200);
+    await reader.cancel("lesson navigated away");
+
+    const next = await compile(
+      "stream-after-cancel",
+      "export default function Page() { return <main>lease-released</main>; }",
+    );
+    await expect(
+      Promise.race([
+        renderNextRequestArtifact(next).then((result) => result.text()),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("stream lease was not released")), 5_000),
+        ),
+      ]),
+    ).resolves.toContain("lease-released");
+  });
+
+  test("terminates a Route Handler stream that exceeds the output budget", async () => {
+    const artifact = await compileNextRequestWorkspace(
+      streamingWorkspace(`export function GET() {
+  const chunk = new Uint8Array(17 * 1024 * 1024);
+  return new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(chunk);
+      controller.close();
+    },
+  }));
+}`),
+      { serverReferenceHashSalt: actionSalt, workspaceKey: "stream-budget" },
+    );
+    const response = await invokeNextRouteHandlerStream(artifact, {
+      method: "GET",
+      url: "/api/stream",
+    });
+    await expect(response.arrayBuffer()).rejects.toThrow(
+      /streamed response exceeds the 16777216 byte limit/,
+    );
   });
 
   test("terminates a CPU-bound request at the host deadline", async () => {
