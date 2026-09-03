@@ -71,6 +71,8 @@ and rerun the compatibility suite.
 | Tenant isolation                         | An isolate is pinned to one workspace; bounded LRU pools evict idle workspaces instead of sharing mutable JS globals           |
 | Capability policy                        | Host environment, filesystem writes, child processes, and unlisted outbound origins are denied                                |
 | Bounded execution                        | Each isolate has a 256 MB limit, payload/handle/timer/output budgets, and a host-enforced request deadline                     |
+| Bounded streaming                        | Flight, SSR HTML, and Route Handler bodies use 256 KiB pull chunks, backpressure, cancellation, idle deadlines, and a 16 MiB cap |
+| Streaming preview capability             | The control request issues an opaque five-minute capability; the iframe performs the one real streamed page or GET handler request |
 
 The generated browser kernel contains React, React DOM, and Next's compiled
 Flight browser client. Its content hash is part of every artifact identity.
@@ -115,9 +117,15 @@ semantics.
 The production Next bundle keeps `secure-exec` and `isolated-vm` external so
 their ESM `import.meta.url` values retain filesystem meaning. The request
 route's output trace includes their transitive packages and Linux native ABI
-prebuilds. A local `VERCEL=1` production-server smoke reached the built API,
-selected SecureExec, and returned SSR HTML successfully; running the same trace
-inside Fluid Compute remains the required deployment canary.
+prebuilds. The pinned `node-stdlib-browser` dependency has a narrow Yarn patch
+so its ESM self-relative polyfills still resolve when Next exposes a global
+`require`. A local `VERCEL=1` production-server smoke reached the built API,
+selected SecureExec, and streamed a Suspense shell through the real HTTP route.
+With a 1.2 second delayed component, that run observed the shell at about 2.1
+seconds on the first cold isolate and 24 ms on the warm request; delayed content
+arrived at about 3.0 and 1.22 seconds respectively. These are local diagnostic
+numbers, not Fluid Compute benchmarks. Running the same trace inside Fluid
+Compute remains the required deployment canary.
 
 The cache boundary is host-owned. Student modules call the real `next/cache`
 functions in the RSC worker, while cache reads, writes, and tag mutations cross
@@ -209,9 +217,21 @@ Route Handler modules are compiled by the same pinned Next SWC server transform
 as pages. The worker evaluates their named method exports, then uses Next's
 `autoImplementMethods`, `NextRequest`, request-store AsyncLocalStorage, and
 mutable-cookie adapter. Tuto owns route matching and the IPC boundary. Streaming
-handlers can produce genuine Web streams, but this checkpoint buffers the stream
-before returning it across IPC; chunk-by-chunk host transport remains future
-work. The workbench's complete JSON execution envelope is limited to 6 MiB.
+handlers retain their chunk timing across both the child-process and SecureExec
+boundaries. SecureExec 0.1.0 buffers its HTTP-server bridge, so Tuto uses an
+explicit pull protocol: each bridge call returns at most 256 KiB, the SSR input
+channel acknowledges writes according to consumer demand, cancellation
+propagates into the worker, and the worker terminates a response after 16 MiB.
+The workbench's non-streamed JSON execution envelope remains limited to 6 MiB.
+
+For page previews and GET Route Handlers, the JSON control request compiles the
+immutable artifact but does not execute it a second time. It returns an
+unguessable, process-local capability with a five-minute lifetime. The sandboxed
+iframe follows that URL and receives the real streamed response. For pages,
+Flight is teed into SSR and a bounded hydration copy; the HTML shell and
+Suspense fallback can arrive before a delayed Server Component, while hydration
+begins when the completed Flight payload is appended. Navigating away cancels
+the worker streams and releases the workspace lease.
 
 Proxy modules use that same server transform. The worker invokes Next's Web
 adapter, matcher parser, matcher evaluator, `NextRequest`, `NextResponse`, and
@@ -333,11 +353,11 @@ restarting Next.js.
 ## Deliberately not supported yet
 
 - Parallel/intercepted routes, `global-error.tsx`, templates, and route slots
-- Chunk-by-chunk Flight/HTML transport (the workbench currently displays `loading.tsx` through its two-phase shell request)
+- Incremental Server Action Flight responses and streamed proxy terminal responses
 - External proxy rewrites and streaming proxy IPC
 - Next's webpack/Turbopack/PostCSS plugin pipeline, Sass, Tailwind directives, and CSS `url()` asset graph rewriting
 - Binary public uploads, `next/image` optimization, font optimization, and metadata file conventions such as generated OG images
-- Signed artifact capabilities and cross-region coordinator failover
+- Cross-instance signed preview capabilities and cross-region coordinator failover
 - A deployed Vercel Fluid Compute proof that validates SecureExec native loading, cold memory, concurrency, and termination behavior in Vercel's actual runtime
 - Independent security review and fuzzing of the SecureExec 0.1.0 compatibility/capability boundary
 
@@ -367,3 +387,8 @@ SecureExec enabled, exercise cold/warm/edit requests and concurrent workspaces,
 and record native-module loading, wall/CPU/RSS, timeout cleanup, and LRU
 behavior. After that, load-test the already-packaged cache coordinator across
 regions and fuzz the sandbox capability boundary.
+
+If deployment access is unavailable, the next local framework slice is App
+Router topology: parallel slots, intercepted routes, templates, and
+`global-error.tsx`, followed by differential fixtures against the pinned Next
+16.2.6 runtime.

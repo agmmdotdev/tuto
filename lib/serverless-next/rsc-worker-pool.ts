@@ -31,6 +31,10 @@ type WorkerReply = {
   routePattern?: string | null;
   status?: number;
   statusText?: string;
+  streamChunkBase64?: string;
+  streamDone?: boolean;
+  streamFinal?: unknown;
+  streamId?: string;
   stylePaths?: string[];
   type?: undefined;
   url?: string;
@@ -75,6 +79,14 @@ export type NextFlightWorkerResult = {
   stylePaths: string[];
 };
 
+export type NextFlightStreamWorkerResult = Omit<
+  NextFlightWorkerResult,
+  "flight"
+> & {
+  final: Promise<unknown>;
+  flight: ReadableStream<Uint8Array>;
+};
+
 export type NextRouteHandlerWorkerResult = {
   body: Buffer;
   cacheMetrics: NextCacheMetrics;
@@ -82,6 +94,14 @@ export type NextRouteHandlerWorkerResult = {
   routePattern: string | null;
   status: number;
   statusText: string;
+};
+
+export type NextRouteHandlerStreamWorkerResult = Omit<
+  NextRouteHandlerWorkerResult,
+  "body"
+> & {
+  body: ReadableStream<Uint8Array>;
+  final: Promise<unknown>;
 };
 
 export type NextProxyWorkerResult = {
@@ -227,6 +247,62 @@ export class NextRscWorkerPool {
     });
   }
 
+  private async openStream(message: Record<string, unknown>) {
+    if (this.executionMode === "secure-exec") {
+      this.secureWorkers ??= new NextSecureExecWorkspacePool("rsc");
+      return this.secureWorkers.openStream(message);
+    }
+    const reply = await this.send(message);
+    if (typeof reply.streamId !== "string") {
+      throw new Error("Next RSC worker returned no response stream.");
+    }
+    const streamId = reply.streamId;
+    const generation = message.generation;
+    let resolveFinal!: (value: unknown) => void;
+    let rejectFinal!: (error: unknown) => void;
+    const final = new Promise<unknown>((resolve, reject) => {
+      resolveFinal = resolve;
+      rejectFinal = reject;
+    });
+    void final.catch(() => undefined);
+    const stream = new ReadableStream<Uint8Array>({
+      pull: async (controller) => {
+        try {
+          const next = await this.send({
+            generation,
+            streamId,
+            type: "stream-pull",
+          });
+          if (next.streamDone) {
+            resolveFinal(next.streamFinal);
+            controller.close();
+          } else if (typeof next.streamChunkBase64 === "string") {
+            controller.enqueue(Buffer.from(next.streamChunkBase64, "base64"));
+          } else {
+            throw new Error("Next RSC worker returned an invalid stream chunk.");
+          }
+        } catch (error) {
+          rejectFinal(error);
+          controller.error(error);
+        }
+      },
+      cancel: async (reason) => {
+        try {
+          await this.send({
+            generation,
+            reason: typeof reason === "string" ? reason : "Host cancelled response stream.",
+            streamId,
+            type: "stream-cancel",
+          });
+          resolveFinal({ cancelled: true });
+        } catch (error) {
+          rejectFinal(error);
+        }
+      },
+    });
+    return { ...reply, final, stream };
+  }
+
   private result(reply: WorkerReply): NextFlightWorkerResult {
     if (reply.bodyBase64 === undefined)
       throw new Error("Next RSC worker returned no Flight payload.");
@@ -284,6 +360,43 @@ export class NextRscWorkerPool {
       url,
     });
     return this.result(reply);
+  }
+
+  async renderStream(
+    artifact: NextRequestArtifact,
+    url: string,
+    headers: Array<[string, string]> = [],
+  ): Promise<NextFlightStreamWorkerResult> {
+    if (!this.installed.has(artifact.generation)) {
+      await this.send({ artifact, type: "install" });
+      this.installed.add(artifact.generation);
+    }
+    const reply = await this.openStream({
+      generation: artifact.generation,
+      headers,
+      type: "render-stream",
+      url,
+    });
+    return {
+      cacheMetrics: (reply.cacheMetrics as NextCacheMetrics | undefined) ?? {
+        hits: 0,
+        misses: 0,
+        revalidations: 0,
+        staleHits: 0,
+        writes: 0,
+      },
+      contentType:
+        typeof reply.contentType === "string"
+          ? reply.contentType
+          : "text/x-component; charset=utf-8",
+      final: reply.final,
+      flight: reply.stream,
+      headers: (reply.headers as Array<[string, string]> | undefined) ?? [],
+      routePattern:
+        typeof reply.routePattern === "string" ? reply.routePattern : null,
+      status: typeof reply.status === "number" ? reply.status : 200,
+      stylePaths: (reply.stylePaths as string[] | undefined) ?? [],
+    };
   }
 
   async renderLoading(
@@ -368,6 +481,43 @@ export class NextRscWorkerPool {
         type: "route-handler",
       }),
     );
+  }
+
+  async invokeRouteHandlerStream(
+    artifact: NextRequestArtifact,
+    input: {
+      bodyBase64?: string;
+      headers: Array<[string, string]>;
+      method: string;
+      url: string;
+    },
+  ): Promise<NextRouteHandlerStreamWorkerResult> {
+    if (!this.installed.has(artifact.generation)) {
+      await this.send({ artifact, type: "install" });
+      this.installed.add(artifact.generation);
+    }
+    const reply = await this.openStream({
+      ...input,
+      generation: artifact.generation,
+      type: "route-handler-stream",
+    });
+    return {
+      body: reply.stream,
+      cacheMetrics: (reply.cacheMetrics as NextCacheMetrics | undefined) ?? {
+        hits: 0,
+        misses: 0,
+        revalidations: 0,
+        staleHits: 0,
+        writes: 0,
+      },
+      final: reply.final,
+      headers: (reply.headers as Array<[string, string]> | undefined) ?? [],
+      routePattern:
+        typeof reply.routePattern === "string" ? reply.routePattern : null,
+      status: typeof reply.status === "number" ? reply.status : 200,
+      statusText:
+        typeof reply.statusText === "string" ? reply.statusText : "",
+    };
   }
 
   async invokeProxy(

@@ -1,0 +1,13 @@
+diff --git a/esm/index.js b/esm/index.js
+index 744e1f0ec2350dae8b2f4c3e470608e5bee6f565..ac6694935f2c16bae58554eb7ba5cdc0bc62bb16 100644
+--- a/esm/index.js
++++ b/esm/index.js
+@@ -31,7 +31,7 @@ const resolvePath = path => {
+     resolvedPath = require.resolve(path);
+   } catch {
+     var _globalThis$require;
+-    resolvedPath = ((_globalThis$require = _globalThis.require) != null ? _globalThis$require : createRequire(import.meta.url)).resolve(path);
++    resolvedPath = createRequire(import.meta.url).resolve(path);
+   }
+   if (!path.includes('./')) {
+     var _pkgDir$sync;

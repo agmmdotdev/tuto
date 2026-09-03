@@ -47,6 +47,7 @@ type ExpressResponseView = {
   headers: Record<string, string>;
   body: string;
   contentType: string;
+  previewUrl?: string;
 };
 
 type ActiveRequest = {
@@ -86,6 +87,7 @@ export type ServerlessHttpWorkbenchConfig = {
   previewTitle: string;
   showPreviewAsStatic?: boolean;
   virtualNavigation?: boolean;
+  streamingPreview?: boolean;
   defaultCompiler?: ServerlessExpressCompilerKind;
   compilerOptions?: CompilerOption[];
 };
@@ -312,6 +314,7 @@ export function ServerlessExpressIdeWorkbench({
   const [requestVersion, setRequestVersion] = useState(0);
   const [buildState, setBuildState] = useState<BuildState>("idle");
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [responseView, setResponseView] = useState<ExpressResponseView | null>(
     null,
   );
@@ -388,6 +391,7 @@ export function ServerlessExpressIdeWorkbench({
           ) {
             startTransition(() => {
               setPreviewHtml(loading.body);
+              setPreviewUrl(null);
               setResponseTab("preview");
             });
           }
@@ -645,6 +649,7 @@ export function ServerlessExpressIdeWorkbench({
             files,
             request: activeRequest,
             compiler,
+            streamPreview: config.streamingPreview,
             workspaceKey: workspaceRequestKey,
           }),
         });
@@ -666,6 +671,7 @@ export function ServerlessExpressIdeWorkbench({
         const isHtml =
           nextResponse?.contentType.toLowerCase().includes("text/html") ??
           false;
+        const hasStreamingPreview = Boolean(nextResponse?.previewUrl);
 
         const redirectLocation = nextResponse?.headers.location;
         if (
@@ -682,6 +688,7 @@ export function ServerlessExpressIdeWorkbench({
         startTransition(() => {
           setResponseView(nextResponse);
           setPreviewHtml(isHtml ? (nextResponse?.body ?? null) : null);
+          setPreviewUrl(nextResponse?.previewUrl ?? null);
           setBuildDiagnostics(payload.diagnostics ?? []);
           setRuntimeLogs(
             (payload.logs ?? []).map((entry) => ({
@@ -691,7 +698,7 @@ export function ServerlessExpressIdeWorkbench({
           );
           setBuildState(payload.success ? "ready" : "error");
           setClientLogs([]);
-          setResponseTab(isHtml ? "preview" : "body");
+          setResponseTab(isHtml || hasStreamingPreview ? "preview" : "body");
         });
       } catch (error) {
         const message =
@@ -702,6 +709,7 @@ export function ServerlessExpressIdeWorkbench({
         setRequestError(message);
         setResponseView(null);
         setPreviewHtml(null);
+        setPreviewUrl(null);
         setRuntimeLogs([]);
         setBuildDiagnostics([
           {
@@ -722,6 +730,7 @@ export function ServerlessExpressIdeWorkbench({
     activeRequest,
     compiler,
     config.requestRoute,
+    config.streamingPreview,
     config.virtualNavigation,
     files,
     requestVersion,
@@ -1025,7 +1034,8 @@ export function ServerlessExpressIdeWorkbench({
               <div className="flex h-9 items-center gap-1 border-b border-[#2a2d2e] px-3 text-xs">
                 {(["preview", "body", "headers"] as ResponseTab[]).map(
                   (tab) => {
-                    const disabled = tab === "preview" && !previewHtml;
+                    const disabled =
+                      tab === "preview" && !previewHtml && !previewUrl;
 
                     return (
                       <button
@@ -1048,11 +1058,12 @@ export function ServerlessExpressIdeWorkbench({
                 )}
               </div>
               <div className="min-h-0 flex-1 bg-[#ffffff]">
-                {responseTab === "preview" && previewHtml ? (
+                {responseTab === "preview" && (previewHtml || previewUrl) ? (
                   <iframe
                     className="h-full w-full border-0"
                     sandbox="allow-scripts"
-                    srcDoc={previewDocument ?? ""}
+                    src={previewUrl ?? undefined}
+                    srcDoc={previewUrl ? undefined : (previewDocument ?? "")}
                     title={config.previewTitle}
                   />
                 ) : responseTab === "headers" ? (

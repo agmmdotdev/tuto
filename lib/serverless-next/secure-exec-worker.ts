@@ -36,6 +36,13 @@ export type NextSecureWorkerReply = {
   [key: string]: unknown;
 };
 
+export type NextSecureWorkerStream = {
+  errorInput(error: unknown): Promise<void>;
+  final: Promise<unknown>;
+  stream: ReadableStream<Uint8Array>;
+  writeInput(chunk?: Uint8Array, done?: boolean): Promise<void>;
+};
+
 const runtimeRoot = "/root/tuto-next-runtime";
 const maxBridgePayloadBytes = 32 * 1024 * 1024;
 const maxCachePayloadBytes = 8 * 1024 * 1024;
@@ -482,7 +489,7 @@ const server = http.createServer((request, response) => {
       if (bytes <= maxBodyBytes) chunks.push(Buffer.from(chunk));
     });
     request.on("end", () => {
-      queue = queue.then(async () => {
+      const run = async () => {
         let message;
         try {
           if (bytes > maxBodyBytes) throw new Error("SecureExec worker request is too large.");
@@ -500,8 +507,17 @@ const server = http.createServer((request, response) => {
             ok: false,
           }));
         }
-      });
-      resolveRequest(queue);
+      };
+      let parsedType;
+      try {
+        parsedType = JSON.parse(Buffer.concat(chunks).toString("utf8")).type;
+      } catch {}
+      if (["stream-cancel", "stream-error", "stream-pull", "stream-write"].includes(parsedType)) {
+        resolveRequest(run());
+      } else {
+        queue = queue.then(run);
+        resolveRequest(queue);
+      }
     });
   });
 });
@@ -539,6 +555,10 @@ export class NextSecureExecWorker {
     await filesystem.writeFile(
       `${runtimeRoot}/secure-node-compat.cjs`,
       await readFile(path.join(sourceRoot, "secure-node-compat.cjs"), "utf8"),
+    );
+    await filesystem.writeFile(
+      `${runtimeRoot}/stream-runtime.cjs`,
+      await readFile(path.join(sourceRoot, "stream-runtime.cjs"), "utf8"),
     );
     if (this.kind === "rsc") {
       await filesystem.writeFile(
@@ -796,6 +816,129 @@ export class NextSecureExecWorker {
     return operation;
   }
 
+  private sendControl(message: Record<string, unknown>) {
+    return this.sendOne(message);
+  }
+
+  async openStream(
+    message: Record<string, unknown>,
+  ): Promise<NextSecureWorkerReply & NextSecureWorkerStream> {
+    const reply = await this.send(message);
+    if (typeof reply.streamId !== "string") {
+      throw new Error(
+        `The SecureExec ${this.kind.toUpperCase()} worker returned no response stream.`,
+      );
+    }
+    const streamId = reply.streamId;
+    const inputStreamId =
+      typeof reply.inputStreamId === "string" ? reply.inputStreamId : undefined;
+    const generation =
+      typeof message.generation === "string" ? message.generation : undefined;
+    let resolveFinal!: (value: unknown) => void;
+    let rejectFinal!: (error: unknown) => void;
+    let settled = false;
+    let idleTimeout: NodeJS.Timeout | undefined;
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const final = new Promise<unknown>((resolve, reject) => {
+      resolveFinal = resolve;
+      rejectFinal = reject;
+    });
+    void final.catch(() => undefined);
+    const finish = (value: unknown) => {
+      if (settled) return;
+      settled = true;
+      if (idleTimeout) clearTimeout(idleTimeout);
+      resolveFinal(value);
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      if (idleTimeout) clearTimeout(idleTimeout);
+      rejectFinal(error);
+    };
+    const armIdleTimeout = () => {
+      if (idleTimeout) clearTimeout(idleTimeout);
+      idleTimeout = setTimeout(() => {
+        const error = new Error(
+          `The SecureExec ${this.kind.toUpperCase()} response stream was idle for ${this.timeoutMs}ms.`,
+        );
+        void this.sendControl({
+          generation,
+          reason: error.message,
+          streamId,
+          type: "stream-cancel",
+        }).catch(() => undefined);
+        fail(error);
+        streamController?.error(error);
+      }, this.timeoutMs);
+    };
+    const stream = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        streamController = controller;
+      },
+      pull: async (controller) => {
+        if (idleTimeout) clearTimeout(idleTimeout);
+        try {
+          const next = await this.sendControl({
+            generation,
+            streamId,
+            type: "stream-pull",
+          });
+          if (next.streamDone === true) {
+            finish(next.streamFinal);
+            controller.close();
+            return;
+          }
+          if (typeof next.streamChunkBase64 !== "string") {
+            throw new Error("The SecureExec worker returned an invalid stream chunk.");
+          }
+          controller.enqueue(Buffer.from(next.streamChunkBase64, "base64"));
+          armIdleTimeout();
+        } catch (error) {
+          fail(error);
+          controller.error(error);
+        }
+      },
+      cancel: async (reason) => {
+        if (idleTimeout) clearTimeout(idleTimeout);
+        try {
+          await this.sendControl({
+            generation,
+            reason: typeof reason === "string" ? reason : "Host cancelled response stream.",
+            streamId,
+            type: "stream-cancel",
+          });
+          finish({ cancelled: true });
+        } catch (error) {
+          fail(error);
+          throw error;
+        }
+      },
+    });
+    const writeInput = async (chunk?: Uint8Array, done = false) => {
+      if (!inputStreamId) {
+        throw new Error("The SecureExec worker stream has no request body channel.");
+      }
+      await this.sendControl({
+        generation,
+        inputStreamId,
+        streamChunkBase64: chunk ? Buffer.from(chunk).toString("base64") : undefined,
+        streamDone: done,
+        type: "stream-write",
+      });
+    };
+    const errorInput = async (error: unknown) => {
+      if (!inputStreamId) return;
+      await this.sendControl({
+        error: error instanceof Error ? error.message : String(error),
+        generation,
+        inputStreamId,
+        type: "stream-error",
+      });
+    };
+    return { ...reply, errorInput, final, stream, writeInput };
+  }
+
   private async sendOne(message: Record<string, unknown>) {
     if (!this.address || !this.runtime) {
       throw new Error("The SecureExec Next worker is not running.");
@@ -912,6 +1055,10 @@ export class NextSecureExecWorkspacePool {
       for (;;) {
         const existing = this.workers.get(workspaceKey);
         if (existing) {
+          if (existing.active > 0) {
+            await this.waitForAvailable();
+            continue;
+          }
           existing.active += 1;
           existing.lastUsed = Date.now();
           resolveEntry(existing);
@@ -1017,6 +1164,42 @@ export class NextSecureExecWorkspacePool {
       throw error;
     } finally {
       this.release(entry);
+    }
+  }
+
+  async openStream(message: Record<string, unknown>) {
+    const generation =
+      typeof message.generation === "string" ? message.generation : undefined;
+    const workspaceKey = generation
+      ? this.generationWorkspaces.get(generation)
+      : undefined;
+    if (!generation || !workspaceKey) {
+      throw new Error("SecureExec Next streams require an installed generation.");
+    }
+    const entry = await this.allocate(workspaceKey);
+    try {
+      const worker = await entry.worker;
+      if (!entry.installed.has(generation)) {
+        const storedArtifact = this.artifacts.get(generation);
+        if (!storedArtifact) {
+          throw new Error(`Next generation ${generation} has no stored artifact.`);
+        }
+        await worker.send({ artifact: storedArtifact, type: "install" });
+        entry.installed.add(generation);
+      }
+      const opened = await worker.openStream(message);
+      void opened.final.then(
+        () => this.release(entry),
+        () => this.release(entry),
+      );
+      return opened;
+    } catch (error) {
+      const worker = await entry.worker.catch(() => undefined);
+      if (!worker?.running && this.workers.get(workspaceKey) === entry) {
+        this.workers.delete(workspaceKey);
+      }
+      this.release(entry);
+      throw error;
     }
   }
 
