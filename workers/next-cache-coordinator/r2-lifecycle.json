@@ -1,0 +1,23 @@
+{
+  "rules": [
+    {
+      "id": "compact-tuto-next-cache-values",
+      "enabled": true,
+      "conditions": {
+        "prefix": "next/cache/v1/"
+      },
+      "deleteObjectsTransition": {
+        "condition": {
+          "type": "Age",
+          "maxAge": 604800
+        }
+      },
+      "abortMultipartUploadsTransition": {
+        "condition": {
+          "type": "Age",
+          "maxAge": 86400
+        }
+      }
+    }
+  ]
+}

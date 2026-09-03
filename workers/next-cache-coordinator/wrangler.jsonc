@@ -1,0 +1,23 @@
+{
+  "name": "tuto-next-cache-coordinator",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "NEXT_CACHE_COORDINATOR",
+        "class_name": "NextCacheCoordinator",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["NextCacheCoordinator"],
+    },
+  ],
+  "observability": {
+    "enabled": true,
+  },
+}

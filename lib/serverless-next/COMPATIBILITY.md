@@ -134,13 +134,22 @@ TUTO_NEXT_CACHE_COORDINATOR_ENDPOINT=https://cache-coordinator.example/v1
 TUTO_NEXT_CACHE_COORDINATOR_TOKEN=...
 ```
 
-The coordinator endpoint should expose the included authenticated protocol over
-a transactional implementation. For a Durable Object deployment, the outer
-Worker should route each workspace hash to its own object rather than sending
-every student through one global object. The token is sent as a Bearer
-credential. R2 lifecycle rules should eventually remove old value objects;
-invalidated objects are deleted eagerly when read, but never-read entries
-otherwise remain until the lifecycle policy or a future sweeper removes them.
+The deployable coordinator in `workers/next-cache-coordinator` exposes the
+authenticated protocol through a SQLite-backed Cloudflare Durable Object. Its
+outer Worker hashes the workspace key and selects a separate object for every
+workspace rather than sending every student through one global object. The
+token is sent as a Bearer credential. The package includes a checked-in R2
+lifecycle configuration that expires value objects after seven days and aborts
+incomplete multipart uploads after one day. Invalidated objects are still
+deleted eagerly when read. Lifecycle deletion only turns a later request into a
+cache miss; the Durable Object remains the authority for invalidation ordering.
+
+`scripts/load-next-cache-coordinator.mjs` exercises monotonic allocation under
+concurrency, single-winner writer leases, release/reacquisition, and an
+invalidation racing an older writer fence. It accepts multiple ingress URLs and
+can require multiple observed Cloudflare colos for a deployed cross-region
+run. The same assertions also run against the in-process protocol in the
+serverless Next test suite.
 
 Cache Component values are genuine Flight streams. The worker serializes those
 streams for IPC and the host stores them through the same adapter used by
