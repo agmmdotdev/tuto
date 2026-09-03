@@ -5,6 +5,8 @@ import type { NextRequestArtifact } from "./artifact";
 import {
   getNextCacheAdapter,
   type NextCacheGetInput,
+  type NextCacheLock,
+  type NextCacheLockInput,
   type NextCacheMetrics,
   type NextCacheRevalidateInput,
   type NextCacheSetInput,
@@ -31,8 +33,13 @@ type WorkerReply = {
 };
 
 type WorkerCacheRequest = {
-  input: NextCacheGetInput | NextCacheRevalidateInput | NextCacheSetInput;
-  operation: "get" | "revalidateTags" | "set";
+  input:
+    | NextCacheGetInput
+    | NextCacheLock
+    | NextCacheLockInput
+    | NextCacheRevalidateInput
+    | NextCacheSetInput;
+  operation: "acquireLock" | "get" | "releaseLock" | "revalidateTags" | "set";
   requestId: string;
   type: "cache-request";
 };
@@ -114,9 +121,13 @@ export class NextRscWorkerPool {
           ? await adapter.get(message.input as NextCacheGetInput)
           : message.operation === "set"
             ? await adapter.set(message.input as NextCacheSetInput)
-            : await adapter.revalidateTags(
-                message.input as NextCacheRevalidateInput,
-              );
+            : message.operation === "acquireLock"
+              ? await adapter.acquireLock(message.input as NextCacheLockInput)
+              : message.operation === "releaseLock"
+                ? await adapter.releaseLock(message.input as NextCacheLock)
+                : await adapter.revalidateTags(
+                    message.input as NextCacheRevalidateInput,
+                  );
       child.send({
         ok: true,
         requestId: message.requestId,

@@ -14,7 +14,15 @@ import {
   compileNextRequestWorkspaceWithStatus,
 } from "../../lib/serverless-next/compiler";
 import { clearNextTransformCacheForTests } from "../../lib/serverless-next/next-compiler-adapter";
-import { clearNextCacheAdapterForTests } from "../../lib/serverless-next/cache-adapter";
+import {
+  clearNextCacheAdapterForTests,
+  setNextCacheAdapter,
+} from "../../lib/serverless-next/cache-adapter";
+import {
+  DurableNextCacheAdapter,
+  MemoryNextCacheInvalidationCoordinator,
+  MemoryNextCacheValueStore,
+} from "../../lib/serverless-next/durable-cache-adapter";
 import {
   executeNextProgressiveActionArtifact,
   executeNextServerActionArtifact,
@@ -1693,7 +1701,45 @@ describe("request-compiled Next RSC runtime", () => {
     );
   });
 
+  test("shares durable cache values and invalidation through real RSC/action requests", async () => {
+    const coordinator = new MemoryNextCacheInvalidationCoordinator();
+    const values = new MemoryNextCacheValueStore();
+    setNextCacheAdapter(new DurableNextCacheAdapter({ coordinator, values }));
+    const artifact = await compileNextRequestWorkspace(cacheWorkspace(), {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "durable-cache-rsc",
+    });
+
+    const cold = await renderNextRequestArtifact(artifact, { url: "/cache" });
+    expect(await cold.text()).toContain("tag-read:<!-- -->1");
+    expect(cold.headers.get("x-tuto-next-cache")).toContain("miss=2");
+
+    setNextCacheAdapter(new DurableNextCacheAdapter({ coordinator, values }));
+    const secondHost = await renderNextRequestArtifact(artifact, {
+      url: "/cache",
+    });
+    expect(await secondHost.text()).toContain("tag-read:<!-- -->1");
+    expect(secondHost.headers.get("x-tuto-next-cache")).toContain("hit=2");
+
+    const expireTag = Object.entries(artifact.actionManifest).find(
+      ([, reference]) => reference.exportName === "expireTag",
+    );
+    const invalidated = await invokeNextServerAction(artifact, {
+      actionId: expireTag![0],
+      body: await serializeNextActionBody(await rscClient.encodeReply([])),
+      url: "/cache",
+    });
+    expect(await invalidated.text()).toContain("tag-read:");
+    expect(invalidated.headers.get("x-tuto-next-cache")).toContain("miss=1");
+    expect(invalidated.headers.get("x-tuto-next-cache")).toContain(
+      "revalidate=1",
+    );
+  });
+
   test('runs compiler-generated "use cache" entries with cacheLife and cacheTag', async () => {
+    const coordinator = new MemoryNextCacheInvalidationCoordinator();
+    const values = new MemoryNextCacheValueStore();
+    setNextCacheAdapter(new DurableNextCacheAdapter({ coordinator, values }));
     const artifact = await compileNextRequestWorkspace(
       cacheComponentsWorkspace(),
       {
@@ -1782,6 +1828,9 @@ describe("request-compiled Next RSC runtime", () => {
   });
 
   test("uses Next patched fetch caching and invalidates fetch tags", async () => {
+    const coordinator = new MemoryNextCacheInvalidationCoordinator();
+    const values = new MemoryNextCacheValueStore();
+    setNextCacheAdapter(new DurableNextCacheAdapter({ coordinator, values }));
     let originReads = 0;
     const origin = createServer((_request, response) => {
       response.setHeader("content-type", "application/json");

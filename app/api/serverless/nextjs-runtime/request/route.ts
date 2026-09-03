@@ -131,6 +131,9 @@ export async function POST(request: Request) {
         "The request-compiled Next checkpoint is disabled in production until student execution is behind Tuto's isolation boundary.",
       );
     }
+    const { configureNextCacheAdapterFromEnvironment } =
+      await import("../../../../../lib/serverless-next/durable-cache-adapter");
+    configureNextCacheAdapterFromEnvironment();
     const contentType = request.headers.get("content-type") ?? "";
     if (
       contentType.startsWith("multipart/form-data") ||
