@@ -23,16 +23,19 @@ export type NextRouteHandlerRequest = NextRuntimeRequest & {
 export type NextExecuteRequest = NextRouteHandlerRequest & {
   actionEndpoint?: string;
   hydrate?: boolean;
+  loading?: boolean;
 };
 
 async function flightToHtml(
   artifact: NextRequestArtifact,
   result: NextFlightWorkerResult,
+  url = "/",
 ) {
   const html = await getNextSsrWorkerPool().render(
     artifact,
     result.flight,
     result.formState,
+    url,
   );
   const styleElements = result.stylePaths
     .map((stylePath) => {
@@ -111,6 +114,24 @@ function hydrationBootstrap(
   const stream = new ReadableStream({ start(controller) { controller.enqueue(bytes); controller.close(); } });
   const kernel = globalThis.__TUTO_NEXT_CLIENT_KERNEL__;
   const actionHeaders = new Headers(${JSON.stringify(config.headers)});
+  globalThis.__TUTO_NEXT_URL__ = ${JSON.stringify(config.url)};
+  globalThis.__TUTO_NEXT_NAVIGATE__ = (navigation, path) => {
+    window.parent?.postMessage({
+      kind: "navigate",
+      navigation,
+      path: path || globalThis.__TUTO_NEXT_URL__,
+      source: "tuto-serverless-nextjs-runtime-preview-log",
+    }, "*");
+  };
+  document.addEventListener("click", (event) => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const anchor = event.target instanceof Element ? event.target.closest("a[href]") : null;
+    if (!anchor || (anchor.target && anchor.target !== "_self")) return;
+    const target = new URL(anchor.getAttribute("href"), new URL(globalThis.__TUTO_NEXT_URL__, "http://next.local"));
+    if (target.origin !== "http://next.local") return;
+    event.preventDefault();
+    globalThis.__TUTO_NEXT_NAVIGATE__("push", target.pathname + target.search + target.hash);
+  });
   let root;
   function bytesToBase64(bytes) {
     let binary = "";
@@ -182,7 +203,11 @@ function hydrationBootstrap(
     applyVirtualCookies(response);
     const location = response.headers.get("location");
     if (location) {
-      window.location.assign(location);
+      const redirect = response.headers.get("x-action-redirect") || "";
+      globalThis.__TUTO_NEXT_NAVIGATE__(
+        redirect.endsWith(";replace") ? "replace" : "push",
+        location,
+      );
       return undefined;
     }
     if (!response.ok || !response.body) {
@@ -229,7 +254,7 @@ async function hydratableDocument(
   },
 ) {
   const html = wireProgressiveActionForms(
-    await flightToHtml(artifact, result),
+    await flightToHtml(artifact, result, config.url),
     {
       actionEndpoint: config.actionEndpoint,
       revision: artifact.revision,
@@ -310,6 +335,40 @@ export async function renderHydratableNextRequestArtifact(
   });
 }
 
+export async function renderHydratableNextLoadingArtifact(
+  artifact: NextRequestArtifact,
+  options: NextRuntimeRequest & { actionEndpoint?: string } = {},
+) {
+  const url = options.url ?? "/";
+  const requestHeaders = [...new Headers(options.headers).entries()];
+  const result = await getNextRscWorkerPool().renderLoading(
+    artifact,
+    url,
+    requestHeaders,
+  );
+  if (!result.contentType.startsWith("text/x-component")) {
+    return new Response(null, {
+      headers: flightResultHeaders(artifact, result, result.contentType),
+      status: result.status,
+    });
+  }
+  return new Response(
+    await hydratableDocument(artifact, result, {
+      actionEndpoint: options.actionEndpoint,
+      headers: requestHeaders,
+      url,
+    }),
+    {
+      headers: flightResultHeaders(
+        artifact,
+        result,
+        "text/html; charset=utf-8",
+      ),
+      status: result.status,
+    },
+  );
+}
+
 export async function renderNextRequestArtifact(
   artifact: NextRequestArtifact,
   options: NextRuntimeRequest & { flight?: boolean } = {},
@@ -338,7 +397,7 @@ export async function renderNextRequestArtifact(
       status: result.status,
     });
   }
-  const html = await flightToHtml(artifact, result);
+  const html = await flightToHtml(artifact, result, options.url ?? "/");
   return new Response(html, {
     headers: flightResultHeaders(artifact, result, "text/html; charset=utf-8"),
     status: result.status,
@@ -752,14 +811,23 @@ export async function executeNextRequestArtifact(
     });
     response.headers.set("x-tuto-next-runtime-kind", "route-handler");
   } else if (method === "GET" || method === "HEAD") {
-    response = options.hydrate
-      ? await renderHydratableNextRequestArtifact(artifact, {
+    response = options.loading
+      ? await renderHydratableNextLoadingArtifact(artifact, {
           actionEndpoint: options.actionEndpoint,
           headers,
           url,
         })
-      : await renderNextRequestArtifact(artifact, { headers, url });
-    response.headers.set("x-tuto-next-runtime-kind", "page");
+      : options.hydrate
+        ? await renderHydratableNextRequestArtifact(artifact, {
+            actionEndpoint: options.actionEndpoint,
+            headers,
+            url,
+          })
+        : await renderNextRequestArtifact(artifact, { headers, url });
+    response.headers.set(
+      "x-tuto-next-runtime-kind",
+      options.loading ? "page-loading" : "page",
+    );
     if (method === "HEAD") {
       response = new Response(null, {
         headers: response.headers,

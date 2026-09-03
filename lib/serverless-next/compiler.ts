@@ -327,6 +327,10 @@ async function buildClientBundle(
           path: args.path,
         }),
       );
+      buildApi.onResolve({ filter: /^next\/(?:link|navigation)$/ }, (args) => ({
+        namespace: sharedNamespace,
+        path: args.path,
+      }));
       buildApi.onResolve(
         { filter: /^private-next-rsc-action-client-wrapper$/ },
         (args) => ({
