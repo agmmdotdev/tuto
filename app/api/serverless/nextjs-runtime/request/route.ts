@@ -151,10 +151,9 @@ export async function POST(request: Request) {
     }
 
     const startedAt = performance.now();
-    const [compiler, nextRuntime, routeManifest] = await Promise.all([
+    const [compiler, nextRuntime] = await Promise.all([
       import("../../../../../lib/serverless-next/compiler"),
       import("../../../../../lib/serverless-next/runtime"),
-      import("../../../../../lib/serverless-next/route-manifest"),
     ]);
     const { artifact, artifactCache } =
       await compiler.compileNextRequestWorkspaceWithStatus(
@@ -165,30 +164,19 @@ export async function POST(request: Request) {
         },
       );
     const url = `${routeUrl.pathname}${routeUrl.search}`;
-    const matchedHandler = routeManifest.matchNextRouteHandler(
-      artifact.router,
-      routeUrl,
-    );
-    if (!matchedHandler && method !== "GET") {
-      throw new Error(
-        "App Router page requests currently use GET. Use app/**/route.ts for other HTTP methods.",
-      );
-    }
-    const response = matchedHandler
-      ? await nextRuntime.invokeNextRouteHandler(artifact, {
-          body: payload.request?.body,
-          headers: payload.request?.headers,
-          method,
-          url,
-        })
-      : await nextRuntime.renderHydratableNextRequestArtifact(artifact, {
-          actionEndpoint: request.url,
-          url,
-        });
+    const response = await nextRuntime.executeNextRequestArtifact(artifact, {
+      actionEndpoint: request.url,
+      body: payload.request?.body,
+      headers: payload.request?.headers,
+      hydrate: true,
+      method,
+      url,
+    });
     const responseBody = await response.text();
-    const body = matchedHandler
-      ? responseBody
-      : injectPreviewBridge(responseBody);
+    const body =
+      response.headers.get("x-tuto-next-runtime-kind") === "page"
+        ? injectPreviewBridge(responseBody)
+        : responseBody;
     const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
 
     return NextResponse.json(
@@ -222,6 +210,12 @@ export async function POST(request: Request) {
             id: crypto.randomUUID(),
             level: "info",
             message: `Data cache: ${response.headers.get("x-tuto-next-cache") ?? "no cache operations"}.`,
+            timestamp: new Date().toISOString(),
+          },
+          {
+            id: crypto.randomUUID(),
+            level: "info",
+            message: `Proxy: ${response.headers.get("x-tuto-next-proxy") ?? "absent"}. Runtime result: ${response.headers.get("x-tuto-next-runtime-kind") ?? "unknown"}.`,
             timestamp: new Date().toISOString(),
           },
         ],

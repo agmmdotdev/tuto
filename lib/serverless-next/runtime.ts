@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { NextRequestArtifact } from "./artifact";
+import { matchNextRouteHandler } from "./route-manifest";
 import {
   getNextRscWorkerPool,
   type NextFlightWorkerResult,
@@ -9,6 +10,7 @@ import {
 import { getNextSsrWorkerPool } from "./ssr-worker-pool";
 
 export type NextRuntimeRequest = {
+  headers?: HeadersInit;
   url?: string;
 };
 
@@ -16,6 +18,11 @@ export type NextRouteHandlerRequest = NextRuntimeRequest & {
   body?: string | Uint8Array;
   headers?: HeadersInit;
   method?: string;
+};
+
+export type NextExecuteRequest = NextRouteHandlerRequest & {
+  actionEndpoint?: string;
+  hydrate?: boolean;
 };
 
 async function flightToHtml(
@@ -134,7 +141,9 @@ export async function renderHydratableNextRequestArtifact(
   options: NextRuntimeRequest & { actionEndpoint?: string } = {},
 ) {
   const url = options.url ?? "/";
-  const result = await getNextRscWorkerPool().render(artifact, url);
+  const result = await getNextRscWorkerPool().render(artifact, url, [
+    ...new Headers(options.headers).entries(),
+  ]);
   const html = await flightToHtml(artifact, result);
   const scripts = `<script>${inlineScript(await readClientKernel())}</script>
 <script>${inlineScript(artifact.clientBundle.code)}</script>
@@ -162,6 +171,7 @@ export async function renderNextRequestArtifact(
   const result = await getNextRscWorkerPool().render(
     artifact,
     options.url ?? "/",
+    [...new Headers(options.headers).entries()],
   );
   if (options.flight) {
     return new Response(Uint8Array.from(result.flight), {
@@ -260,4 +270,119 @@ export async function invokeNextRouteHandler(
       statusText: result.statusText,
     },
   );
+}
+
+function requestBody(options: NextRouteHandlerRequest) {
+  if (typeof options.body === "string") return Buffer.from(options.body);
+  if (options.body) return Buffer.from(options.body);
+  return undefined;
+}
+
+export async function invokeNextProxy(
+  artifact: NextRequestArtifact,
+  options: NextRouteHandlerRequest = {},
+) {
+  const body = requestBody(options);
+  return getNextRscWorkerPool().invokeProxy(artifact, {
+    ...(body ? { bodyBase64: body.toString("base64") } : {}),
+    headers: [...new Headers(options.headers).entries()],
+    method: (options.method ?? "GET").toUpperCase(),
+    url: options.url ?? "/",
+  });
+}
+
+function mergeProxyResponseHeaders(
+  proxyHeaders: Array<[string, string]>,
+  response: Response,
+) {
+  const headers = new Headers(proxyHeaders);
+  for (const [name, value] of response.headers.entries()) {
+    if (name !== "set-cookie") headers.set(name, value);
+  }
+  if (typeof response.headers.getSetCookie === "function") {
+    for (const cookie of response.headers.getSetCookie()) {
+      headers.append("set-cookie", cookie);
+    }
+  } else {
+    const cookie = response.headers.get("set-cookie");
+    if (cookie) headers.append("set-cookie", cookie);
+  }
+  return headers;
+}
+
+export async function executeNextRequestArtifact(
+  artifact: NextRequestArtifact,
+  options: NextExecuteRequest = {},
+) {
+  const method = (options.method ?? "GET").toUpperCase();
+  const originalUrl = options.url ?? "/";
+  const proxy = artifact.router.proxy
+    ? await invokeNextProxy(artifact, { ...options, method, url: originalUrl })
+    : null;
+  if (proxy?.outcome === "redirect" || proxy?.outcome === "response") {
+    const headers = new Headers(proxy.headers);
+    headers.set("x-tuto-next-proxy", `matched=1; outcome=${proxy.outcome}`);
+    headers.set("x-tuto-next-runtime-kind", "proxy");
+    return new Response(
+      proxy.body.length > 0 ? Uint8Array.from(proxy.body) : null,
+      {
+        headers,
+        status: proxy.status,
+        statusText: proxy.statusText,
+      },
+    );
+  }
+
+  const url = proxy?.url ?? originalUrl;
+  const headers = proxy?.requestHeaders ?? [
+    ...new Headers(options.headers).entries(),
+  ];
+  const parsedUrl = new URL(url, "http://next.local");
+  const matchedHandler = matchNextRouteHandler(artifact.router, parsedUrl);
+  let response: Response;
+  if (matchedHandler) {
+    response = await invokeNextRouteHandler(artifact, {
+      body: options.body,
+      headers,
+      method,
+      url,
+    });
+    response.headers.set("x-tuto-next-runtime-kind", "route-handler");
+  } else if (method === "GET" || method === "HEAD") {
+    response = options.hydrate
+      ? await renderHydratableNextRequestArtifact(artifact, {
+          actionEndpoint: options.actionEndpoint,
+          headers,
+          url,
+        })
+      : await renderNextRequestArtifact(artifact, { headers, url });
+    response.headers.set("x-tuto-next-runtime-kind", "page");
+    if (method === "HEAD") {
+      response = new Response(null, {
+        headers: response.headers,
+        status: response.status,
+        statusText: response.statusText,
+      });
+    }
+  } else {
+    response = new Response(null, {
+      headers: { allow: "GET, HEAD" },
+      status: 405,
+    });
+  }
+
+  if (!proxy) {
+    response.headers.set("x-tuto-next-proxy", "absent");
+    return response;
+  }
+  const combinedHeaders = mergeProxyResponseHeaders(proxy.headers, response);
+  combinedHeaders.set(
+    "x-tuto-next-proxy",
+    `matched=${proxy.matched ? 1 : 0}; outcome=${proxy.outcome}`,
+  );
+  return new Response(response.body, {
+    headers: combinedHeaders,
+    status: response.status,
+    statusText: response.statusText,
+  });
 }

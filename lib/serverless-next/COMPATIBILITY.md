@@ -24,6 +24,12 @@ and rerun the compatibility suite.
 | Handler context                          | Promised dynamic `params`, URL/search params, request headers, cookies, and request bodies are verified |
 | Route response semantics                 | Status, status text, headers, multiple cookies, JSON, and Web `ReadableStream` bodies cross IPC         |
 | Handler cache/invalidation               | `unstable_cache` and `revalidateTag(tag, { expire: 0 })` share the host-owned adapter                   |
+| Next 16 `proxy.ts`                       | Root and `src/` proxy entries are compiled into the immutable artifact; legacy `middleware.ts` works    |
+| Proxy adapter                            | Next's Web adapter constructs the real request/event and request/work AsyncLocalStorage contexts        |
+| Proxy matchers                           | Next's matcher parser and route matcher apply path patterns plus `has` and `missing` predicates         |
+| Proxy continuation                       | `NextResponse.next()` request headers, response headers, and cookies reach downstream pages/handlers    |
+| Proxy rewrites                           | Internal rewrites re-enter Tuto routing with the rewritten pathname, query, headers, and cookies        |
+| Proxy terminal responses                 | `redirect`, JSON/direct responses, status, headers, cookies, bodies, and `waitUntil` are verified       |
 | `"use client"` boundary                  | Next's server transform produces its client-reference proxy                                             |
 | Client Component bundle                  | Only the student client closure is bundled against the shared kernel                                    |
 | Browser hydration                        | A Playwright checkpoint verifies `hydrateRoot` and a stateful click when a browser binary is installed  |
@@ -69,6 +75,14 @@ handlers can produce genuine Web streams, but this checkpoint buffers the stream
 before returning it across IPC; chunk-by-chunk host transport remains future
 work. The workbench's complete JSON execution envelope is limited to 6 MiB.
 
+Proxy modules use that same server transform. The worker invokes Next's Web
+adapter, matcher parser, matcher evaluator, `NextRequest`, `NextResponse`, and
+`NextFetchEvent`; Tuto interprets Next's generated control headers and then
+dispatches the continued or rewritten request through its immutable router.
+Proxy response cookies are also made visible to the downstream request, matching
+Next's middleware-cookie propagation. External rewrites are rejected because
+the current host has no explicit external-proxy capability boundary.
+
 This interface is the correct extension point for R2, but a production R2
 implementation is not included yet. Cache values can live in R2; tag versions
 and concurrent invalidation need a coordinated metadata strategy (for example
@@ -96,7 +110,7 @@ the expensive event, not every request or ordinary Server Component edit.
 
 - Full Next segment semantics: parallel/intercepted routes and complete loading, error, and thrown `notFound()` behavior
 - Captured inline Server Action arguments, progressive-enhancement form posts, `useActionState`, redirects, and action transitions
-- Middleware/proxy execution and request rewriting
+- Proxy execution on the generated Server Action transport, external rewrites, and streaming proxy IPC
 - CSS, static assets, metadata, images, fonts, and arbitrary `next/*` imports
 - Durable object storage, signed artifact capabilities, and cross-instance reuse
 - A production isolation boundary for hostile student code
@@ -119,8 +133,8 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next vertical slice should add middleware/proxy execution with matcher,
-rewrite, redirect, request-header, response-header, and cookie semantics. A
+The next vertical slice should either close the generated Server Action proxy
+transport gap or move to framework assets (CSS, metadata, and static files). A
 durable cache adapter should follow once Tuto chooses the cross-instance
 metadata coordinator; that storage decision should not be hidden inside the
 student runtime.

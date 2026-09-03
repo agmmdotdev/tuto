@@ -2238,9 +2238,9 @@ This checkpoint runs real Next compiler and React Server Components machinery wi
 - An immutable generation is reused when the workspace is unchanged
 - A host-owned adapter stores Next data-cache entries outside student modules
 
-Current checkpoint: nested layouts and static/dynamic/catch-all routes, async Server Components, Client Components, Flight, SSR, hydration, module-level Server Actions, App Router Route Handlers, Web \`Request\`/\`Response\`, \`NextRequest\`/\`NextResponse\`, headers/cookies, streaming responses, React request memoization, \`unstable_cache\`, Cache Components with \`"use cache"\`/\`cacheLife\`/\`cacheTag\`, patched \`fetch\`, tag invalidation, path invalidation, and stale-while-revalidate.
+Current checkpoint: nested layouts and static/dynamic/catch-all routes, async Server Components, Client Components, Flight, SSR, hydration, module-level Server Actions, App Router Route Handlers, Next 16 \`proxy.ts\` (plus legacy \`middleware.ts\`), matcher rules, request/response headers, cookies, rewrites, redirects, direct responses, \`waitUntil\`, Web \`Request\`/\`Response\`, \`NextRequest\`/\`NextResponse\`, streaming responses, React request memoization, \`unstable_cache\`, Cache Components with \`"use cache"\`/\`cacheLife\`/\`cacheTag\`, patched \`fetch\`, tag invalidation, path invalidation, and stale-while-revalidate.
 
-Try \`GET /lessons/rsc?mode=practice\`, \`GET /api/lessons/rsc?mode=practice\`, \`POST /api/lessons/rsc\` with a JSON body, \`GET /api/stream\`, \`GET /cache\`, \`GET /cache-components\`, and \`GET /fetch-cache\` after the root page. The default cache adapter is process-memory and workspace-scoped: data and fetch entries survive generation edits and worker restarts within one warm host. Cache Component keys include the immutable generation, matching Next's build-ID safety rule. This is not cross-instance durable storage. Middleware/proxy and captured inline action arguments are deliberately not claimed yet.`,
+Try \`GET /lessons/rsc?mode=practice\`, \`GET /api/lessons/rsc?mode=practice\`, \`POST /api/lessons/rsc\` with a JSON body, \`GET /proxy-rewrite\`, \`GET /proxy-redirect\`, \`GET /proxy-response\`, \`GET /api/stream\`, \`GET /cache\`, \`GET /cache-components\`, and \`GET /fetch-cache\` after the root page. The default cache adapter is process-memory and workspace-scoped: data and fetch entries survive generation edits and worker restarts within one warm host. Cache Component keys include the immutable generation, matching Next's build-ID safety rule. This is not cross-instance durable storage. Proxy execution for the generated Server Action transport and captured inline action arguments are deliberately not claimed yet.`,
       },
       {
         path: "package.json",
@@ -2286,6 +2286,49 @@ Try \`GET /lessons/rsc?mode=practice\`, \`GET /api/lessons/rsc?mode=practice\`, 
 /// <reference types="next/image-types/global" />
 
 // This file is intentionally lightweight for the runtime experiment.
+`,
+      },
+      {
+        path: "proxy.ts",
+        language: "ts",
+        description:
+          "A Next 16 proxy demonstrating continuation, rewrites, redirects, direct responses, headers, cookies, and waitUntil.",
+        content: `import { NextResponse, type NextFetchEvent, type NextRequest } from "next/server";
+
+export const config = {
+  matcher: [
+    "/lessons/:path*",
+    "/api/:path*",
+    "/proxy-rewrite",
+    "/proxy-redirect",
+    "/proxy-response",
+  ],
+};
+
+export function proxy(request: NextRequest, event: NextFetchEvent) {
+  event.waitUntil(Promise.resolve());
+
+  if (request.nextUrl.pathname === "/proxy-rewrite") {
+    return NextResponse.rewrite(
+      new URL("/lessons/rsc?mode=rewritten", request.url),
+    );
+  }
+  if (request.nextUrl.pathname === "/proxy-redirect") {
+    return NextResponse.redirect(new URL("/", request.url));
+  }
+  if (request.nextUrl.pathname === "/proxy-response") {
+    return NextResponse.json({ handledBy: "proxy.ts" });
+  }
+
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-tuto-proxy-path", request.nextUrl.pathname);
+  const response = NextResponse.next({
+    request: { headers: requestHeaders },
+    headers: { "x-tuto-proxy-response": "continued" },
+  });
+  response.cookies.set("tuto-proxy", "visited", { httpOnly: true, path: "/" });
+  return response;
+}
 `,
       },
       {
@@ -2344,7 +2387,7 @@ export default async function Page() {
       </p>
       <Counter initial={0} />
       <p style={{ marginTop: 22 }}>
-        Try these in the request path field: <code>/lessons/rsc?mode=practice</code>, <code>/api/lessons/rsc?mode=practice</code>, <code>/api/stream</code>, <code>/cache</code>, <code>/cache-components</code>, and <code>/fetch-cache</code>
+        Try these in the request path field: <code>/lessons/rsc?mode=practice</code>, <code>/api/lessons/rsc?mode=practice</code>, <code>/proxy-rewrite</code>, <code>/proxy-redirect</code>, <code>/proxy-response</code>, <code>/api/stream</code>, <code>/cache</code>, <code>/cache-components</code>, and <code>/fetch-cache</code>
       </p>
     </main>
   );
@@ -2425,17 +2468,21 @@ export default function LessonLayout({ children }: { children: ReactNode }) {
         language: "tsx",
         description:
           "A dynamic App Router page using promised params and searchParams.",
-        content: `type LessonPageProps = {
+        content: `import { headers } from "next/headers";
+
+type LessonPageProps = {
   params: Promise<{ lessonId: string }>;
   searchParams: Promise<{ mode?: string }>;
 };
 
 export default async function LessonPage({ params, searchParams }: LessonPageProps) {
   const [{ lessonId }, { mode }] = await Promise.all([params, searchParams]);
+  const proxyPath = (await headers()).get("x-tuto-proxy-path");
   return (
     <main>
       <h1>Lesson: {lessonId}</h1>
       <p>Mode: {mode ?? "read"}</p>
+      <p>Proxy request header: {proxyPath ?? "proxy matcher skipped"}</p>
       <p>This route was selected by Tuto's request router and rendered with real Next RSC transforms.</p>
     </main>
   );
@@ -2470,6 +2517,7 @@ export async function GET(
     lesson: await getApiLesson(lessonId),
     mode: request.nextUrl.searchParams.get("mode") ?? "read",
     requestId: requestHeaders.get("x-request-id"),
+    proxyPath: requestHeaders.get("x-tuto-proxy-path"),
     session: requestCookies.get("session")?.value ?? null,
   });
   response.cookies.set("last-lesson", lessonId, { httpOnly: true, path: "/" });

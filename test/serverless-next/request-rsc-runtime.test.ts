@@ -16,6 +16,7 @@ import {
 import { clearNextTransformCacheForTests } from "../../lib/serverless-next/next-compiler-adapter";
 import { clearNextCacheAdapterForTests } from "../../lib/serverless-next/cache-adapter";
 import {
+  executeNextRequestArtifact,
   invokeNextServerAction,
   invokeNextRouteHandler,
   renderHydratableNextRequestArtifact,
@@ -384,6 +385,131 @@ export async function POST(
 }`,
       language: "ts",
       path: "app/api/stream/route.ts",
+    },
+  ];
+}
+
+function proxyWorkspace(entry = "proxy.ts"): WorkspaceFile[] {
+  return [
+    {
+      content: `import { NextResponse, type NextRequest, type NextFetchEvent } from "next/server";
+
+let waited = false;
+
+export const config = {
+  matcher: [
+    "/protected/:path*",
+    "/api/:path*",
+    "/rewrite",
+    "/redirect",
+    "/direct",
+    "/wait/:path*",
+    {
+      source: "/guarded/:path*",
+      has: [{ type: "header", key: "x-run-proxy", value: "yes" }],
+      missing: [{ type: "header", key: "x-skip-proxy" }],
+    },
+  ],
+};
+
+export async function ${entry.startsWith("middleware") ? "middleware" : "proxy"}(
+  request: NextRequest,
+  event: NextFetchEvent,
+) {
+  const pathname = request.nextUrl.pathname;
+  if (pathname === "/redirect") {
+    return NextResponse.redirect(new URL("/login", request.url));
+  }
+  if (pathname === "/rewrite") {
+    const requestHeaders = new Headers(request.headers);
+    requestHeaders.set("x-from-proxy", "rewrite");
+    const response = NextResponse.rewrite(
+      new URL("/destination?source=proxy", request.url),
+      { request: { headers: requestHeaders }, headers: { "x-proxy-response": "rewrite" } },
+    );
+    response.cookies.set("proxy-cookie", "rewrite", { path: "/" });
+    return response;
+  }
+  if (pathname === "/direct" || pathname === "/wait/status") {
+    return NextResponse.json(
+      { direct: pathname, session: request.cookies.get("session")?.value ?? null, waited },
+      { status: pathname === "/direct" ? 418 : 200 },
+    );
+  }
+  if (pathname === "/wait/start") {
+    event.waitUntil(Promise.resolve().then(() => { waited = true; }));
+  }
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-from-proxy", pathname);
+  const response = NextResponse.next({
+    request: { headers: requestHeaders },
+    headers: { "x-proxy-response": "next" },
+  });
+  response.cookies.set("proxy-cookie", "continued", { httpOnly: true, path: "/" });
+  return response;
+}`,
+      language: "ts",
+      path: entry,
+    },
+    {
+      content: `export default function Layout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}`,
+      language: "tsx",
+      path: "app/layout.tsx",
+    },
+    {
+      content: `export default function Page() { return <main>public-page</main>; }`,
+      language: "tsx",
+      path: "app/page.tsx",
+    },
+    {
+      content: `import { cookies, headers } from "next/headers";
+export default async function Protected() {
+  const requestHeaders = await headers();
+  const requestCookies = await cookies();
+  return <main>protected:{requestHeaders.get("x-from-proxy")}:cookie:{requestCookies.get("proxy-cookie")?.value ?? "none"}</main>;
+}`,
+      language: "tsx",
+      path: "app/protected/page.tsx",
+    },
+    {
+      content: `import { headers } from "next/headers";
+export default async function Destination({ searchParams }: { searchParams: Promise<{ source?: string }> }) {
+  return <main>destination:{(await searchParams).source}:header:{(await headers()).get("x-from-proxy")}</main>;
+}`,
+      language: "tsx",
+      path: "app/destination/page.tsx",
+    },
+    {
+      content: `import { headers } from "next/headers";
+export default async function Guarded() {
+  return <main>guarded:{(await headers()).get("x-from-proxy") ?? "skipped"}</main>;
+}`,
+      language: "tsx",
+      path: "app/guarded/[slug]/page.tsx",
+    },
+    {
+      content: `export default function Login() { return <main>login-page</main>; }`,
+      language: "tsx",
+      path: "app/login/page.tsx",
+    },
+    {
+      content: `export default function Wait() { return <main>wait-page</main>; }`,
+      language: "tsx",
+      path: "app/wait/[stage]/page.tsx",
+    },
+    {
+      content: `import { cookies, headers } from "next/headers";
+export async function POST(request: Request) {
+  return Response.json({
+    body: await request.json(),
+    cookie: (await cookies()).get("proxy-cookie")?.value ?? null,
+    header: (await headers()).get("x-from-proxy"),
+  });
+}`,
+      language: "ts",
+      path: "app/api/echo/route.ts",
     },
   ];
 }
@@ -952,6 +1078,179 @@ describe("request-compiled Next RSC runtime", () => {
     expect(await stream.text()).toBe("first:second");
   });
 
+  test("runs Next proxy matchers and carries request mutations through pages and rewrites", async () => {
+    const artifact = await compileNextRequestWorkspace(proxyWorkspace(), {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "proxy-pages",
+    });
+    expect(artifact.router.proxy).toEqual({
+      kind: "proxy",
+      modulePath: "proxy.ts",
+    });
+
+    const publicPage = await executeNextRequestArtifact(artifact, { url: "/" });
+    expect(await publicPage.text()).toContain("public-page");
+    expect(publicPage.headers.get("x-tuto-next-proxy")).toBe(
+      "matched=0; outcome=next",
+    );
+
+    const protectedPage = await executeNextRequestArtifact(artifact, {
+      headers: { cookie: "session=student-a" },
+      url: "/protected",
+    });
+    const protectedHtml = await protectedPage.text();
+    expect(protectedHtml).toContain("protected:");
+    expect(protectedHtml).toContain("/protected");
+    expect(protectedHtml).toContain("cookie:<!-- -->continued");
+    expect(protectedPage.headers.get("x-proxy-response")).toBe("next");
+    expect(protectedPage.headers.get("set-cookie")).toContain(
+      "proxy-cookie=continued",
+    );
+
+    const skippedGuard = await executeNextRequestArtifact(artifact, {
+      url: "/guarded/lesson",
+    });
+    expect(await skippedGuard.text()).toContain("guarded:<!-- -->skipped");
+    expect(skippedGuard.headers.get("x-tuto-next-proxy")).toBe(
+      "matched=0; outcome=next",
+    );
+    const matchedGuard = await executeNextRequestArtifact(artifact, {
+      headers: { "x-run-proxy": "yes" },
+      url: "/guarded/lesson",
+    });
+    expect(await matchedGuard.text()).toContain("/guarded/lesson");
+    expect(matchedGuard.headers.get("x-tuto-next-proxy")).toBe(
+      "matched=1; outcome=next",
+    );
+    const missingGuard = await executeNextRequestArtifact(artifact, {
+      headers: { "x-run-proxy": "yes", "x-skip-proxy": "1" },
+      url: "/guarded/lesson",
+    });
+    expect(missingGuard.headers.get("x-tuto-next-proxy")).toBe(
+      "matched=0; outcome=next",
+    );
+
+    const rewritten = await executeNextRequestArtifact(artifact, {
+      url: "/rewrite",
+    });
+    const rewriteHtml = await rewritten.text();
+    expect(rewriteHtml).toContain("destination:");
+    expect(rewriteHtml).toContain("proxy");
+    expect(rewriteHtml).toContain("rewrite");
+    expect(rewritten.headers.get("x-tuto-next-route-pattern")).toBe(
+      "/destination",
+    );
+    expect(rewritten.headers.get("x-tuto-next-proxy")).toBe(
+      "matched=1; outcome=rewrite",
+    );
+  });
+
+  test("supports proxy redirects, direct responses, Route Handler bodies, and waitUntil", async () => {
+    const artifact = await compileNextRequestWorkspace(proxyWorkspace(), {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "proxy-responses",
+    });
+
+    const redirect = await executeNextRequestArtifact(artifact, {
+      url: "/redirect",
+    });
+    expect(redirect.status).toBe(307);
+    expect(redirect.headers.get("location")).toBe("/login");
+    expect(redirect.headers.get("x-tuto-next-runtime-kind")).toBe("proxy");
+
+    const direct = await executeNextRequestArtifact(artifact, {
+      headers: { cookie: "session=direct-student" },
+      url: "/direct",
+    });
+    expect(direct.status).toBe(418);
+    expect(await direct.json()).toEqual({
+      direct: "/direct",
+      session: "direct-student",
+      waited: false,
+    });
+
+    const api = await executeNextRequestArtifact(artifact, {
+      body: JSON.stringify({ lesson: "proxy-api" }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+      url: "/api/echo",
+    });
+    expect(api.status).toBe(200);
+    expect(await api.json()).toEqual({
+      body: { lesson: "proxy-api" },
+      cookie: "continued",
+      header: "/api/echo",
+    });
+    expect(api.headers.get("x-tuto-next-runtime-kind")).toBe("route-handler");
+
+    await (
+      await executeNextRequestArtifact(artifact, { url: "/wait/start" })
+    ).text();
+    const waitStatus = await executeNextRequestArtifact(artifact, {
+      url: "/wait/status",
+    });
+    expect(await waitStatus.json()).toEqual({
+      direct: "/wait/status",
+      session: null,
+      waited: true,
+    });
+  });
+
+  test("accepts deprecated middleware.ts but rejects multiple proxy entries", async () => {
+    const middlewareArtifact = await compileNextRequestWorkspace(
+      proxyWorkspace("middleware.ts"),
+      {
+        serverReferenceHashSalt: actionSalt,
+        workspaceKey: "middleware-compatibility",
+      },
+    );
+    expect(middlewareArtifact.router.proxy).toEqual({
+      kind: "middleware",
+      modulePath: "middleware.ts",
+    });
+    const response = await executeNextRequestArtifact(middlewareArtifact, {
+      url: "/protected",
+    });
+    expect(await response.text()).toContain("/protected");
+
+    const conflicting = proxyWorkspace();
+    conflicting.push(proxyWorkspace("middleware.ts")[0]);
+    await expect(
+      compileNextRequestWorkspace(conflicting, {
+        serverReferenceHashSalt: actionSalt,
+        workspaceKey: "proxy-conflict",
+      }),
+    ).rejects.toThrow(/only one proxy\.ts or middleware\.ts entry/i);
+
+    const invalidMatcherFiles = proxyWorkspace().map((file) =>
+      file.path === "proxy.ts"
+        ? {
+            ...file,
+            content: file.content.replace(
+              '"/protected/:path*"',
+              '"invalid-without-leading-slash"',
+            ),
+          }
+        : file,
+    );
+    const invalidMatcher = await compileNextRequestWorkspace(
+      invalidMatcherFiles,
+      {
+        serverReferenceHashSalt: actionSalt,
+        workspaceKey: "proxy-invalid-matcher",
+      },
+    );
+    await expect(
+      executeNextRequestArtifact(invalidMatcher, { url: "/protected" }),
+    ).rejects.toThrow(/invalid next proxy config/i);
+
+    const afterInvalidConfig = await executeNextRequestArtifact(
+      middlewareArtifact,
+      { url: "/protected" },
+    );
+    expect(await afterInvalidConfig.text()).toContain("/protected");
+  });
+
   test("serves the Tuto workbench template through the integrated request route", async () => {
     const template = getServerlessNextjsRuntimeTemplate();
     expect(template).toBeDefined();
@@ -1021,6 +1320,7 @@ describe("request-compiled Next RSC runtime", () => {
     expect(JSON.parse(apiResult.response.body)).toEqual({
       lesson: { lessonId: "rsc", reads: 1 },
       mode: "practice",
+      proxyPath: "/api/lessons/rsc",
       requestId: "request-42",
       session: "workbench-student",
     });
@@ -1043,6 +1343,36 @@ describe("request-compiled Next RSC runtime", () => {
       lessonId: "rsc",
       saved: "Web responses",
     });
+
+    const proxyRewrite = (await (
+      await requestWorkbench("/proxy-rewrite")
+    ).json()) as {
+      logs: Array<{ message: string }>;
+      response: { body: string };
+    };
+    expect(proxyRewrite.response.body).toContain("Lesson: <!-- -->rsc");
+    expect(proxyRewrite.response.body).toContain("rewritten");
+    expect(
+      proxyRewrite.logs.some((log) =>
+        log.message.includes("matched=1; outcome=rewrite"),
+      ),
+    ).toBe(true);
+
+    const proxyResponse = (await (
+      await requestWorkbench("/proxy-response")
+    ).json()) as { response: { body: string; status: number } };
+    expect(proxyResponse.response.status).toBe(200);
+    expect(JSON.parse(proxyResponse.response.body)).toEqual({
+      handledBy: "proxy.ts",
+    });
+
+    const proxyRedirect = (await (
+      await requestWorkbench("/proxy-redirect")
+    ).json()) as {
+      response: { headers: Record<string, string>; status: number };
+    };
+    expect(proxyRedirect.response.status).toBe(307);
+    expect(proxyRedirect.response.headers.location).toBe("/");
   });
 
   test("rejects a server-only dependency below a client boundary", async () => {
