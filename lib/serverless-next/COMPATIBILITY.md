@@ -64,6 +64,9 @@ and rerun the compatibility suite.
 | Tag invalidation                         | `updateTag` expires immediately; `revalidateTag(..., "max")` serves stale once and refreshes                                  |
 | Path invalidation                        | `revalidatePath` expires entries through Next-generated implicit path tags                                                    |
 | Cache generation reuse                   | Entries survive source generations for one workspace while identical keys in other workspaces isolate                         |
+| Durable cache values                     | Hashed JSON envelopes round-trip through an AWS-signed S3 API compatible with Cloudflare R2                                   |
+| Cross-instance invalidation              | Monotonic coordinator sequences prevent late object writes from resurrecting invalidated values                               |
+| Cross-instance cache locks               | Coordinator leases serialize writers; fencing tokens reject computations that predate a newer invalidation                    |
 | Bounded execution                        | Reusable RSC and SSR child workers have a 256 MB V8 heap cap and a 15 second request timeout                                  |
 
 The generated browser kernel contains React, React DOM, and Next's compiled
@@ -75,6 +78,69 @@ IPC into a `NextCacheAdapter` in the trusted host. The default adapter is a
 bounded, workspace-scoped memory store. It survives immutable generation edits
 and RSC worker restarts within a warm host, but not a Fluid Compute instance
 replacement.
+
+The opt-in `DurableNextCacheAdapter` splits the production responsibilities
+instead of treating R2 as a database:
+
+- `S3NextCacheValueStore` stores large, workspace-isolated value envelopes in
+  R2 or another S3-compatible service. Workspace and cache keys are SHA-256
+  path components rather than leaked object names.
+- `NextCacheInvalidationCoordinator` owns monotonic mutation sequences, tag
+  state, and expiring writer leases. `TransactionalNextCacheInvalidationCoordinator`
+  can run over a transactional key-value API such as Durable Object storage.
+- `HttpNextCacheInvalidationCoordinator` lets a Vercel host call that
+  coordinator across instances. The matching authenticated request handler is
+  included so the protocol is not application-specific glue.
+
+This split is required for correctness. R2 is suitable for cache bodies, but an
+R2-only adapter cannot atomically order a tag invalidation against an in-flight
+write or safely arbitrate cache locks. A linearizable coordinator supplies that
+small metadata path while object storage carries the larger and cheaper value
+path. A lease captures a coordinator fencing sequence before computation and
+the eventual write retains it. Therefore an invalidation that happens during a
+slow computation remains newer even if that old computation writes to R2 later.
+Coordinator sequences, not wall-clock ordering between Fluid instances, decide
+whether a value predates an invalidation.
+
+The host installs the durable adapter explicitly:
+
+```ts
+setNextCacheAdapter(
+  createS3NextCacheAdapter({
+    accessKeyId,
+    bucket,
+    coordinator: new HttpNextCacheInvalidationCoordinator({
+      authorization: `Bearer ${coordinatorToken}`,
+      endpoint: coordinatorUrl,
+    }),
+    endpoint: r2Endpoint,
+    region: "auto",
+    secretAccessKey,
+  }),
+);
+```
+
+The request API can install the same adapter once per host from environment
+configuration:
+
+```dotenv
+TUTO_NEXT_CACHE_STORE=s3
+TUTO_NEXT_CACHE_S3_ENDPOINT=https://ACCOUNT_ID.r2.cloudflarestorage.com
+TUTO_NEXT_CACHE_S3_BUCKET=tuto-next-cache
+TUTO_NEXT_CACHE_S3_REGION=auto
+TUTO_NEXT_CACHE_S3_ACCESS_KEY_ID=...
+TUTO_NEXT_CACHE_S3_SECRET_ACCESS_KEY=...
+TUTO_NEXT_CACHE_COORDINATOR_ENDPOINT=https://cache-coordinator.example/v1
+TUTO_NEXT_CACHE_COORDINATOR_TOKEN=...
+```
+
+The coordinator endpoint should expose the included authenticated protocol over
+a transactional implementation. For a Durable Object deployment, the outer
+Worker should route each workspace hash to its own object rather than sending
+every student through one global object. The token is sent as a Bearer
+credential. R2 lifecycle rules should eventually remove old value objects;
+invalidated objects are deleted eagerly when read, but never-read entries
+otherwise remain until the lifecycle policy or a future sweeper removes them.
 
 Cache Component values are genuine Flight streams. The worker serializes those
 streams for IPC and the host stores them through the same adapter used by
@@ -169,11 +235,11 @@ checkpoint supports UTF-8/text-editable assets (including SVG, JSON, manifests,
 and robots files). Binary images, fonts, and uploads require an explicit binary
 workspace-file representation rather than accidental string coercion.
 
-This interface is the correct extension point for R2, but a production R2
-implementation is not included yet. Cache values can live in R2; tag versions
-and concurrent invalidation need a coordinated metadata strategy (for example
-a Durable Object, Redis, or conditional object writes). Treating R2 as only a
-plain key/value drop-in would make concurrent tag invalidation unreliable.
+The R2/S3 value implementation and coordinator protocol are included, but the
+repository does not yet contain a separately deployable Cloudflare Worker and
+Durable Object package. Until that service is deployed and the environment
+variables above are configured, the request API deliberately keeps using its
+bounded in-process adapter.
 
 ## Local checkpoint measurement
 
@@ -199,7 +265,8 @@ the expensive event, not every request or ordinary Server Component edit.
 - External proxy rewrites and streaming proxy IPC
 - Next's webpack/Turbopack/PostCSS plugin pipeline, Sass, Tailwind directives, and CSS `url()` asset graph rewriting
 - Binary public uploads, `next/image` optimization, font optimization, and metadata file conventions such as generated OG images
-- Durable object storage, signed artifact capabilities, and cross-instance reuse
+- A packaged Cloudflare coordinator deployment and automatic R2 cache-object garbage collection
+- Signed artifact capabilities and cross-region coordinator failover
 - A production isolation boundary for hostile student code
 
 The workers reduce startup cost and contain crashes, but a Node child process is
@@ -220,6 +287,7 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next vertical slice should define the durable cache adapter and
-cross-instance invalidation coordinator. That storage decision should not be
-hidden inside the student runtime.
+The next production slice should package the coordinator as a Cloudflare
+Durable Object, add R2 lifecycle/garbage-collection policy, and load-test
+cross-region invalidation and lease contention. The runtime contract itself is
+now independent of that deployment choice.

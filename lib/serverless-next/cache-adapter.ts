@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 export type NextCacheMetrics = {
   hits: number;
   misses: number;
@@ -25,6 +27,7 @@ export type NextCacheGetResult = {
 };
 
 export type NextCacheSetInput = {
+  fence?: NextCacheMutationFence;
   key: string;
   tags?: string[];
   value: unknown;
@@ -37,8 +40,25 @@ export type NextCacheRevalidateInput = {
   workspaceKey: string;
 };
 
+export type NextCacheLockInput = {
+  key: string;
+  workspaceKey: string;
+};
+
+export type NextCacheMutationFence = {
+  sequence: number;
+  timestamp: number;
+};
+
+export type NextCacheLock = NextCacheLockInput & {
+  fence?: NextCacheMutationFence;
+  token: string;
+};
+
 export interface NextCacheAdapter {
+  acquireLock(input: NextCacheLockInput): Promise<NextCacheLock>;
   get(input: NextCacheGetInput): Promise<NextCacheGetResult>;
+  releaseLock(input: NextCacheLock): Promise<void>;
   revalidateTags(input: NextCacheRevalidateInput): Promise<void>;
   set(input: NextCacheSetInput): Promise<void>;
 }
@@ -71,7 +91,14 @@ function unique(values: string[] | undefined) {
 }
 
 export class MemoryNextCacheAdapter implements NextCacheAdapter {
+  private lockTokens = new Set<string>();
   private workspaces = new Map<string, WorkspaceCache>();
+
+  async acquireLock(input: NextCacheLockInput) {
+    const token = randomUUID();
+    this.lockTokens.add(token);
+    return { ...input, token };
+  }
 
   private workspace(workspaceKey: string) {
     const existing = this.workspaces.get(workspaceKey);
@@ -194,7 +221,12 @@ export class MemoryNextCacheAdapter implements NextCacheAdapter {
     }
   }
 
+  async releaseLock(input: NextCacheLock) {
+    this.lockTokens.delete(input.token);
+  }
+
   clear() {
+    this.lockTokens.clear();
     this.workspaces.clear();
   }
 }
