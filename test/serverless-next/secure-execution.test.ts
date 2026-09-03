@@ -59,6 +59,49 @@ function streamingWorkspace(route: string): WorkspaceFile[] {
   ];
 }
 
+function secureTopologyWorkspace(): WorkspaceFile[] {
+  return [
+    {
+      content: `export default function Layout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}`,
+      language: "tsx",
+      path: "app/layout.tsx",
+    },
+    {
+      content: `export default function Layout({ children, modal }: { children: React.ReactNode; modal: React.ReactNode }) {
+  return <section>{children}<aside>{modal}</aside></section>;
+}`,
+      language: "tsx",
+      path: "app/feed/layout.tsx",
+    },
+    {
+      content: `export default function Page() { return <main>secure-feed</main>; }`,
+      language: "tsx",
+      path: "app/feed/page.tsx",
+    },
+    {
+      content: `export default function Default() { return <p>secure-modal-empty</p>; }`,
+      language: "tsx",
+      path: "app/feed/@modal/default.tsx",
+    },
+    {
+      content: `export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  return <dialog open>secure-intercept:{(await params).id}</dialog>;
+}`,
+      language: "tsx",
+      path: "app/feed/@modal/(..)photo/[id]/page.tsx",
+    },
+    {
+      content: `export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  return <main>secure-photo:{(await params).id}</main>;
+}`,
+      language: "tsx",
+      path: "app/photo/[id]/page.tsx",
+    },
+  ];
+}
+
 describe.sequential("SecureExec Next execution", () => {
   beforeAll(() => {
     process.env.TUTO_NEXT_EXECUTION_MODE = "secure-exec";
@@ -238,6 +281,32 @@ export default async function Page({ searchParams }: {
     expect(html).toContain("shell-content");
     expect(html).toContain("fallback-content");
     expect(html).toContain("slow-content");
+  });
+
+  test("renders parallel defaults and intercepted slots inside SecureExec", async () => {
+    const artifact = await compileNextRequestWorkspace(
+      secureTopologyWorkspace(),
+      {
+        serverReferenceHashSalt: actionSalt,
+        workspaceKey: "secure-topology",
+      },
+    );
+    const feed = await renderNextRequestArtifact(artifact, { url: "/feed" });
+    const feedHtml = await feed.text();
+    expect(feedHtml).toContain("secure-feed");
+    expect(feedHtml).toContain("secure-modal-empty");
+
+    const intercepted = await renderNextRequestArtifact(artifact, {
+      headers: { "next-url": "/feed" },
+      url: "/photo/7",
+    });
+    const interceptedHtml = await intercepted.text();
+    expect(intercepted.headers.get("x-tuto-next-route-pattern")).toBe(
+      "/photo/[id]",
+    );
+    expect(interceptedHtml).toContain("secure-feed");
+    expect(interceptedHtml).toContain("secure-intercept:<!-- -->7");
+    expect(interceptedHtml).not.toContain("secure-photo");
   });
 
   test("falls back before the first byte for redirect and not-found control flow", async () => {

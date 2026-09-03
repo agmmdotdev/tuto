@@ -473,6 +473,14 @@ export async function compileNextRequestWorkspaceWithStatus(
       path: source.path,
     };
   }
+  if (
+    router.rootGlobalError &&
+    !clientEntries.includes(router.rootGlobalError)
+  ) {
+    throw new Error(
+      `${router.rootGlobalError} must start with \"use client\" because Next global error boundaries are Client Components.`,
+    );
+  }
 
   const clientModules: Record<string, NextClientModule> = {};
   let browserTransformCacheHits = 0;

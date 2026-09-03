@@ -17,6 +17,10 @@ and rerun the compatibility suite.
 | Async Server Components                  | Promise-backed page content is present in Flight and HTML                                                                     |
 | Nested App Router pages                  | Static, dynamic, catch-all, and optional catch-all matchers select pages without `next build`                                 |
 | Layout composition                       | Root and nested layouts wrap the matched page; route groups are omitted from URL patterns                                     |
+| Templates                                | Root, nested, and slot `template.tsx` files remount around the selected branch without becoming layouts                       |
+| Parallel routes                          | Named slots are layout props; hard requests select a matching branch or `default.tsx`, with missing defaults returning 404    |
+| Intercepted routes                       | `(.)`, `(..)`, `(..)(..)`, and `(...)` markers target a named slot on soft navigation while direct loads use canonical pages  |
+| Global error boundary                    | A Client Component `app/global-error.tsx` replaces the root document when no normal segment boundary can handle a failure     |
 | Segment boundary manifest                | Every matched segment retains its own `error.tsx`, `loading.tsx`, and `not-found.tsx` instead of only the nearest file        |
 | Error boundaries                         | Server render failures select the nearest eligible segment error UI; client failures use a shared React boundary with reset   |
 | Loading boundaries                       | Nested `loading.tsx` files become real Suspense fallbacks in Flight and a hot loading-shell request renders during navigation |
@@ -316,6 +320,32 @@ Cloudflare Worker/Durable Object package are included. Until that service is
 deployed and the environment variables above are configured, the request API
 deliberately keeps using its bounded in-process adapter.
 
+## App Router topology
+
+Parallel route folder names do not enter the public URL. For each named slot,
+a hard request independently matches the current URL against that slot's page
+branches and falls back to its `default.tsx`. A slot without either match makes
+the hard request a 404, matching the important full-reload safety rule. A slot
+that only contains `default.tsx` is supported, which is useful for an initially
+empty modal.
+
+The Tuto workbench owns soft-navigation history. It sends the previous virtual
+location as Next's internal `Next-URL` request header. The runtime uses that
+location for the retained primary tree and matches the new location against
+the interception marker. Thus navigating from `/dashboard` to `/photo/42` can
+keep the dashboard tree and render the intercepted photo inside `@modal`, while
+a direct request or refresh of `/photo/42` renders the canonical photo page.
+All of those branches are compiled into one immutable artifact and execute in
+the existing per-request worker or SecureExec isolate; no student server is
+started.
+
+This checkpoint deliberately models the stateless portion of the App Router.
+It supports one level of named slots and interceptions inside those slots. It
+does not yet preserve an independent navigation history for every slot, nest a
+second `@slot`, or reproduce every slot-local error/loading/not-found
+transition. Those cases fail validation or fall back to the existing root
+behavior instead of pretending to be fully Next-compatible.
+
 ## Local checkpoint measurement
 
 A single local run on 2026-09-02 measured the full compile plus hydratable HTML
@@ -352,7 +382,7 @@ restarting Next.js.
 
 ## Deliberately not supported yet
 
-- Parallel/intercepted routes, `global-error.tsx`, templates, and route slots
+- Nested parallel slots, independent per-slot navigation history, and complete slot-local error/loading/not-found transitions
 - Incremental Server Action Flight responses and streamed proxy terminal responses
 - External proxy rewrites and streaming proxy IPC
 - Next's webpack/Turbopack/PostCSS plugin pipeline, Sass, Tailwind directives, and CSS `url()` asset graph rewriting
@@ -388,7 +418,6 @@ and record native-module loading, wall/CPU/RSS, timeout cleanup, and LRU
 behavior. After that, load-test the already-packaged cache coordinator across
 regions and fuzz the sandbox capability boundary.
 
-If deployment access is unavailable, the next local framework slice is App
-Router topology: parallel slots, intercepted routes, templates, and
-`global-error.tsx`, followed by differential fixtures against the pinned Next
-16.2.6 runtime.
+If deployment access is unavailable, the next local framework slice is a set
+of differential topology fixtures against the pinned Next 16.2.6 runtime,
+followed by slot-local boundary lifecycle and independent slot-history work.

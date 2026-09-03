@@ -450,6 +450,10 @@ export async function POST(request: Request) {
           )}`
         : undefined;
     const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
+    const parallelBranches = artifact.router.parallelRoutes.reduce(
+      (count, slot) => count + slot.routes.length + (slot.default ? 1 : 0),
+      0,
+    );
 
     return NextResponse.json(
       {
@@ -475,7 +479,7 @@ export async function POST(request: Request) {
           {
             id: crypto.randomUUID(),
             level: "info",
-            message: `Router: ${artifact.router.routes.length} page route(s), ${artifact.router.handlers.length} Route Handler(s), ${Object.values(artifact.actionManifest).filter((reference) => reference.kind === "action").length} Server Action reference(s), ${Object.values(artifact.actionManifest).filter((reference) => reference.kind === "cache").length} Cache Component reference(s), ${Object.keys(artifact.styles).length} stylesheet(s), ${Object.keys(artifact.staticAssets).length} public asset(s). Matched ${response.headers.get("x-tuto-next-route-pattern") ?? "404"}.`,
+            message: `Router: ${artifact.router.routes.length} canonical page route(s), ${parallelBranches} parallel branch(es), ${artifact.router.interceptions.length} interception(s), ${artifact.router.handlers.length} Route Handler(s), ${Object.values(artifact.actionManifest).filter((reference) => reference.kind === "action").length} Server Action reference(s), ${Object.values(artifact.actionManifest).filter((reference) => reference.kind === "cache").length} Cache Component reference(s), ${Object.keys(artifact.styles).length} stylesheet(s), ${Object.keys(artifact.staticAssets).length} public asset(s). Matched ${response.headers.get("x-tuto-next-route-pattern") ?? "404"}.`,
             timestamp: new Date().toISOString(),
           },
           {

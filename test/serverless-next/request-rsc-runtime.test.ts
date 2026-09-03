@@ -14,6 +14,7 @@ import {
   compileNextRequestWorkspaceWithStatus,
 } from "../../lib/serverless-next/compiler";
 import { clearNextTransformCacheForTests } from "../../lib/serverless-next/next-compiler-adapter";
+import { buildNextRouteManifest } from "../../lib/serverless-next/route-manifest";
 import {
   clearNextCacheAdapterForTests,
   setNextCacheAdapter,
@@ -59,6 +60,14 @@ const rscBrowserClient = runtimeRequire(
       callServer(id: string, args: unknown[]): Promise<unknown>;
     },
   ): Promise<unknown>;
+};
+const nextInterceptionRoutes = runtimeRequire(
+  "next/dist/shared/lib/router/utils/interception-routes",
+) as {
+  extractInterceptionRouteInformation(route: string): {
+    interceptedRoute: string;
+    interceptingRoute: string;
+  };
 };
 
 function workspace(serverMarker: string): WorkspaceFile[] {
@@ -520,6 +529,112 @@ export default function NavigationState() {
 export default function Page() { return <main><NavigationState /></main>; }`,
       language: "tsx",
       path: "app/navigation/page.tsx",
+    },
+  ];
+}
+
+function topologyWorkspace(): WorkspaceFile[] {
+  return [
+    {
+      content: `import { headers } from "next/headers";
+export default async function Layout({ children }: { children: React.ReactNode }) {
+  if ((await headers()).get("x-root-error") === "1") throw new Error("root layout exploded");
+  return <html><body><p>topology-root</p>{children}</body></html>;
+}`,
+      language: "tsx",
+      path: "app/layout.tsx",
+    },
+    {
+      content: `export default function Template({ children }: { children: React.ReactNode }) {
+  return <div data-template="root">root-template:{children}</div>;
+}`,
+      language: "tsx",
+      path: "app/template.tsx",
+    },
+    {
+      content: `"use client";
+export default function GlobalError({ error, reset }: { error: Error; reset(): void }) {
+  return <html><body><p>global-error:{error.message}</p><button onClick={reset}>reset root</button></body></html>;
+}`,
+      language: "tsx",
+      path: "app/global-error.tsx",
+    },
+    {
+      content: `export default function DashboardLayout({ children, analytics, empty, modal, team }: {
+  children: React.ReactNode; analytics: React.ReactNode; empty: React.ReactNode; modal: React.ReactNode; team: React.ReactNode;
+}) {
+  return <section data-dashboard-layout><div data-children>{children}</div><aside data-team>{team}</aside><aside data-analytics>{analytics}</aside><aside data-empty>{empty}</aside><div data-modal>{modal}</div></section>;
+}`,
+      language: "tsx",
+      path: "app/dashboard/layout.tsx",
+    },
+    {
+      content: `export default function Template({ children }: { children: React.ReactNode }) {
+  return <div data-template="dashboard">dashboard-template:{children}</div>;
+}`,
+      language: "tsx",
+      path: "app/dashboard/template.tsx",
+    },
+    {
+      content: `export default function Page() { return <main>dashboard-page</main>; }`,
+      language: "tsx",
+      path: "app/dashboard/page.tsx",
+    },
+    {
+      content: `export default function Page() { return <main>dashboard-settings</main>; }`,
+      language: "tsx",
+      path: "app/dashboard/settings/page.tsx",
+    },
+    {
+      content: `export default function Team() { return <p>team-home</p>; }`,
+      language: "tsx",
+      path: "app/dashboard/@team/page.tsx",
+    },
+    {
+      content: `export default function TeamSettings() { return <p>team-settings</p>; }`,
+      language: "tsx",
+      path: "app/dashboard/@team/settings/page.tsx",
+    },
+    {
+      content: `export default function Analytics() { return <p>analytics-home</p>; }`,
+      language: "tsx",
+      path: "app/dashboard/@analytics/page.tsx",
+    },
+    {
+      content: `export default function AnalyticsDefault() { return <p>analytics-default</p>; }`,
+      language: "tsx",
+      path: "app/dashboard/@analytics/default.tsx",
+    },
+    {
+      content: `export default function ModalDefault() { return <p>modal-empty</p>; }`,
+      language: "tsx",
+      path: "app/dashboard/@modal/default.tsx",
+    },
+    {
+      content: `export default function EmptyDefault() { return <p>empty-slot-default</p>; }`,
+      language: "tsx",
+      path: "app/dashboard/@empty/default.tsx",
+    },
+    {
+      content: `export default function ModalTemplate({ children }: { children: React.ReactNode }) {
+  return <div data-template="modal">{children}</div>;
+}`,
+      language: "tsx",
+      path: "app/dashboard/@modal/template.tsx",
+    },
+    {
+      content: `export default async function ModalPhoto({ params }: { params: Promise<{ id: string }> }) {
+  return <dialog open>intercepted-photo:{(await params).id}</dialog>;
+}`,
+      language: "tsx",
+      path: "app/dashboard/@modal/(..)photo/[id]/page.tsx",
+    },
+    {
+      content: `export default async function Photo({ params }: { params: Promise<{ id: string }> }) {
+  return <main>canonical-photo:{(await params).id}</main>;
+}`,
+      language: "tsx",
+      path: "app/photo/[id]/page.tsx",
     },
   ];
 }
@@ -1601,6 +1716,207 @@ describe("request-compiled Next RSC runtime", () => {
       "path: path || globalThis.__TUTO_NEXT_URL__",
     );
     expect(navigationHtml).not.toContain("window.location.assign");
+  });
+
+  test("renders templates, parallel defaults, global errors, and intercepted slots", async () => {
+    const files = topologyWorkspace();
+    const artifact = await compileNextRequestWorkspace(files, {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "next-app-router-topology",
+    });
+
+    expect(artifact.version).toBe(9);
+    expect(artifact.router.routes.map((route) => route.pattern)).toEqual([
+      "/dashboard/settings",
+      "/photo/[id]",
+      "/dashboard",
+    ]);
+    expect(
+      artifact.router.parallelRoutes.map((slot) => ({
+        default: slot.default?.page,
+        name: slot.name,
+        patterns: slot.routes.map((route) => route.pattern),
+      })),
+    ).toEqual([
+      {
+        default: "app/dashboard/@analytics/default.tsx",
+        name: "analytics",
+        patterns: ["/dashboard"],
+      },
+      {
+        default: "app/dashboard/@empty/default.tsx",
+        name: "empty",
+        patterns: [],
+      },
+      {
+        default: "app/dashboard/@modal/default.tsx",
+        name: "modal",
+        patterns: [],
+      },
+      {
+        default: undefined,
+        name: "team",
+        patterns: ["/dashboard/settings", "/dashboard"],
+      },
+    ]);
+    expect(artifact.router.interceptions).toMatchObject([
+      {
+        interceptedPattern: "/photo/[id]",
+        interceptingPattern: "/dashboard",
+        slotName: "modal",
+      },
+    ]);
+    expect(artifact.router.rootGlobalError).toBe("app/global-error.tsx");
+
+    const dashboard = await renderNextRequestArtifact(artifact, {
+      url: "/dashboard",
+    });
+    const dashboardHtml = await dashboard.text();
+    expect(dashboard.status).toBe(200);
+    expect(dashboardHtml).toContain('data-template="root"');
+    expect(dashboardHtml).toContain('data-template="dashboard"');
+    expect(dashboardHtml).toContain("dashboard-page");
+    expect(dashboardHtml).toContain("team-home");
+    expect(dashboardHtml).toContain("analytics-home");
+    expect(dashboardHtml).toContain("empty-slot-default");
+    expect(dashboardHtml).toContain("modal-empty");
+
+    const settings = await renderNextRequestArtifact(artifact, {
+      url: "/dashboard/settings",
+    });
+    const settingsHtml = await settings.text();
+    expect(settings.status).toBe(200);
+    expect(settingsHtml).toContain("dashboard-settings");
+    expect(settingsHtml).toContain("team-settings");
+    expect(settingsHtml).toContain("analytics-default");
+    expect(settingsHtml).toContain("modal-empty");
+
+    const directPhoto = await renderNextRequestArtifact(artifact, {
+      url: "/photo/42",
+    });
+    const directPhotoHtml = await directPhoto.text();
+    expect(directPhoto.status).toBe(200);
+    expect(directPhotoHtml).toContain("canonical-photo:<!-- -->42");
+    expect(directPhotoHtml).not.toContain("intercepted-photo");
+    expect(directPhotoHtml).not.toContain("dashboard-page");
+
+    const interceptedPhoto = await renderNextRequestArtifact(artifact, {
+      headers: { "next-url": "/dashboard" },
+      url: "/photo/42",
+    });
+    const interceptedPhotoHtml = await interceptedPhoto.text();
+    expect(interceptedPhoto.status).toBe(200);
+    expect(interceptedPhoto.headers.get("x-tuto-next-route-pattern")).toBe(
+      "/photo/[id]",
+    );
+    expect(interceptedPhotoHtml).toContain("dashboard-page");
+    expect(interceptedPhotoHtml).toContain("team-home");
+    expect(interceptedPhotoHtml).toContain("intercepted-photo:<!-- -->42");
+    expect(interceptedPhotoHtml).toContain('data-template="modal"');
+    expect(interceptedPhotoHtml).not.toContain("canonical-photo");
+
+    const integratedResponse = await requestRoute(
+      new Request("http://tuto.local/api/serverless/nextjs-runtime/request", {
+        body: JSON.stringify({
+          files,
+          request: {
+            headers: { "next-url": "/dashboard" },
+            method: "GET",
+            path: "/photo/84",
+          },
+          workspaceKey: "next-app-router-topology-integrated",
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      }),
+    );
+    const integratedText = await integratedResponse.text();
+    const integrated = JSON.parse(integratedText) as {
+      logs: Array<{ message: string }>;
+      response: { body: string; status: number };
+    };
+    expect(integratedResponse.status, integratedText).toBe(200);
+    expect(integrated.response.status).toBe(200);
+    expect(integrated.response.body).toContain("dashboard-page");
+    expect(integrated.response.body).toContain(
+      "intercepted-photo:<!-- -->84",
+    );
+    expect(integrated.response.body).not.toContain("canonical-photo");
+    expect(
+      integrated.logs.some((log) =>
+        log.message.includes(
+          "3 canonical page route(s), 6 parallel branch(es), 1 interception(s)",
+        ),
+      ),
+    ).toBe(true);
+
+    const globalFailure = await renderNextRequestArtifact(artifact, {
+      headers: { "x-root-error": "1" },
+      url: "/dashboard",
+    });
+    expect(globalFailure.status).toBe(500);
+    expect(await globalFailure.text()).toContain(
+      "global-error:<!-- -->root layout exploded",
+    );
+
+    const withoutDefault = await compileNextRequestWorkspace(
+      files.filter(
+        (file) => file.path !== "app/dashboard/@analytics/default.tsx",
+      ),
+      {
+        serverReferenceHashSalt: actionSalt,
+        workspaceKey: "next-parallel-missing-default",
+      },
+    );
+    const missingSlot = await renderNextRequestArtifact(withoutDefault, {
+      url: "/dashboard/settings",
+    });
+    expect(missingSlot.status).toBe(404);
+    expect(await missingSlot.text()).toContain(
+      'data-tuto-next-missing-slot="analytics"',
+    );
+
+    await expect(
+      compileNextRequestWorkspace(
+        files.map((file) =>
+          file.path === "app/global-error.tsx"
+            ? { ...file, content: file.content.replace('"use client";', "") }
+            : file,
+        ),
+        {
+          serverReferenceHashSalt: actionSalt,
+          workspaceKey: "next-invalid-global-error",
+        },
+      ),
+    ).rejects.toThrow(/global-error.*use client/i);
+  });
+
+  test("normalizes every interception marker like the pinned Next core", () => {
+    const cases = [
+      "/feed/@modal/(.)photo",
+      "/feed/@modal/(..)photo",
+      "/feed/nested/@modal/(..)(..)photo",
+      "/feed/nested/@modal/(...)photo",
+    ];
+
+    for (const route of cases) {
+      const modulePath = `app${route}/page.tsx`;
+      const ownerDirectory = `app${route.slice(0, route.indexOf("/@"))}`;
+      const manifest = buildNextRouteManifest([
+        "app/layout.tsx",
+        "app/page.tsx",
+        `${ownerDirectory}/layout.tsx`,
+        modulePath,
+      ]);
+      const expected =
+        nextInterceptionRoutes.extractInterceptionRouteInformation(route);
+
+      expect(manifest.interceptions).toHaveLength(1);
+      expect(manifest.interceptions[0]).toMatchObject({
+        interceptedPattern: expected.interceptedRoute,
+        interceptingPattern: expected.interceptingRoute,
+      });
+    }
   });
 
   test("uses Next cache APIs with tag, path, and stale-while-revalidate semantics", async () => {

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { WorkspaceFile } from "@/lib/ide/types";
 
-export const NEXT_REQUEST_ARTIFACT_VERSION = 8 as const;
+export const NEXT_REQUEST_ARTIFACT_VERSION = 9 as const;
 
 export type NextCompiledModule = {
   canonicalPath: string;
@@ -49,6 +49,11 @@ export type NextRouteParam = {
   name: string;
 };
 
+export type NextRouteMatcher = {
+  params: NextRouteParam[];
+  source: string;
+};
+
 export type NextRouteDefinition = {
   boundaries: Array<{
     directory: string;
@@ -59,21 +64,35 @@ export type NextRouteDefinition = {
   error?: string;
   layouts: string[];
   loading?: string;
-  matcher: {
-    params: NextRouteParam[];
-    source: string;
-  };
+  matcher: NextRouteMatcher;
   notFound?: string;
   page: string;
   pattern: string;
+  templates: string[];
+};
+
+export type NextParallelRouteDefinition = {
+  default?: NextRouteDefinition;
+  name: string;
+  ownerDirectory: string;
+  routes: NextRouteDefinition[];
+  slotDirectory: string;
+};
+
+export type NextInterceptionDefinition = {
+  interceptedMatcher: NextRouteMatcher;
+  interceptedPattern: string;
+  interceptingMatcher: NextRouteMatcher;
+  interceptingPattern: string;
+  ownerDirectory: string;
+  route: NextRouteDefinition;
+  slotDirectory: string;
+  slotName: string;
 };
 
 export type NextRouteHandlerDefinition = {
   handler: string;
-  matcher: {
-    params: NextRouteParam[];
-    source: string;
-  };
+  matcher: NextRouteMatcher;
   pattern: string;
 };
 
@@ -84,7 +103,10 @@ export type NextProxyDefinition = {
 
 export type NextRouteManifest = {
   handlers: NextRouteHandlerDefinition[];
+  interceptions: NextInterceptionDefinition[];
+  parallelRoutes: NextParallelRouteDefinition[];
   proxy?: NextProxyDefinition;
+  rootGlobalError?: string;
   rootLayout?: string;
   rootNotFound?: string;
   routes: NextRouteDefinition[];
