@@ -16,6 +16,7 @@ import {
 import { clearNextTransformCacheForTests } from "../../lib/serverless-next/next-compiler-adapter";
 import { clearNextCacheAdapterForTests } from "../../lib/serverless-next/cache-adapter";
 import {
+  executeNextProgressiveActionArtifact,
   executeNextServerActionArtifact,
   executeNextRequestArtifact,
   invokeNextServerAction,
@@ -30,10 +31,23 @@ import { POST as requestRoute } from "../../app/api/serverless/nextjs-runtime/re
 
 const actionSalt = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
 const runtimeRequire = createRequire(path.join(process.cwd(), "package.json"));
+(
+  globalThis as typeof globalThis & { __webpack_require__?: () => unknown }
+).__webpack_require__ ??= () => undefined;
 const rscClient = runtimeRequire(
   "next/dist/compiled/react-server-dom-webpack/client.node",
 ) as {
   encodeReply(value: unknown): Promise<FormData | string>;
+};
+const rscBrowserClient = runtimeRequire(
+  "next/dist/compiled/react-server-dom-webpack/client.browser",
+) as {
+  createFromReadableStream(
+    stream: ReadableStream<Uint8Array>,
+    options: {
+      callServer(id: string, args: unknown[]): Promise<unknown>;
+    },
+  ): Promise<unknown>;
 };
 
 function workspace(serverMarker: string): WorkspaceFile[] {
@@ -254,6 +268,162 @@ export default function ActionButton() {
       path: "app/action-button.tsx",
     },
   ];
+}
+
+function capturedActionWorkspace(): WorkspaceFile[] {
+  return [
+    {
+      content: `export default function Layout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}`,
+      language: "tsx",
+      path: "app/layout.tsx",
+    },
+    {
+      content: `export default function Page() {
+  const lessonId = "rsc";
+  async function save(prefix: string, formData: FormData) {
+    "use server";
+    return lessonId + ":" + prefix + ":" + formData.get("title");
+  }
+  const action = save.bind(null, "saved");
+  return <main><form action={action}><input name="title" /></form></main>;
+}`,
+      language: "tsx",
+      path: "app/page.tsx",
+    },
+  ];
+}
+
+function progressiveActionWorkspace(): WorkspaceFile[] {
+  return [
+    {
+      content: `export default function Layout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}`,
+      language: "tsx",
+      path: "app/layout.tsx",
+    },
+    {
+      content: `"use client";
+import { useActionState } from "react";
+import { useFormStatus } from "react-dom";
+
+function Submit() {
+  const { pending } = useFormStatus();
+  return <button data-pending disabled={pending}>{pending ? "Saving" : "Save"}</button>;
+}
+
+export default function ActionForm({ action }: {
+  action(previous: string, formData: FormData): Promise<string>;
+}) {
+  const [state, formAction] = useActionState(action, "idle");
+  return <form action={formAction}>
+    <input name="title" />
+    <Submit />
+    <p data-action-state>action-state:{state}</p>
+  </form>;
+}`,
+      language: "tsx",
+      path: "app/action-form.tsx",
+    },
+    {
+      content: `import ActionForm from "./action-form";
+export default function Page() {
+  const lessonId = "rsc";
+  async function save(prefix: string, previous: string, formData: FormData) {
+    "use server";
+    return prefix + ":" + lessonId + ":" + previous + ":" + formData.get("title");
+  }
+  return <main><ActionForm action={save.bind(null, "saved")} /></main>;
+}`,
+      language: "tsx",
+      path: "app/page.tsx",
+    },
+  ];
+}
+
+function controlFlowWorkspace(): WorkspaceFile[] {
+  return [
+    {
+      content: `export default function Layout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}`,
+      language: "tsx",
+      path: "app/layout.tsx",
+    },
+    {
+      content: `export default function NotFound() { return <main>lesson-not-found</main>; }`,
+      language: "tsx",
+      path: "app/not-found.tsx",
+    },
+    {
+      content: `import { notFound, redirect } from "next/navigation";
+export default async function Page({ searchParams }: {
+  searchParams: Promise<{ mode?: string }>;
+}) {
+  const { mode } = await searchParams;
+  if (mode === "missing") notFound();
+  if (mode === "redirect") redirect("/destination");
+  return <main>control-flow-ok</main>;
+}`,
+      language: "tsx",
+      path: "app/page.tsx",
+    },
+    {
+      content: `"use server";
+import { notFound, redirect } from "next/navigation";
+export async function redirectAction() { redirect("/after-action"); }
+export async function missingAction() { notFound(); }
+export async function failingAction() { throw new Error("lesson exploded"); }`,
+      language: "ts",
+      path: "app/actions.ts",
+    },
+  ];
+}
+
+function findElementProp(value: unknown, prop: string): unknown {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const props = record.props as Record<string, unknown> | undefined;
+  if (props && prop in props) return props[prop];
+  if (props) {
+    for (const child of Object.values(props)) {
+      const found = findElementProp(child, prop);
+      if (found !== undefined) return found;
+    }
+  }
+  if (Array.isArray(value)) {
+    for (const child of value) {
+      const found = findElementProp(child, prop);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
+}
+
+function decodeHtmlAttribute(value: string) {
+  return value
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#x27;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
+}
+
+function hiddenFormData(html: string) {
+  const formData = new FormData();
+  const input = /<input type="hidden"([^>]*)\/?>(?:<\/input>)?/g;
+  for (const match of html.matchAll(input)) {
+    const name = /\bname="([^"]+)"/.exec(match[1]);
+    if (!name) continue;
+    const value = /\bvalue="([^"]*)"/.exec(match[1]);
+    formData.append(
+      decodeHtmlAttribute(name[1]),
+      decodeHtmlAttribute(value?.[1] ?? ""),
+    );
+  }
+  return formData;
 }
 
 function cacheWorkspace(): WorkspaceFile[] {
@@ -801,9 +971,7 @@ describe("request-compiled Next RSC runtime", () => {
     expect(html).toContain('<meta property="og:title" content="Actions"');
     expect(html).toContain('data-tuto-next-style="app/global.css"');
     expect(html).toContain('data-tuto-next-style="app/page.css"');
-    expect(html).toContain(
-      'data-tuto-next-style="app/lesson-card.module.css"',
-    );
+    expect(html).toContain('data-tuto-next-style="app/lesson-card.module.css"');
     expect(html).not.toContain("app/other/unused.css");
     expect(html).toContain(
       `class="${artifact.styles["app/lesson-card.module.css"].exports.card}"`,
@@ -839,9 +1007,7 @@ describe("request-compiled Next RSC runtime", () => {
     expect(first.headers.get("cache-control")).toBe(
       "public, max-age=0, must-revalidate",
     );
-    expect(first.headers.get("x-tuto-next-runtime-kind")).toBe(
-      "public-asset",
-    );
+    expect(first.headers.get("x-tuto-next-runtime-kind")).toBe("public-asset");
     expect(await first.text()).toContain("Tuto mark");
 
     const rewritten = await executeNextRequestArtifact(artifact, {
@@ -871,9 +1037,7 @@ describe("request-compiled Next RSC runtime", () => {
       url: "/robots.txt",
     });
     expect(head.status).toBe(200);
-    expect(head.headers.get("content-type")).toBe(
-      "text/plain; charset=utf-8",
-    );
+    expect(head.headers.get("content-type")).toBe("text/plain; charset=utf-8");
     expect(Number(head.headers.get("content-length"))).toBeGreaterThan(0);
     expect(await head.text()).toBe("");
   });
@@ -1044,6 +1208,146 @@ describe("request-compiled Next RSC runtime", () => {
       await renderNextRequestArtifact(artifact)
     ).text();
     expect(refreshedHtml).toContain("server-total:<!-- -->3");
+  });
+
+  test("preserves compiler-generated captured and explicitly bound Server Action arguments", async () => {
+    const artifact = await compileNextRequestWorkspace(
+      capturedActionWorkspace(),
+      {
+        serverReferenceHashSalt: actionSalt,
+        workspaceKey: "captured-action-lessons",
+      },
+    );
+    expect(artifact.actionEncryptionKey).toMatch(/^[A-Za-z0-9+/]{43}=$/);
+    const html = await (await renderNextRequestArtifact(artifact)).text();
+    expect(html).toContain('method="POST"');
+    expect(html).toContain('name="$ACTION_REF_');
+    const flight = await renderNextRequestArtifact(artifact, { flight: true });
+    let dispatched: { actionId: string; args: unknown[] } | undefined;
+    const model = await rscBrowserClient.createFromReadableStream(
+      flight.body!,
+      {
+        async callServer(actionId, args) {
+          dispatched = { actionId, args };
+          return null;
+        },
+      },
+    );
+    const action = findElementProp(model, "action");
+    expect(action).toBeTypeOf("function");
+    const formData = new FormData();
+    formData.set("title", "lesson");
+    await (action as (formData: FormData) => Promise<unknown>)(formData);
+    expect(dispatched?.actionId).toBe(Object.keys(artifact.actionManifest)[0]);
+
+    const response = await invokeNextServerAction(artifact, {
+      actionId: dispatched!.actionId,
+      body: await serializeNextActionBody(
+        await rscClient.encodeReply(dispatched!.args),
+      ),
+      url: "/",
+    });
+    expect(await response.text()).toContain(
+      '"actionResult":"rsc:saved:lesson"',
+    );
+  });
+
+  test("replays progressive useActionState forms with captured args and form status support", async () => {
+    const artifact = await compileNextRequestWorkspace(
+      progressiveActionWorkspace(),
+      {
+        serverReferenceHashSalt: actionSalt,
+        workspaceKey: "progressive-action-lessons",
+      },
+    );
+    const endpoint = "https://tuto.local/api/next-action";
+    const initial = await renderHydratableNextRequestArtifact(artifact, {
+      actionEndpoint: endpoint,
+      url: "/",
+    });
+    const initialHtml = await initial.text();
+    expect(initialHtml).toContain(`action="${endpoint}"`);
+    expect(initialHtml).toContain('name="$TUTO_NEXT_REVISION"');
+    expect(initialHtml).toContain('name="$ACTION_KEY"');
+    expect(initialHtml).toContain("action-state:<!-- -->idle");
+    expect(artifact.clientBundle.code).toContain("useFormStatus");
+
+    const formData = hiddenFormData(initialHtml);
+    formData.delete("$TUTO_NEXT_REVISION");
+    formData.delete("$TUTO_NEXT_URL");
+    formData.set("title", "lesson");
+    const response = await executeNextProgressiveActionArtifact(artifact, {
+      actionEndpoint: endpoint,
+      body: await serializeNextActionBody(formData),
+      headers: { "content-type": "multipart/form-data" },
+      url: "/",
+    });
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-tuto-next-runtime-kind")).toBe(
+      "progressive-action",
+    );
+    expect(html).toContain("action-state:<!-- -->saved:rsc:idle:lesson");
+    expect(html).toContain(`action="${endpoint}"`);
+
+    const endpointForm = hiddenFormData(initialHtml);
+    endpointForm.set("title", "endpoint");
+    const endpointResponse = await requestRoute(
+      new Request(endpoint, { body: endpointForm, method: "POST" }),
+    );
+    expect(endpointResponse.status).toBe(200);
+    expect(endpointResponse.headers.get("content-type")).toContain("text/html");
+    expect(await endpointResponse.text()).toContain(
+      "action-state:<!-- -->saved:rsc:idle:endpoint",
+    );
+  });
+
+  test("normalizes redirect, notFound, and ordinary failures from components and actions", async () => {
+    const artifact = await compileNextRequestWorkspace(controlFlowWorkspace(), {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "next-control-flow",
+    });
+    const missingPage = await renderNextRequestArtifact(artifact, {
+      url: "/?mode=missing",
+    });
+    expect(missingPage.status).toBe(404);
+    expect(await missingPage.text()).toContain("lesson-not-found");
+
+    const redirectedPage = await renderNextRequestArtifact(artifact, {
+      url: "/?mode=redirect",
+    });
+    expect(redirectedPage.status).toBe(307);
+    expect(redirectedPage.headers.get("location")).toBe("/destination");
+
+    const actionId = (name: string) =>
+      Object.entries(artifact.actionManifest).find(
+        ([, reference]) => reference.exportName === name,
+      )![0];
+    const emptyBody = async () =>
+      serializeNextActionBody(await rscClient.encodeReply([]));
+    const redirectedAction = await invokeNextServerAction(artifact, {
+      actionId: actionId("redirectAction"),
+      body: await emptyBody(),
+    });
+    expect(redirectedAction.status).toBe(303);
+    expect(redirectedAction.headers.get("location")).toBe("/after-action");
+    expect(redirectedAction.headers.get("x-action-redirect")).toContain(
+      "/after-action",
+    );
+
+    const missingAction = await invokeNextServerAction(artifact, {
+      actionId: actionId("missingAction"),
+      body: await emptyBody(),
+    });
+    expect(missingAction.status).toBe(404);
+    expect(await missingAction.text()).toBe("Not Found");
+
+    await expect(
+      invokeNextServerAction(artifact, {
+        actionId: actionId("failingAction"),
+        body: await emptyBody(),
+      }),
+    ).rejects.toThrow("lesson exploded");
   });
 
   test("uses Next cache APIs with tag, path, and stale-while-revalidate semantics", async () => {

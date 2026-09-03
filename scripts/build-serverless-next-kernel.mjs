@@ -14,6 +14,7 @@ const manifestPath = path.resolve(
 const entry = `
 import * as React from "react";
 import * as ReactJsxRuntime from "react/jsx-runtime";
+import * as ReactDom from "react-dom";
 import * as ReactDomClient from "react-dom/client";
 import * as RscClient from "next/dist/compiled/react-server-dom-webpack/client.browser";
 
@@ -42,6 +43,7 @@ globalThis.__TUTO_NEXT_CLIENT_KERNEL__ = Object.freeze({
   modules: Object.freeze({
     react: React,
     "react/jsx-runtime": ReactJsxRuntime,
+    "react-dom": ReactDom,
   }),
   reactDomClient: ReactDomClient,
   rscClient: RscClient,

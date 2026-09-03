@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { WorkspaceFile } from "@/lib/ide/types";
 
-export const NEXT_REQUEST_ARTIFACT_VERSION = 6 as const;
+export const NEXT_REQUEST_ARTIFACT_VERSION = 7 as const;
 
 export type NextCompiledModule = {
   canonicalPath: string;
@@ -85,6 +85,7 @@ export type NextRouteManifest = {
 };
 
 export type NextRequestArtifact = {
+  actionEncryptionKey: string;
   actionManifest: Record<string, NextServerActionReference>;
   buildMetrics: {
     browserTransformCacheHits: number;
