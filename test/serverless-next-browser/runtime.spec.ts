@@ -18,8 +18,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     path: "app/layout.tsx",
   },
   {
-    content: `import Counter from './counter';
-export default function Page() { return <main><p>server-browser-checkpoint</p><Counter /></main>; }`,
+    content: `import Link from "next/link";
+import Counter from './counter';
+import NavigationControls from "./navigation-controls";
+export default function Page() { return <main><p>server-browser-checkpoint</p><Counter /><Link data-next-link href="/lesson?tab=rsc">lesson</Link><NavigationControls /></main>; }`,
     language: "tsx",
     path: "app/page.tsx",
   },
@@ -33,6 +35,16 @@ export default function Counter() {
 }`,
     language: "tsx",
     path: "app/counter.tsx",
+  },
+  {
+    content: `"use client";
+import { usePathname, useRouter } from "next/navigation";
+export default function NavigationControls() {
+  const router = useRouter();
+  return <button data-router-replace onClick={() => router.replace("/replaced")}>replace:{usePathname()}</button>;
+}`,
+    language: "tsx",
+    path: "app/navigation-controls.tsx",
   },
   {
     content: "body { background: rgb(240, 241, 242); }",
@@ -162,6 +174,39 @@ test("hydrates a Next SWC client boundary and preserves interaction", async ({
     .toBe(artifact.generation);
   await page.locator('[data-client="counter"]').click();
   await expect(page.locator('[data-client="counter"]')).toHaveText("count:1");
+
+  await page.evaluate(() => {
+    const globals = globalThis as typeof globalThis & {
+      __TUTO_NAV_MESSAGES__?: unknown[];
+    };
+    globals.__TUTO_NAV_MESSAGES__ = [];
+    window.addEventListener("message", (event) => {
+      const payload = event.data as { kind?: string } | undefined;
+      if (payload?.kind === "navigate") {
+        globals.__TUTO_NAV_MESSAGES__?.push(payload);
+      }
+    });
+  });
+  await page.locator("[data-next-link]").click();
+  await page.locator("[data-router-replace]").click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            globalThis as typeof globalThis & {
+              __TUTO_NAV_MESSAGES__?: Array<{
+                navigation?: string;
+                path?: string;
+              }>;
+            }
+          ).__TUTO_NAV_MESSAGES__,
+      ),
+    )
+    .toEqual([
+      expect.objectContaining({ navigation: "push", path: "/lesson?tab=rsc" }),
+      expect.objectContaining({ navigation: "replace", path: "/replaced" }),
+    ]);
 });
 
 test("dispatches a Server Action and applies its refreshed Flight tree", async ({

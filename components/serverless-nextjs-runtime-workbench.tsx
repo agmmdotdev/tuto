@@ -51,6 +51,9 @@ const nextTypeLibraries = [
   export function useRouter(): AppRouterInstance;
   export function usePathname(): string;
   export function useSearchParams(): URLSearchParams;
+  export function notFound(): never;
+  export function redirect(path: string): never;
+  export function permanentRedirect(path: string): never;
 }`,
   },
   {
@@ -95,6 +98,7 @@ export function ServerlessNextjsRuntimeWorkbench({
         footerHint: "Ctrl+S saves and reruns the active request",
         previewTitle: "Hydrated Next RSC preview",
         showPreviewAsStatic: false,
+        virtualNavigation: true,
         defaultCompiler: "esbuild",
         compilerOptions: [{ value: "esbuild", label: "Next SWC" }],
       }}

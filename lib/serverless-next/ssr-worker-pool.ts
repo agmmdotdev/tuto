@@ -92,6 +92,7 @@ export class NextSsrWorkerPool {
     artifact: NextRequestArtifact,
     flight: Buffer,
     formState?: unknown,
+    url = "/",
   ) {
     if (!this.installed.has(artifact.generation)) {
       await this.send({ artifact, type: "install" });
@@ -102,6 +103,7 @@ export class NextSsrWorkerPool {
       formState,
       generation: artifact.generation,
       type: "render",
+      url,
     });
     if (typeof reply.html !== "string") {
       throw new Error("Next SSR worker returned no HTML payload.");

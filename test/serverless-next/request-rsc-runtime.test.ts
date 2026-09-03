@@ -358,13 +358,23 @@ function controlFlowWorkspace(): WorkspaceFile[] {
       path: "app/not-found.tsx",
     },
     {
-      content: `import { notFound, redirect } from "next/navigation";
+      content: `"use client";
+export default function ErrorView({ error, reset }: { error: Error; reset(): void }) {
+  return <main><p>lesson-error:{error.message}</p><button onClick={reset}>retry lesson</button></main>;
+}`,
+      language: "tsx",
+      path: "app/error.tsx",
+    },
+    {
+      content: `import { notFound, permanentRedirect, redirect } from "next/navigation";
 export default async function Page({ searchParams }: {
   searchParams: Promise<{ mode?: string }>;
 }) {
   const { mode } = await searchParams;
   if (mode === "missing") notFound();
   if (mode === "redirect") redirect("/destination");
+  if (mode === "permanent") permanentRedirect("/permanent-destination");
+  if (mode === "error") throw new Error("page exploded");
   return <main>control-flow-ok</main>;
 }`,
       language: "tsx",
@@ -378,6 +388,127 @@ export async function missingAction() { notFound(); }
 export async function failingAction() { throw new Error("lesson exploded"); }`,
       language: "ts",
       path: "app/actions.ts",
+    },
+  ];
+}
+
+function boundaryWorkspace(): WorkspaceFile[] {
+  return [
+    {
+      content: `export default function Layout({ children }: { children: React.ReactNode }) {
+  return <html><body><p>root-boundary-layout</p>{children}</body></html>;
+}`,
+      language: "tsx",
+      path: "app/layout.tsx",
+    },
+    {
+      content: `"use client";
+export default function RootError({ error }: { error: Error }) {
+  return <main>root-error:{error.message}</main>;
+}`,
+      language: "tsx",
+      path: "app/error.tsx",
+    },
+    {
+      content: `export default function NotFound() { return <main>root-boundary-not-found</main>; }`,
+      language: "tsx",
+      path: "app/not-found.tsx",
+    },
+    {
+      content: `export default function Layout({ children }: { children: React.ReactNode }) {
+  return <section><p>dashboard-layout</p>{children}</section>;
+}`,
+      language: "tsx",
+      path: "app/dashboard/layout.tsx",
+    },
+    {
+      content: `"use client";
+export default function DashboardError({ error, reset }: { error: Error; reset(): void }) {
+  return <main><p>dashboard-error:{error.message}</p><button onClick={reset}>retry dashboard</button></main>;
+}`,
+      language: "tsx",
+      path: "app/dashboard/error.tsx",
+    },
+    {
+      content: `export default function Loading() { return <p>dashboard-loading</p>; }`,
+      language: "tsx",
+      path: "app/dashboard/loading.tsx",
+    },
+    {
+      content: `export default function NotFound() { return <main>dashboard-not-found</main>; }`,
+      language: "tsx",
+      path: "app/dashboard/not-found.tsx",
+    },
+    {
+      content: `import Link from "next/link";
+import { notFound } from "next/navigation";
+export default async function Page({ searchParams }: { searchParams: Promise<{ mode?: string }> }) {
+  const { mode } = await searchParams;
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  if (mode === "missing") notFound();
+  if (mode === "error") throw new Error("dashboard exploded");
+  return <main><Link href="/dashboard?mode=error">open failure</Link><p>dashboard-ok</p></main>;
+}`,
+      language: "tsx",
+      path: "app/dashboard/page.tsx",
+    },
+    {
+      content: `"use client";
+export default function WrongError({ error }: { error: Error }) {
+  return <main>wrong-broken-error:{error.message}</main>;
+}`,
+      language: "tsx",
+      path: "app/broken/error.tsx",
+    },
+    {
+      content: `export default function BrokenLayout({ children }: { children: React.ReactNode }) {
+  throw new Error("broken layout exploded");
+  return <section>{children}</section>;
+}`,
+      language: "tsx",
+      path: "app/broken/layout.tsx",
+    },
+    {
+      content: `export default function Page() { return <main>unreachable</main>; }`,
+      language: "tsx",
+      path: "app/broken/page.tsx",
+    },
+    {
+      content: `import { notFound } from "next/navigation";
+export default function MissingLayout({ children }: { children: React.ReactNode }) {
+  notFound();
+  return <section>{children}</section>;
+}`,
+      language: "tsx",
+      path: "app/missing-layout/layout.tsx",
+    },
+    {
+      content: `export default function WrongNotFound() { return <main>wrong-layout-not-found</main>; }`,
+      language: "tsx",
+      path: "app/missing-layout/not-found.tsx",
+    },
+    {
+      content: `export default function Page() { return <main>unreachable</main>; }`,
+      language: "tsx",
+      path: "app/missing-layout/page.tsx",
+    },
+    {
+      content: `"use client";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+export default function NavigationState() {
+  const router = useRouter();
+  return <button data-navigation-state onClick={() => router.replace("/dashboard")}>
+    {usePathname()}:{useSearchParams().get("tab")}
+  </button>;
+}`,
+      language: "tsx",
+      path: "app/navigation-state.tsx",
+    },
+    {
+      content: `import NavigationState from "../navigation-state";
+export default function Page() { return <main><NavigationState /></main>; }`,
+      language: "tsx",
+      path: "app/navigation/page.tsx",
     },
   ];
 }
@@ -1319,6 +1450,22 @@ describe("request-compiled Next RSC runtime", () => {
     expect(redirectedPage.status).toBe(307);
     expect(redirectedPage.headers.get("location")).toBe("/destination");
 
+    const permanentPage = await renderNextRequestArtifact(artifact, {
+      url: "/?mode=permanent",
+    });
+    expect(permanentPage.status).toBe(308);
+    expect(permanentPage.headers.get("location")).toBe(
+      "/permanent-destination",
+    );
+
+    const failedPage = await renderNextRequestArtifact(artifact, {
+      url: "/?mode=error",
+    });
+    expect(failedPage.status).toBe(500);
+    expect(await failedPage.text()).toContain(
+      "lesson-error:<!-- -->page exploded",
+    );
+
     const actionId = (name: string) =>
       Object.entries(artifact.actionManifest).find(
         ([, reference]) => reference.exportName === name,
@@ -1348,6 +1495,101 @@ describe("request-compiled Next RSC runtime", () => {
         body: await emptyBody(),
       }),
     ).rejects.toThrow("lesson exploded");
+  });
+
+  test("preserves nested segment boundaries and precompiled navigation APIs", async () => {
+    const artifact = await compileNextRequestWorkspace(boundaryWorkspace(), {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "next-segment-boundaries",
+    });
+    const dashboardRoute = artifact.router.routes.find(
+      (route) => route.pattern === "/dashboard",
+    );
+    expect(dashboardRoute?.boundaries).toEqual([
+      {
+        directory: "app",
+        error: "app/error.tsx",
+        notFound: "app/not-found.tsx",
+      },
+      {
+        directory: "app/dashboard",
+        error: "app/dashboard/error.tsx",
+        loading: "app/dashboard/loading.tsx",
+        notFound: "app/dashboard/not-found.tsx",
+      },
+    ]);
+
+    const loadingShell = await executeNextRequestArtifact(artifact, {
+      hydrate: true,
+      loading: true,
+      url: "/dashboard",
+    });
+    const loadingHtml = await loadingShell.text();
+    expect(loadingShell.status).toBe(200);
+    expect(loadingShell.headers.get("x-tuto-next-runtime-kind")).toBe(
+      "page-loading",
+    );
+    expect(loadingHtml).toContain("dashboard-loading");
+    expect(loadingHtml).not.toContain("dashboard-ok");
+
+    const flight = await renderNextRequestArtifact(artifact, {
+      flight: true,
+      url: "/dashboard",
+    });
+    expect(await flight.text()).toContain("dashboard-loading");
+
+    const pageFailure = await renderNextRequestArtifact(artifact, {
+      url: "/dashboard?mode=error",
+    });
+    const pageFailureHtml = await pageFailure.text();
+    expect(pageFailure.status).toBe(500);
+    expect(pageFailureHtml).toContain(
+      "dashboard-error:<!-- -->dashboard exploded",
+    );
+    expect(pageFailureHtml).toContain("root-boundary-layout");
+    expect(pageFailureHtml).toContain("dashboard-layout");
+    expect(pageFailureHtml).not.toContain("root-error");
+
+    const missingPage = await renderNextRequestArtifact(artifact, {
+      url: "/dashboard?mode=missing",
+    });
+    const missingPageHtml = await missingPage.text();
+    expect(missingPage.status).toBe(404);
+    expect(missingPageHtml).toContain("dashboard-not-found");
+    expect(missingPageHtml).toContain("root-boundary-layout");
+    expect(missingPageHtml).toContain("dashboard-layout");
+    expect(missingPageHtml).not.toContain("root-boundary-not-found");
+
+    const missingLayout = await renderNextRequestArtifact(artifact, {
+      url: "/missing-layout",
+    });
+    const missingLayoutHtml = await missingLayout.text();
+    expect(missingLayout.status).toBe(404);
+    expect(missingLayoutHtml).toContain("root-boundary-not-found");
+    expect(missingLayoutHtml).not.toContain("wrong-layout-not-found");
+
+    const layoutFailure = await renderNextRequestArtifact(artifact, {
+      url: "/broken",
+    });
+    const layoutFailureHtml = await layoutFailure.text();
+    expect(layoutFailure.status).toBe(500);
+    expect(layoutFailureHtml).toContain(
+      "root-error:<!-- -->broken layout exploded",
+    );
+    expect(layoutFailureHtml).not.toContain("wrong-broken-error");
+
+    const navigation = await renderHydratableNextRequestArtifact(artifact, {
+      actionEndpoint: "http://next-action.local/action",
+      url: "/navigation?tab=lesson",
+    });
+    const navigationHtml = await navigation.text();
+    expect(navigationHtml).toContain(
+      'data-navigation-state="true">/navigation<!-- -->:<!-- -->lesson',
+    );
+    expect(navigationHtml).toContain(
+      "path: path || globalThis.__TUTO_NEXT_URL__",
+    );
+    expect(navigationHtml).not.toContain("window.location.assign");
   });
 
   test("uses Next cache APIs with tag, path, and stale-while-revalidate semantics", async () => {

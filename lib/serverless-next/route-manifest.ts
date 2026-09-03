@@ -176,6 +176,22 @@ export function buildNextRouteManifest(
         .map((entry) => routeFile(paths, entry, basename))
         .find(Boolean);
     return {
+      boundaries: directories
+        .map((entry) => ({
+          directory: entry,
+          ...(routeFile(paths, entry, "error")
+            ? { error: routeFile(paths, entry, "error") }
+            : {}),
+          ...(routeFile(paths, entry, "loading")
+            ? { loading: routeFile(paths, entry, "loading") }
+            : {}),
+          ...(routeFile(paths, entry, "not-found")
+            ? { notFound: routeFile(paths, entry, "not-found") }
+            : {}),
+        }))
+        .filter(
+          (boundary) => boundary.error || boundary.loading || boundary.notFound,
+        ),
       ...(nearest("error") ? { error: nearest("error") } : {}),
       layouts: directories
         .map((entry) => routeFile(paths, entry, "layout"))

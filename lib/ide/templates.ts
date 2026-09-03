@@ -2240,9 +2240,9 @@ This checkpoint runs real Next compiler and React Server Components machinery wi
 - Next's metadata resolver renders static and dynamic App Router metadata
 - Imported global CSS, CSS Modules, and UTF-8 \`public/\` files live in the artifact
 
-Current checkpoint: nested layouts and static/dynamic/catch-all routes, async Server Components, Client Components, Flight, SSR, hydration, metadata/\`generateMetadata\`, imported global CSS, CSS Modules, UTF-8 public assets, module-level and captured inline Server Actions, explicit \`.bind()\` arguments, progressive forms, \`useActionState\`, \`useFormStatus\`, action/component redirects and \`notFound()\`, proxy-aware action POSTs and refreshes, App Router Route Handlers, Next 16 \`proxy.ts\` (plus legacy \`middleware.ts\`), matcher rules, request/response headers, cookies, rewrites, redirects, direct responses, \`waitUntil\`, Web \`Request\`/\`Response\`, \`NextRequest\`/\`NextResponse\`, streaming responses, React request memoization, \`unstable_cache\`, Cache Components with \`"use cache"\`/\`cacheLife\`/\`cacheTag\`, patched \`fetch\`, tag invalidation, path invalidation, and stale-while-revalidate.
+Current checkpoint: nested layouts and static/dynamic/catch-all routes, segment \`loading.tsx\`/\`error.tsx\`/\`not-found.tsx\` boundaries, async Server Components, Client Components, Flight, SSR, hydration, host-backed \`next/link\` and \`useRouter\` navigation, metadata/\`generateMetadata\`, imported global CSS, CSS Modules, UTF-8 public assets, module-level and captured inline Server Actions, explicit \`.bind()\` arguments, progressive forms, \`useActionState\`, \`useFormStatus\`, action/component redirects and \`notFound()\`, proxy-aware action POSTs and refreshes, App Router Route Handlers, Next 16 \`proxy.ts\` (plus legacy \`middleware.ts\`), matcher rules, request/response headers, cookies, rewrites, redirects, direct responses, \`waitUntil\`, Web \`Request\`/\`Response\`, \`NextRequest\`/\`NextResponse\`, streaming responses, React request memoization, \`unstable_cache\`, Cache Components with \`"use cache"\`/\`cacheLife\`/\`cacheTag\`, patched \`fetch\`, tag invalidation, path invalidation, and stale-while-revalidate.
 
-Try both Server Action controls on \`GET /\`, including the form with JavaScript disabled, then \`GET /control-flow?mode=missing\`, \`GET /control-flow?mode=redirect\`, \`GET /lessons/rsc?mode=practice\`, \`GET /api/lessons/rsc?mode=practice\`, \`POST /api/lessons/rsc\` with a JSON body, \`GET /proxy-rewrite\`, \`GET /proxy-redirect\`, \`GET /proxy-response\`, \`GET /api/stream\`, \`GET /cache\`, \`GET /cache-components\`, and \`GET /fetch-cache\`. The default cache adapter is process-memory and workspace-scoped: data and fetch entries survive generation edits and worker restarts within one warm host. Cache Component keys include the immutable generation, matching Next's build-ID safety rule. This is not cross-instance durable storage.`,
+Try both Server Action controls on \`GET /\`, including the form with JavaScript disabled, follow the in-preview links, then \`GET /control-flow?mode=missing\`, \`GET /control-flow?mode=redirect\`, \`GET /control-flow?mode=error\`, \`GET /lessons/rsc?mode=practice\`, \`GET /api/lessons/rsc?mode=practice\`, \`POST /api/lessons/rsc\` with a JSON body, \`GET /proxy-rewrite\`, \`GET /proxy-redirect\`, \`GET /proxy-response\`, \`GET /api/stream\`, \`GET /cache\`, \`GET /cache-components\`, and \`GET /fetch-cache\`. The default cache adapter is process-memory and workspace-scoped: data and fetch entries survive generation edits and worker restarts within one warm host. Cache Component keys include the immutable generation, matching Next's build-ID safety rule. This is not cross-instance durable storage.`,
       },
       {
         path: "package.json",
@@ -2372,9 +2372,11 @@ export default function RootLayout({
         language: "tsx",
         description:
           "An async Server Component importing a Client Component boundary.",
-        content: `import ActionForm from "./action-form";
+        content: `import Link from "next/link";
+import ActionForm from "./action-form";
 import { current } from "./actions";
 import Counter from "./counter";
+import NavigationLab from "./navigation-lab";
 
 async function getGreeting() {
   return {
@@ -2411,6 +2413,8 @@ export default async function Page() {
       </p>
       <Counter initial={0} />
       <ActionForm action={saveLesson.bind(null, "saved")} />
+      <NavigationLab />
+      <p><Link href="/control-flow?mode=error">Open the error boundary lesson</Link></p>
       <p style={{ marginTop: 22 }}>
         Try these in the request path field: <code>/lessons/rsc?mode=practice</code>, <code>/api/lessons/rsc?mode=practice</code>, <code>/proxy-rewrite</code>, <code>/proxy-redirect</code>, <code>/proxy-response</code>, <code>/api/stream</code>, <code>/cache</code>, <code>/cache-components</code>, and <code>/fetch-cache</code>
       </p>
@@ -2497,6 +2501,59 @@ export default function ActionForm({ action }: {
 `,
       },
       {
+        path: "app/navigation-lab.tsx",
+        language: "tsx",
+        description:
+          "Client navigation using the shared request-runtime router bridge.",
+        content: `"use client";
+
+import { usePathname, useRouter } from "next/navigation";
+
+export default function NavigationLab() {
+  const pathname = usePathname();
+  const router = useRouter();
+  return (
+    <div style={{ marginTop: 18 }}>
+      <span>Current path: {pathname}</span>{" "}
+      <button onClick={() => router.push("/lessons/rsc?mode=practice")}>
+        Open lesson with useRouter
+      </button>
+    </div>
+  );
+}
+`,
+      },
+      {
+        path: "app/loading.tsx",
+        language: "tsx",
+        description: "The root segment Suspense fallback.",
+        content: `export default function Loading() {
+  return <main><p>Loading the lesson route…</p></main>;
+}
+`,
+      },
+      {
+        path: "app/error.tsx",
+        language: "tsx",
+        description:
+          "The root segment error UI with a host-backed reset transition.",
+        content: `"use client";
+
+export default function ErrorView({ error, reset }: {
+  error: Error;
+  reset(): void;
+}) {
+  return (
+    <main>
+      <h1>The lesson crashed</h1>
+      <p>{error.message}</p>
+      <button onClick={reset}>Retry this route</button>
+    </main>
+  );
+}
+`,
+      },
+      {
         path: "app/counter.module.css",
         language: "css",
         description:
@@ -2553,7 +2610,8 @@ export default async function ControlFlowPage({ searchParams }: {
   const { mode } = await searchParams;
   if (mode === "missing") notFound();
   if (mode === "redirect") redirect("/");
-  return <main><h1>Control flow</h1><p>Try mode=missing or mode=redirect.</p></main>;
+  if (mode === "error") throw new Error("The control-flow lesson exploded.");
+  return <main><h1>Control flow</h1><p>Try mode=missing, mode=redirect, or mode=error.</p></main>;
 }
 `,
       },

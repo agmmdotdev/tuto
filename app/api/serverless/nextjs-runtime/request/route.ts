@@ -77,6 +77,7 @@ async function readPayload(request: Request) {
       headers?: Record<string, string> | Array<[string, string]>;
       method?: string;
       path?: string;
+      loading?: boolean;
     };
     workspaceKey?: string;
   };
@@ -99,7 +100,7 @@ function virtualizeActionCookies(response: Response) {
   }
   headers.set(
     "access-control-expose-headers",
-    "location, x-tuto-next-virtual-set-cookie",
+    "location, x-action-redirect, x-tuto-next-virtual-set-cookie",
   );
   return new Response(response.body, {
     headers,
@@ -274,12 +275,14 @@ export async function POST(request: Request) {
       body: payload.request?.body,
       headers: payload.request?.headers,
       hydrate: true,
+      loading: payload.request?.loading,
       method,
       url,
     });
     const responseBody = await response.text();
     const body =
-      response.headers.get("x-tuto-next-runtime-kind") === "page"
+      response.headers.get("x-tuto-next-runtime-kind") === "page" ||
+      response.headers.get("x-tuto-next-runtime-kind") === "page-loading"
         ? injectPreviewBridge(responseBody)
         : responseBody;
     const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
