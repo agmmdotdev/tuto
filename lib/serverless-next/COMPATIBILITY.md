@@ -22,8 +22,9 @@ and rerun the compatibility suite.
 | Intercepted routes                       | `(.)`, `(..)`, `(..)(..)`, and `(...)` markers target a named slot on soft navigation while direct loads use canonical pages  |
 | Global error boundary                    | A Client Component `app/global-error.tsx` replaces the root document when no normal segment boundary can handle a failure     |
 | Segment boundary manifest                | Every matched segment retains its own `error.tsx`, `loading.tsx`, and `not-found.tsx` instead of only the nearest file        |
-| Error boundaries                         | Server render failures select the nearest eligible segment error UI; client failures use a shared React boundary with reset   |
-| Loading boundaries                       | Nested `loading.tsx` files become real Suspense fallbacks in Flight and a hot loading-shell request renders during navigation |
+| Error boundaries                         | Primary and named-slot failures select the nearest eligible segment error UI while preserving owner layouts and sibling slots |
+| Loading boundaries                       | Nested and named-slot `loading.tsx` files become real Suspense fallbacks in Flight and in hot loading-shell requests          |
+| Not-found boundaries                     | Primary and named-slot `not-found.tsx` files localize 404 control flow without replacing unaffected sibling branches          |
 | `params` and `searchParams`              | Next 16-style promised props are resolved for pages and route params are decoded                                              |
 | `app/**/route.ts`                        | Route-only workspaces and static/dynamic/catch-all handlers are discovered in the immutable manifest                          |
 | Web request APIs                         | Handlers receive Next's real `NextRequest`; native `Request`/`Response` and `NextResponse` execute                            |
@@ -274,14 +275,18 @@ round trip. `useFormStatus` comes from the precompiled shared React DOM module,
 so pending state does not enlarge each student's browser bundle.
 
 The route manifest now retains boundaries per App Router directory. The RSC
-model nests Suspense and shared client error boundaries inside the matching
-layout, and a server render failure selects the closest boundary that could
-legally catch the failing page or layout. The shared kernel supplies reset
-without putting host orchestration into student bundles. Flight contains the
-segment loading fallback. Because the workbench API uses a buffered JSON
-envelope, navigation first requests a lightweight loading-only model from the
-already-hot artifact, displays it, and then requests the final route. This is a
-two-phase request protocol, not fake chunk streaming.
+model nests Suspense plus shared client error and not-found boundaries inside
+the matching branch. A server render failure selects the closest boundary that
+could legally catch the failing page or layout, reconstructs only that branch,
+and preserves its owner layout and sibling slots. A boundary cannot catch an
+error thrown by its own layout or boundary module, so selection moves outward
+to the next eligible owner, matching Next's component-tree topology. The shared
+kernel supplies reset and HTTP-not-found recognition without putting host
+orchestration into student bundles. Flight contains the segment loading
+fallback. Because the workbench API uses a buffered JSON envelope, navigation
+first requests a lightweight loading-only model from the already-hot artifact,
+displays it, and then requests the final route. This is a two-phase request
+protocol, not fake chunk streaming.
 
 Navigation is also host-owned. The shared kernel implements the request-runtime
 surface of `next/link`, `useRouter`, `usePathname`, and `useSearchParams`.
@@ -340,11 +345,33 @@ the existing per-request worker or SecureExec isolate; no student server is
 started.
 
 This checkpoint deliberately models the stateless portion of the App Router.
-It supports one level of named slots and interceptions inside those slots. It
-does not yet preserve an independent navigation history for every slot, nest a
-second `@slot`, or reproduce every slot-local error/loading/not-found
-transition. Those cases fail validation or fall back to the existing root
-behavior instead of pretending to be fully Next-compatible.
+It supports one level of named slots and interceptions inside those slots,
+including slot-local error, loading, and not-found lifecycle. It does not yet
+preserve an independent navigation history for every slot or nest a second
+`@slot`. Those cases fail validation instead of pretending to be fully
+Next-compatible.
+
+### Next 16.2.6 boundary differential
+
+The implementation was checked against a stock pinned Next development server
+using a canonical photo page plus an intercepted `@modal` page with local
+`error.tsx`, `loading.tsx`, and `not-found.tsx`. Next's own
+`create-component-tree` also shows why the ownership rules differ: an owner's
+error component is passed to each parallel `LayoutRouter`, while an HTTP
+not-found component is attached to the `children` branch at that level.
+
+| Intercepted slot outcome | Stock Next initial document | Tuto streamed document | Tuto buffered request |
+| ------------------------ | --------------------------- | ---------------------- | --------------------- |
+| Success                  | HTTP 200, final modal        | HTTP 200, final modal  | HTTP 200, final modal |
+| Page throws              | HTTP 200, modal loading; error stays in Flight until hydration | HTTP 200, modal loading; error stays in Flight until hydration | HTTP 500, final modal error UI |
+| Page calls `notFound()`  | HTTP 200, modal loading; 404 signal stays in Flight until hydration | HTTP 200, modal loading; 404 signal stays in Flight until hydration | HTTP 404, final modal not-found UI |
+
+The different buffered status is intentional: that transport has already
+observed the complete RSC render and can return its final outcome. The streamed
+transport cannot change an HTTP status after its shell is committed, so the
+shared browser kernel resolves the encoded Flight signal into the local slot
+boundary after hydration. Browser, child-worker, and SecureExec fixtures assert
+that the primary page and sibling slots remain mounted.
 
 ## Local checkpoint measurement
 
@@ -359,7 +386,7 @@ is separate and each worker has a 256 MB V8 heap ceiling.
 | Unchanged request |   34.2 ms |  12.1 ms |       +1.1 MiB | Hot immutable artifact                                |
 | Server page edit  |  113.5 ms |  51.5 ms |       +1.1 MiB | 2/3 server transforms and the client transform reused |
 
-The shared minified browser kernel is 221,849 bytes before HTTP compression.
+The shared minified browser kernel is 222,266 bytes before HTTP compression.
 This result supports the shared-runtime design: cold compiler initialization is
 the expensive event, not every request or ordinary Server Component edit.
 
@@ -382,7 +409,7 @@ restarting Next.js.
 
 ## Deliberately not supported yet
 
-- Nested parallel slots, independent per-slot navigation history, and complete slot-local error/loading/not-found transitions
+- Nested parallel slots and independent per-slot navigation history
 - Incremental Server Action Flight responses and streamed proxy terminal responses
 - External proxy rewrites and streaming proxy IPC
 - Next's webpack/Turbopack/PostCSS plugin pipeline, Sass, Tailwind directives, and CSS `url()` asset graph rewriting
@@ -418,6 +445,6 @@ and record native-module loading, wall/CPU/RSS, timeout cleanup, and LRU
 behavior. After that, load-test the already-packaged cache coordinator across
 regions and fuzz the sandbox capability boundary.
 
-If deployment access is unavailable, the next local framework slice is a set
-of differential topology fixtures against the pinned Next 16.2.6 runtime,
-followed by slot-local boundary lifecycle and independent slot-history work.
+If deployment access is unavailable, the next local framework slice is
+independent slot-history state followed by nested parallel slots. Both require
+a host-owned router-state tree rather than another component-boundary shim.
