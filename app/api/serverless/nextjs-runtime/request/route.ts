@@ -130,6 +130,81 @@ export async function POST(request: Request) {
         "The request-compiled Next checkpoint is disabled in production until student execution is behind Tuto's isolation boundary.",
       );
     }
+    const contentType = request.headers.get("content-type") ?? "";
+    if (
+      contentType.startsWith("multipart/form-data") ||
+      contentType.startsWith("application/x-www-form-urlencoded")
+    ) {
+      isActionRequest = true;
+      const contentLength = Number(request.headers.get("content-length") ?? 0);
+      if (Number.isFinite(contentLength) && contentLength > maxRequestBytes) {
+        throw new Error(
+          "The Next runtime request exceeds the 6 MiB checkpoint limit.",
+        );
+      }
+      const formBody = await request.arrayBuffer();
+      if (formBody.byteLength > maxRequestBytes) {
+        throw new Error(
+          "The Next runtime request exceeds the 6 MiB checkpoint limit.",
+        );
+      }
+      const formData = await new Request(request.url, {
+        body: formBody,
+        headers: { "content-type": contentType },
+        method: "POST",
+      }).formData();
+      const revision = formData.get("$TUTO_NEXT_REVISION");
+      const url = formData.get("$TUTO_NEXT_URL");
+      if (typeof revision !== "string" || typeof url !== "string") {
+        throw new Error(
+          "The progressive Server Action form is missing its pinned generation metadata.",
+        );
+      }
+      const routeUrl = new URL(url, "http://next.local");
+      if (routeUrl.origin !== "http://next.local") {
+        throw new Error(
+          "The progressive Server Action URL must stay inside the workspace.",
+        );
+      }
+      formData.delete("$TUTO_NEXT_REVISION");
+      formData.delete("$TUTO_NEXT_URL");
+      const [artifactModule, nextRuntime] = await Promise.all([
+        import("../../../../../lib/serverless-next/artifact"),
+        import("../../../../../lib/serverless-next/runtime"),
+      ]);
+      const artifact = artifactModule.getNextRequestArtifact(revision);
+      if (!artifact) {
+        return new Response(
+          "The Server Action generation is no longer hot. Render the workspace again.",
+          {
+            headers: {
+              "cache-control": "no-store",
+              "content-type": "text/plain; charset=utf-8",
+            },
+            status: 409,
+          },
+        );
+      }
+      let response = await nextRuntime.executeNextProgressiveActionArtifact(
+        artifact,
+        {
+          actionEndpoint: request.url,
+          body: await nextRuntime.serializeNextActionBody(formData),
+          headers: request.headers,
+          url: `${routeUrl.pathname}${routeUrl.search}`,
+        },
+      );
+      if (
+        (response.headers.get("content-type") ?? "").startsWith("text/html")
+      ) {
+        response = new Response(injectPreviewBridge(await response.text()), {
+          headers: response.headers,
+          status: response.status,
+          statusText: response.statusText,
+        });
+      }
+      return virtualizeActionCookies(response);
+    }
     const payload = await readPayload(request);
     if (payload.action) {
       isActionRequest = true;

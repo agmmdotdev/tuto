@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 import path from "node:path";
+
+globalThis.AsyncLocalStorage ??= AsyncLocalStorage;
 
 const requireNext = createRequire(path.join(process.cwd(), "package.json"));
 const nextPackage = requireNext("next/package.json") as { version: string };

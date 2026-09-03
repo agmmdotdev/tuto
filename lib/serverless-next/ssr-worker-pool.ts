@@ -88,13 +88,18 @@ export class NextSsrWorkerPool {
     });
   }
 
-  async render(artifact: NextRequestArtifact, flight: Buffer) {
+  async render(
+    artifact: NextRequestArtifact,
+    flight: Buffer,
+    formState?: unknown,
+  ) {
     if (!this.installed.has(artifact.generation)) {
       await this.send({ artifact, type: "install" });
       this.installed.add(artifact.generation);
     }
     const reply = await this.send({
       bodyBase64: flight.toString("base64"),
+      formState,
       generation: artifact.generation,
       type: "render",
     });

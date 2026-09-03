@@ -13,7 +13,9 @@ import {
 type WorkerReply = {
   bodyBase64?: string;
   cacheMetrics?: NextCacheMetrics;
+  contentType?: string;
   error?: string;
+  formState?: unknown;
   headers?: Array<[string, string]>;
   id: string;
   ok: boolean;
@@ -53,7 +55,9 @@ export type NextSerializedActionBody =
 
 export type NextFlightWorkerResult = {
   cacheMetrics: NextCacheMetrics;
+  contentType: string;
   flight: Buffer;
+  formState?: unknown;
   headers: Array<[string, string]>;
   routePattern: string | null;
   status: number;
@@ -212,7 +216,9 @@ export class NextRscWorkerPool {
         staleHits: 0,
         writes: 0,
       },
+      contentType: reply.contentType ?? "text/x-component; charset=utf-8",
       flight: Buffer.from(reply.bodyBase64, "base64"),
+      formState: reply.formState,
       headers: reply.headers ?? [],
       routePattern: reply.routePattern ?? null,
       status: reply.status ?? 200,
@@ -276,6 +282,27 @@ export class NextRscWorkerPool {
         ...input,
         generation: artifact.generation,
         type: "action",
+      }),
+    );
+  }
+
+  async invokeProgressiveAction(
+    artifact: NextRequestArtifact,
+    input: {
+      body: NextSerializedActionBody;
+      headers: Array<[string, string]>;
+      url: string;
+    },
+  ) {
+    if (!this.installed.has(artifact.generation)) {
+      await this.send({ artifact, type: "install" });
+      this.installed.add(artifact.generation);
+    }
+    return this.result(
+      await this.send({
+        ...input,
+        generation: artifact.generation,
+        type: "progressive-action",
       }),
     );
   }

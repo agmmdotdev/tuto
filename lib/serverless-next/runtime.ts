@@ -29,7 +29,11 @@ async function flightToHtml(
   artifact: NextRequestArtifact,
   result: NextFlightWorkerResult,
 ) {
-  const html = await getNextSsrWorkerPool().render(artifact, result.flight);
+  const html = await getNextSsrWorkerPool().render(
+    artifact,
+    result.flight,
+    result.formState,
+  );
   const styleElements = result.stylePaths
     .map((stylePath) => {
       const style = artifact.styles[stylePath];
@@ -51,6 +55,28 @@ async function flightToHtml(
 
 function inlineScript(code: string) {
   return code.replaceAll("</script", "<\\/script");
+}
+
+function htmlAttribute(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function wireProgressiveActionForms(
+  html: string,
+  config: { actionEndpoint?: string; revision: string; url: string },
+) {
+  if (!config.actionEndpoint) return html;
+  const endpoint = htmlAttribute(config.actionEndpoint);
+  const metadata = `<input type="hidden" name="$TUTO_NEXT_REVISION" value="${htmlAttribute(config.revision)}"/><input type="hidden" name="$TUTO_NEXT_URL" value="${htmlAttribute(config.url)}"/>`;
+  return html.replace(
+    /<form(?=[^>]*\baction="")(?=[^>]*\bmethod="POST")(?=[^>]*\benctype="multipart\/form-data")([^>]*)>/gi,
+    (opening) =>
+      opening.replace('action=""', `action="${endpoint}"`) + metadata,
+  );
 }
 
 let clientKernelPromise: Promise<string> | undefined;
@@ -76,6 +102,7 @@ function hydrationBootstrap(
     headers: Array<[string, string]>;
     revision: string;
     url: string;
+    formState?: unknown;
   },
 ) {
   return `(async () => {
@@ -153,12 +180,14 @@ function hydrationBootstrap(
       redirect: "manual",
     });
     applyVirtualCookies(response);
+    const location = response.headers.get("location");
+    if (location) {
+      window.location.assign(location);
+      return undefined;
+    }
     if (!response.ok || !response.body) {
-      const location = response.headers.get("location");
       throw new Error(
-        location
-          ? "The Server Action proxy redirected to " + location + "."
-          : (await response.text()) || "The Server Action request failed.",
+        (await response.text()) || "The Server Action request failed.",
       );
     }
     if (!(response.headers.get("content-type") || "").startsWith("text/x-component")) {
@@ -176,13 +205,52 @@ function hydrationBootstrap(
   const model = await kernel.rscClient.createFromReadableStream(stream, {
     callServer: globalThis.__TUTO_NEXT_CALL_SERVER__,
   });
-  root = kernel.reactDomClient.hydrateRoot(document, model);
+  const formState = ${JSON.stringify(config.formState)};
+  root = kernel.reactDomClient.hydrateRoot(
+    document,
+    model,
+    formState === undefined ? undefined : { formState },
+  );
   globalThis.__TUTO_NEXT_ROOT__ = root;
   globalThis.__TUTO_NEXT_HYDRATED__ = ${JSON.stringify(config.generation)};
 })().catch((error) => {
   globalThis.__TUTO_NEXT_HYDRATION_ERROR__ = error instanceof Error ? error.stack : String(error);
   console.error(error);
 });`;
+}
+
+async function hydratableDocument(
+  artifact: NextRequestArtifact,
+  result: NextFlightWorkerResult,
+  config: {
+    actionEndpoint?: string;
+    headers: Array<[string, string]>;
+    url: string;
+  },
+) {
+  const html = wireProgressiveActionForms(
+    await flightToHtml(artifact, result),
+    {
+      actionEndpoint: config.actionEndpoint,
+      revision: artifact.revision,
+      url: config.url,
+    },
+  );
+  const scripts = `<script>${inlineScript(await readClientKernel())}</script>
+<script>${inlineScript(artifact.clientBundle.code)}</script>
+<script type="module">${inlineScript(
+    hydrationBootstrap(result.flight, {
+      actionEndpoint: config.actionEndpoint,
+      formState: result.formState,
+      generation: artifact.generation,
+      headers: config.headers,
+      revision: artifact.revision,
+      url: config.url,
+    }),
+  )}</script>`;
+  return html.includes("</body>")
+    ? html.replace("</body>", `${scripts}</body>`)
+    : `${html}${scripts}`;
 }
 
 function responseHeaders(
@@ -201,6 +269,19 @@ function responseHeaders(
   };
 }
 
+function flightResultHeaders(
+  artifact: NextRequestArtifact,
+  result: NextFlightWorkerResult,
+  contentType: string,
+) {
+  const headers = new Headers(responseHeaders(artifact, result, contentType));
+  for (const [name, value] of result.headers) {
+    if (name === "set-cookie") headers.append(name, value);
+    else headers.set(name, value);
+  }
+  return headers;
+}
+
 export async function renderHydratableNextRequestArtifact(
   artifact: NextRequestArtifact,
   options: NextRuntimeRequest & { actionEndpoint?: string } = {},
@@ -209,23 +290,22 @@ export async function renderHydratableNextRequestArtifact(
   const result = await getNextRscWorkerPool().render(artifact, url, [
     ...new Headers(options.headers).entries(),
   ]);
-  const html = await flightToHtml(artifact, result);
-  const scripts = `<script>${inlineScript(await readClientKernel())}</script>
-<script>${inlineScript(artifact.clientBundle.code)}</script>
-<script type="module">${inlineScript(
-    hydrationBootstrap(result.flight, {
-      actionEndpoint: options.actionEndpoint,
-      generation: artifact.generation,
-      headers: [...new Headers(options.headers).entries()],
-      revision: artifact.revision,
-      url,
-    }),
-  )}</script>`;
-  const document = html.includes("</body>")
-    ? html.replace("</body>", `${scripts}</body>`)
-    : `${html}${scripts}`;
+  if (!result.contentType.startsWith("text/x-component")) {
+    return new Response(
+      result.flight.length > 0 ? Uint8Array.from(result.flight) : null,
+      {
+        headers: flightResultHeaders(artifact, result, result.contentType),
+        status: result.status,
+      },
+    );
+  }
+  const document = await hydratableDocument(artifact, result, {
+    actionEndpoint: options.actionEndpoint,
+    headers: [...new Headers(options.headers).entries()],
+    url,
+  });
   return new Response(document, {
-    headers: responseHeaders(artifact, result, "text/html; charset=utf-8"),
+    headers: flightResultHeaders(artifact, result, "text/html; charset=utf-8"),
     status: result.status,
   });
 }
@@ -239,9 +319,18 @@ export async function renderNextRequestArtifact(
     options.url ?? "/",
     [...new Headers(options.headers).entries()],
   );
+  if (!result.contentType.startsWith("text/x-component")) {
+    return new Response(
+      result.flight.length > 0 ? Uint8Array.from(result.flight) : null,
+      {
+        headers: flightResultHeaders(artifact, result, result.contentType),
+        status: result.status,
+      },
+    );
+  }
   if (options.flight) {
     return new Response(Uint8Array.from(result.flight), {
-      headers: responseHeaders(
+      headers: flightResultHeaders(
         artifact,
         result,
         "text/x-component; charset=utf-8",
@@ -251,7 +340,7 @@ export async function renderNextRequestArtifact(
   }
   const html = await flightToHtml(artifact, result);
   return new Response(html, {
-    headers: responseHeaders(artifact, result, "text/html; charset=utf-8"),
+    headers: flightResultHeaders(artifact, result, "text/html; charset=utf-8"),
     status: result.status,
   });
 }
@@ -296,7 +385,7 @@ export async function invokeNextServerAction(
     url: input.url ?? "/",
   });
   const headers = new Headers(
-    responseHeaders(artifact, result, "text/x-component; charset=utf-8"),
+    responseHeaders(artifact, result, result.contentType),
   );
   for (const [name, value] of result.headers) {
     if (name === "set-cookie") headers.append(name, value);
@@ -418,6 +507,89 @@ export async function executeNextServerActionArtifact(
   });
 }
 
+export async function executeNextProgressiveActionArtifact(
+  artifact: NextRequestArtifact,
+  input: {
+    actionEndpoint?: string;
+    body: NextSerializedActionBody;
+    headers?: HeadersInit;
+    url?: string;
+  },
+) {
+  const originalUrl = input.url ?? "/";
+  const encodedBody = await serializedActionProxyBody(input.body);
+  const originalHeaders = new Headers(input.headers);
+  originalHeaders.delete("content-length");
+  originalHeaders.delete("host");
+  originalHeaders.delete("transfer-encoding");
+  originalHeaders.set("content-type", encodedBody.contentType);
+  const proxy = artifact.router.proxy
+    ? await invokeNextProxy(artifact, {
+        body: encodedBody.body,
+        headers: originalHeaders,
+        method: "POST",
+        url: originalUrl,
+      })
+    : null;
+  if (proxy?.outcome === "redirect" || proxy?.outcome === "response") {
+    const headers = new Headers(proxy.headers);
+    headers.set("x-tuto-next-proxy", `matched=1; outcome=${proxy.outcome}`);
+    headers.set("x-tuto-next-runtime-kind", "progressive-action");
+    return new Response(
+      proxy.body.length > 0 ? Uint8Array.from(proxy.body) : null,
+      {
+        headers,
+        status: proxy.status,
+        statusText: proxy.statusText,
+      },
+    );
+  }
+
+  const actionHeaders = new Headers(proxy?.requestHeaders ?? originalHeaders);
+  const url = proxy?.url ?? originalUrl;
+  const result = await getNextRscWorkerPool().invokeProgressiveAction(
+    artifact,
+    {
+      body: input.body,
+      headers: [...actionHeaders.entries()],
+      url,
+    },
+  );
+  const isFlight = result.contentType.startsWith("text/x-component");
+  const body = isFlight
+    ? await hydratableDocument(artifact, result, {
+        actionEndpoint: input.actionEndpoint,
+        headers: [...actionHeaders.entries()],
+        url,
+      })
+    : Uint8Array.from(result.flight);
+  const headers = new Headers(
+    responseHeaders(
+      artifact,
+      result,
+      isFlight ? "text/html; charset=utf-8" : result.contentType,
+    ),
+  );
+  for (const [name, value] of result.headers) {
+    if (name === "set-cookie") headers.append(name, value);
+    else headers.set(name, value);
+  }
+  headers.set("x-tuto-next-runtime-kind", "progressive-action");
+  headers.set(
+    "x-tuto-next-proxy",
+    proxy
+      ? `matched=${proxy.matched ? 1 : 0}; outcome=${proxy.outcome}`
+      : "absent",
+  );
+  const response = new Response(body, { headers, status: result.status });
+  if (!proxy) return response;
+  return new Response(response.body, {
+    headers: mergeProxyResponseHeaders(proxy.headers, response),
+    status: response.status,
+    statusText: response.statusText,
+  });
+}
+
 export async function invokeNextRouteHandler(
   artifact: NextRequestArtifact,
   options: NextRouteHandlerRequest = {},
@@ -494,7 +666,9 @@ function serveNextStaticAsset(
     "x-tuto-next-generation": artifact.generation,
     "x-tuto-next-runtime-kind": "public-asset",
   });
-  if (etagMatches(new Headers(requestHeaders).get("if-none-match"), asset.etag)) {
+  if (
+    etagMatches(new Headers(requestHeaders).get("if-none-match"), asset.etag)
+  ) {
     headers.delete("content-length");
     return new Response(null, { headers, status: 304 });
   }

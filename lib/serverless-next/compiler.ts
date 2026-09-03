@@ -136,7 +136,10 @@ function workspaceResources(
       continue;
     }
     if (normalizedPath.endsWith(".css")) {
-      styles.set(normalizedPath, { content: file.content, path: normalizedPath });
+      styles.set(normalizedPath, {
+        content: file.content,
+        path: normalizedPath,
+      });
       continue;
     }
     if (
@@ -216,9 +219,7 @@ function compileStyles(sourceStyles: Map<string, SourceStyle>) {
       code: Buffer.from(source.content),
       filename: source.path,
       minify: false,
-      ...(isModule
-        ? { cssModules: { pattern: "tuto_[hash]_[local]" } }
-        : {}),
+      ...(isModule ? { cssModules: { pattern: "tuto_[hash]_[local]" } } : {}),
     });
     const css = transformed.code.toString();
     const exports = Object.fromEntries(
@@ -299,18 +300,14 @@ async function buildClientBundle(
           const resolved = resolveWorkspaceImport(
             args.importer,
             args.path,
-            new Map(
-              [
-                ...Object.values(clientModules).map((module) => [
-                  module.path,
-                  { path: module.path },
-                ] as const),
-                ...Object.values(styles).map((style) => [
-                  style.path,
-                  { path: style.path },
-                ] as const),
-              ],
-            ),
+            new Map([
+              ...Object.values(clientModules).map(
+                (module) => [module.path, { path: module.path }] as const,
+              ),
+              ...Object.values(styles).map(
+                (style) => [style.path, { path: style.path }] as const,
+              ),
+            ]),
           );
           if (!resolved)
             return {
@@ -324,7 +321,7 @@ async function buildClientBundle(
         },
       );
       buildApi.onResolve(
-        { filter: /^react(?:\/jsx-(?:dev-)?runtime)?$/ },
+        { filter: /^react(?:-dom|\/jsx-(?:dev-)?runtime)?$/ },
         (args) => ({
           namespace: sharedNamespace,
           path: args.path,
@@ -419,14 +416,12 @@ export async function compileNextRequestWorkspaceWithStatus(
   const { modules, staticAssets } = resources;
   const styles = compileStyles(resources.styles);
   const dependencyResources = new Map<string, { path: string }>([
-    ...[...modules].map(([modulePath]) => [
-      modulePath,
-      { path: modulePath },
-    ] as const),
-    ...Object.keys(styles).map((stylePath) => [
-      stylePath,
-      { path: stylePath },
-    ] as const),
+    ...[...modules].map(
+      ([modulePath]) => [modulePath, { path: modulePath }] as const,
+    ),
+    ...Object.keys(styles).map(
+      (stylePath) => [stylePath, { path: stylePath }] as const,
+    ),
   ]);
   const router = buildNextRouteManifest(modules.keys());
   const revision = createNextWorkspaceRevision(
@@ -458,9 +453,7 @@ export async function compileNextRequestWorkspaceWithStatus(
     )) {
       actionManifest[actionId] = {
         exportName,
-        kind: exportName.startsWith("$$RSC_SERVER_CACHE_")
-          ? "cache"
-          : "action",
+        kind: exportName.startsWith("$$RSC_SERVER_CACHE_") ? "cache" : "action",
         modulePath: source.path,
       };
     }
@@ -527,6 +520,11 @@ export async function compileNextRequestWorkspaceWithStatus(
   );
 
   const artifact: NextRequestArtifact = {
+    actionEncryptionKey: createHash("sha256")
+      .update(
+        `tuto-next-action-encryption\0${actionSalt}\0${workspaceKey}\0${revision}`,
+      )
+      .digest("base64"),
     actionManifest: Object.fromEntries(Object.entries(actionManifest).sort()),
     buildMetrics: {
       browserTransformCacheHits,

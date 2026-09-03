@@ -2240,9 +2240,9 @@ This checkpoint runs real Next compiler and React Server Components machinery wi
 - Next's metadata resolver renders static and dynamic App Router metadata
 - Imported global CSS, CSS Modules, and UTF-8 \`public/\` files live in the artifact
 
-Current checkpoint: nested layouts and static/dynamic/catch-all routes, async Server Components, Client Components, Flight, SSR, hydration, metadata/\`generateMetadata\`, imported global CSS, CSS Modules, UTF-8 public assets, module-level Server Actions, proxy-aware action POSTs and refreshes, App Router Route Handlers, Next 16 \`proxy.ts\` (plus legacy \`middleware.ts\`), matcher rules, request/response headers, cookies, rewrites, redirects, direct responses, \`waitUntil\`, Web \`Request\`/\`Response\`, \`NextRequest\`/\`NextResponse\`, streaming responses, React request memoization, \`unstable_cache\`, Cache Components with \`"use cache"\`/\`cacheLife\`/\`cacheTag\`, patched \`fetch\`, tag invalidation, path invalidation, and stale-while-revalidate.
+Current checkpoint: nested layouts and static/dynamic/catch-all routes, async Server Components, Client Components, Flight, SSR, hydration, metadata/\`generateMetadata\`, imported global CSS, CSS Modules, UTF-8 public assets, module-level and captured inline Server Actions, explicit \`.bind()\` arguments, progressive forms, \`useActionState\`, \`useFormStatus\`, action/component redirects and \`notFound()\`, proxy-aware action POSTs and refreshes, App Router Route Handlers, Next 16 \`proxy.ts\` (plus legacy \`middleware.ts\`), matcher rules, request/response headers, cookies, rewrites, redirects, direct responses, \`waitUntil\`, Web \`Request\`/\`Response\`, \`NextRequest\`/\`NextResponse\`, streaming responses, React request memoization, \`unstable_cache\`, Cache Components with \`"use cache"\`/\`cacheLife\`/\`cacheTag\`, patched \`fetch\`, tag invalidation, path invalidation, and stale-while-revalidate.
 
-Try the Server Action button on \`GET /\`, then \`GET /lessons/rsc?mode=practice\`, \`GET /api/lessons/rsc?mode=practice\`, \`POST /api/lessons/rsc\` with a JSON body, \`GET /proxy-rewrite\`, \`GET /proxy-redirect\`, \`GET /proxy-response\`, \`GET /api/stream\`, \`GET /cache\`, \`GET /cache-components\`, and \`GET /fetch-cache\`. The default cache adapter is process-memory and workspace-scoped: data and fetch entries survive generation edits and worker restarts within one warm host. Cache Component keys include the immutable generation, matching Next's build-ID safety rule. This is not cross-instance durable storage. Captured inline action arguments are deliberately not claimed yet.`,
+Try both Server Action controls on \`GET /\`, including the form with JavaScript disabled, then \`GET /control-flow?mode=missing\`, \`GET /control-flow?mode=redirect\`, \`GET /lessons/rsc?mode=practice\`, \`GET /api/lessons/rsc?mode=practice\`, \`POST /api/lessons/rsc\` with a JSON body, \`GET /proxy-rewrite\`, \`GET /proxy-redirect\`, \`GET /proxy-response\`, \`GET /api/stream\`, \`GET /cache\`, \`GET /cache-components\`, and \`GET /fetch-cache\`. The default cache adapter is process-memory and workspace-scoped: data and fetch entries survive generation edits and worker restarts within one warm host. Cache Component keys include the immutable generation, matching Next's build-ID safety rule. This is not cross-instance durable storage.`,
       },
       {
         path: "package.json",
@@ -2372,7 +2372,8 @@ export default function RootLayout({
         language: "tsx",
         description:
           "An async Server Component importing a Client Component boundary.",
-        content: `import { current } from "./actions";
+        content: `import ActionForm from "./action-form";
+import { current } from "./actions";
 import Counter from "./counter";
 
 async function getGreeting() {
@@ -2385,6 +2386,15 @@ async function getGreeting() {
 export default async function Page() {
   const greeting = await getGreeting();
   const serverTotal = await current();
+  const lessonId = "rsc";
+
+  async function saveLesson(prefix: string, previous: string, formData: FormData) {
+    "use server";
+    const title = String(formData.get("title") ?? "").trim();
+    return title
+      ? \`\${prefix} \${lessonId}/\${title}; previous=\${previous}\`
+      : "Enter a lesson title.";
+  }
 
   return (
     <main style={{ borderRadius: 24, background: "white", padding: 32 }}>
@@ -2400,6 +2410,7 @@ export default async function Page() {
         Server Action total: {serverTotal}
       </p>
       <Counter initial={0} />
+      <ActionForm action={saveLesson.bind(null, "saved")} />
       <p style={{ marginTop: 22 }}>
         Try these in the request path field: <code>/lessons/rsc?mode=practice</code>, <code>/api/lessons/rsc?mode=practice</code>, <code>/proxy-rewrite</code>, <code>/proxy-redirect</code>, <code>/proxy-response</code>, <code>/api/stream</code>, <code>/cache</code>, <code>/cache-components</code>, and <code>/fetch-cache</code>
       </p>
@@ -2455,6 +2466,37 @@ export default function Counter({ initial }: { initial: number }) {
 `,
       },
       {
+        path: "app/action-form.tsx",
+        language: "tsx",
+        description:
+          "A progressively enhanced Server Action form using useActionState and useFormStatus.",
+        content: `"use client";
+
+import { useActionState } from "react";
+import { useFormStatus } from "react-dom";
+
+function SubmitButton() {
+  const { pending } = useFormStatus();
+  return <button disabled={pending}>{pending ? "Saving…" : "Save lesson"}</button>;
+}
+
+export default function ActionForm({ action }: {
+  action(previous: string, formData: FormData): Promise<string>;
+}) {
+  const [state, formAction] = useActionState(action, "idle");
+  return (
+    <form action={formAction} style={{ marginTop: 22 }}>
+      <label>
+        Lesson title <input name="title" required />
+      </label>{" "}
+      <SubmitButton />
+      <p data-action-state>Form state: {state}</p>
+    </form>
+  );
+}
+`,
+      },
+      {
         path: "app/counter.module.css",
         language: "css",
         description:
@@ -2495,6 +2537,23 @@ export async function increment(delta: number) {
 
 export async function current() {
   return total;
+}
+`,
+      },
+      {
+        path: "app/control-flow/page.tsx",
+        language: "tsx",
+        description:
+          "Server Component control flow using Next redirect and notFound errors.",
+        content: `import { notFound, redirect } from "next/navigation";
+
+export default async function ControlFlowPage({ searchParams }: {
+  searchParams: Promise<{ mode?: string }>;
+}) {
+  const { mode } = await searchParams;
+  if (mode === "missing") notFound();
+  if (mode === "redirect") redirect("/");
+  return <main><h1>Control flow</h1><p>Try mode=missing or mode=redirect.</p></main>;
 }
 `,
       },

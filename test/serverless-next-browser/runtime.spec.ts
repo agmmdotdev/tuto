@@ -86,8 +86,15 @@ export async function current() { return total; }`,
     content: `import { cookies } from "next/headers";
 import { current } from "./actions";
 import ActionButton from "./action-button";
+import ActionForm from "./action-form";
 export default async function Page() {
-  return <main><p data-server-total>server-total:{await current()}</p><p data-action-cookie>action-cookie:{(await cookies()).get("last-action")?.value ?? "none"}</p><ActionButton /></main>;
+  const lessonId = "rsc";
+  async function save(previous: string, formData: FormData) {
+    "use server";
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    return lessonId + "|" + previous + "|" + formData.get("title");
+  }
+  return <main><p data-server-total>server-total:{await current()}</p><p data-action-cookie>action-cookie:{(await cookies()).get("last-action")?.value ?? "none"}</p><ActionButton /><ActionForm action={save} /></main>;
 }`,
     language: "tsx",
     path: "app/page.tsx",
@@ -102,6 +109,23 @@ export default function ActionButton() {
 }`,
     language: "tsx",
     path: "app/action-button.tsx",
+  },
+  {
+    content: `"use client";
+import { useActionState } from "react";
+import { useFormStatus } from "react-dom";
+function Submit() {
+  const { pending } = useFormStatus();
+  return <button data-form-submit disabled={pending}>{pending ? "Saving" : "Save"}</button>;
+}
+export default function ActionForm({ action }: {
+  action(previous: string, formData: FormData): Promise<string>;
+}) {
+  const [state, formAction] = useActionState(action, "idle");
+  return <form action={formAction}><input data-form-title name="title" /><Submit /><p data-form-state>{state}</p></form>;
+}`,
+    language: "tsx",
+    path: "app/action-form.tsx",
   },
 ];
 
@@ -203,4 +227,10 @@ test("dispatches a Server Action and applies its refreshed Flight tree", async (
   await expect(page.locator('[data-action="increment"]')).toHaveText(
     "action-result:8|passed|continued|4",
   );
+
+  await page.locator("[data-form-title]").fill("lesson");
+  await page.locator("[data-form-submit]").click();
+  await expect(page.locator("[data-form-submit]")).toHaveText("Saving");
+  await expect(page.locator("[data-form-state]")).toHaveText("rsc|idle|lesson");
+  await expect(page.locator("[data-form-submit]")).toHaveText("Save");
 });
