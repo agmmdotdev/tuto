@@ -130,7 +130,34 @@ class SegmentErrorBoundary extends React.Component {
   }
 }
 
-const runtimeModule = Object.freeze({ ErrorFallback, Link, SegmentErrorBoundary });
+function isNotFoundError(error) {
+  return error &&
+    typeof error === "object" &&
+    typeof error.digest === "string" &&
+    error.digest.startsWith("NEXT_HTTP_ERROR_FALLBACK;404");
+}
+
+class SegmentNotFoundBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    if (isNotFoundError(this.state.error)) return this.props.fallback;
+    throw this.state.error;
+  }
+}
+
+const runtimeModule = Object.freeze({
+  ErrorFallback,
+  Link,
+  SegmentErrorBoundary,
+  SegmentNotFoundBoundary,
+});
 const linkModule = Object.freeze({ __esModule: true, default: Link });
 
 globalThis.__TUTO_NEXT_CLIENT_MODULES__["tuto-next-runtime"] = runtimeModule;
