@@ -23,6 +23,7 @@ type WorkerReply = {
   routePattern?: string | null;
   status?: number;
   statusText?: string;
+  stylePaths?: string[];
   type?: undefined;
   url?: string;
 };
@@ -56,6 +57,7 @@ export type NextFlightWorkerResult = {
   headers: Array<[string, string]>;
   routePattern: string | null;
   status: number;
+  stylePaths: string[];
 };
 
 export type NextRouteHandlerWorkerResult = {
@@ -214,6 +216,7 @@ export class NextRscWorkerPool {
       headers: reply.headers ?? [],
       routePattern: reply.routePattern ?? null,
       status: reply.status ?? 200,
+      stylePaths: reply.stylePaths ?? [],
     };
   }
 

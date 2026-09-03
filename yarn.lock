@@ -8245,6 +8245,7 @@ __metadata:
     eslint-config-next: "npm:16.2.0"
     express: "npm:^5.2.1"
     hono: "npm:^4.12.8"
+    lightningcss: "npm:1.32.0"
     lucide-react: "npm:^0.577.0"
     monaco-editor: "npm:^0.55.1"
     motion: "npm:^12.38.0"

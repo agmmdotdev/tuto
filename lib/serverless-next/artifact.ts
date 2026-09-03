@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { WorkspaceFile } from "@/lib/ide/types";
 
-export const NEXT_REQUEST_ARTIFACT_VERSION = 5 as const;
+export const NEXT_REQUEST_ARTIFACT_VERSION = 6 as const;
 
 export type NextCompiledModule = {
   canonicalPath: string;
@@ -20,6 +20,22 @@ export type NextClientReference = {
   chunks: string[];
   id: string;
   name: string;
+};
+
+export type NextCompiledStyle = {
+  css: string;
+  exports: Record<string, string>;
+  hash: string;
+  kind: "global" | "module";
+  path: string;
+};
+
+export type NextStaticAsset = {
+  bodyBase64: string;
+  contentType: string;
+  etag: string;
+  hash: string;
+  path: string;
 };
 
 export type NextServerActionReference = {
@@ -90,6 +106,8 @@ export type NextRequestArtifact = {
   revision: string;
   router: NextRouteManifest;
   serverModules: Record<string, NextCompiledModule>;
+  staticAssets: Record<string, NextStaticAsset>;
+  styles: Record<string, NextCompiledStyle>;
   version: typeof NEXT_REQUEST_ARTIFACT_VERSION;
   workspaceKey: string;
 };
@@ -102,7 +120,11 @@ export type NextArtifactDiff = {
   changedServerModules: string[];
   removedClientModules: string[];
   removedServerModules: string[];
+  removedStaticAssets: string[];
+  removedStyles: string[];
   routeManifestChanged: boolean;
+  staticAssetsChanged: string[];
+  stylesChanged: string[];
 };
 
 const artifactCacheKey = Symbol.for("tuto.serverless-next.artifacts.v1");
@@ -185,8 +207,12 @@ export function diffNextRequestArtifacts(
     changedServerModules: changed(before.serverModules, after.serverModules),
     removedClientModules: removed(before.clientModules, after.clientModules),
     removedServerModules: removed(before.serverModules, after.serverModules),
+    removedStaticAssets: removed(before.staticAssets, after.staticAssets),
+    removedStyles: removed(before.styles, after.styles),
     routeManifestChanged:
       JSON.stringify(before.router) !== JSON.stringify(after.router),
+    staticAssetsChanged: changed(before.staticAssets, after.staticAssets),
+    stylesChanged: changed(before.styles, after.styles),
   };
 }
 

@@ -2237,8 +2237,10 @@ This checkpoint runs real Next compiler and React Server Components machinery wi
 - Reusable bounded workers render Flight and SSR HTML
 - An immutable generation is reused when the workspace is unchanged
 - A host-owned adapter stores Next data-cache entries outside student modules
+- Next's metadata resolver renders static and dynamic App Router metadata
+- Imported global CSS, CSS Modules, and UTF-8 \`public/\` files live in the artifact
 
-Current checkpoint: nested layouts and static/dynamic/catch-all routes, async Server Components, Client Components, Flight, SSR, hydration, module-level Server Actions, proxy-aware action POSTs and refreshes, App Router Route Handlers, Next 16 \`proxy.ts\` (plus legacy \`middleware.ts\`), matcher rules, request/response headers, cookies, rewrites, redirects, direct responses, \`waitUntil\`, Web \`Request\`/\`Response\`, \`NextRequest\`/\`NextResponse\`, streaming responses, React request memoization, \`unstable_cache\`, Cache Components with \`"use cache"\`/\`cacheLife\`/\`cacheTag\`, patched \`fetch\`, tag invalidation, path invalidation, and stale-while-revalidate.
+Current checkpoint: nested layouts and static/dynamic/catch-all routes, async Server Components, Client Components, Flight, SSR, hydration, metadata/\`generateMetadata\`, imported global CSS, CSS Modules, UTF-8 public assets, module-level Server Actions, proxy-aware action POSTs and refreshes, App Router Route Handlers, Next 16 \`proxy.ts\` (plus legacy \`middleware.ts\`), matcher rules, request/response headers, cookies, rewrites, redirects, direct responses, \`waitUntil\`, Web \`Request\`/\`Response\`, \`NextRequest\`/\`NextResponse\`, streaming responses, React request memoization, \`unstable_cache\`, Cache Components with \`"use cache"\`/\`cacheLife\`/\`cacheTag\`, patched \`fetch\`, tag invalidation, path invalidation, and stale-while-revalidate.
 
 Try the Server Action button on \`GET /\`, then \`GET /lessons/rsc?mode=practice\`, \`GET /api/lessons/rsc?mode=practice\`, \`POST /api/lessons/rsc\` with a JSON body, \`GET /proxy-rewrite\`, \`GET /proxy-redirect\`, \`GET /proxy-response\`, \`GET /api/stream\`, \`GET /cache\`, \`GET /cache-components\`, and \`GET /fetch-cache\`. The default cache adapter is process-memory and workspace-scoped: data and fetch entries survive generation edits and worker restarts within one warm host. Cache Component keys include the immutable generation, matching Next's build-ID safety rule. This is not cross-instance durable storage. Captured inline action arguments are deliberately not claimed yet.`,
       },
@@ -2339,7 +2341,14 @@ export function proxy(request: NextRequest, event: NextFetchEvent) {
         path: "app/layout.tsx",
         language: "tsx",
         description: "Root Server Component layout compiled with Next SWC.",
-        content: `import type { ReactNode } from "react";
+        content: `import type { Metadata } from "next";
+import type { ReactNode } from "react";
+import "./globals.css";
+
+export const metadata: Metadata = {
+  description: "Learn genuine Next App Router behavior inside Tuto.",
+  title: { default: "Tuto Next Lab", template: "%s | Tuto Next Lab" },
+};
 
 export default function RootLayout({
   children,
@@ -2348,7 +2357,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body style={{ margin: 0, fontFamily: "system-ui", background: "#f4eee7" }}>
+      <body>
         <div style={{ margin: "0 auto", maxWidth: 760, padding: 32 }}>
           {children}
         </div>
@@ -2379,6 +2388,7 @@ export default async function Page() {
 
   return (
     <main style={{ borderRadius: 24, background: "white", padding: 32 }}>
+      <img src="/tuto-mark.svg" alt="Tuto" width="48" height="48" />
       <span style={{ color: "#b34f24", fontWeight: 700 }}>RSC checkpoint</span>
       <h1 style={{ fontSize: 42 }}>{greeting.text}</h1>
       <p>
@@ -2399,6 +2409,17 @@ export default async function Page() {
 `,
       },
       {
+        path: "public/tuto-mark.svg",
+        language: "html",
+        description:
+          "A UTF-8 public asset served directly from the immutable generation.",
+        content: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <rect width="48" height="48" rx="14" fill="#c7622f"/>
+  <path d="M13 15h22v6h-8v14h-6V21h-8z" fill="white"/>
+</svg>
+`,
+      },
+      {
         path: "app/counter.tsx",
         language: "tsx",
         description:
@@ -2407,6 +2428,7 @@ export default async function Page() {
 
 import { useState } from "react";
 import { increment } from "./actions";
+import styles from "./counter.module.css";
 
 export default function Counter({ initial }: { initial: number }) {
   const [count, setCount] = useState(initial);
@@ -2414,21 +2436,37 @@ export default function Counter({ initial }: { initial: number }) {
   return (
     <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
       <button
+        className={styles.button}
         data-client="counter"
         onClick={() => setCount((value) => value + 1)}
-        style={{ marginTop: 18, border: 0, borderRadius: 999, padding: "12px 18px" }}
       >
         Client count: {count}
       </button>
       <button
+        className={styles.button}
         data-action="increment"
         onClick={async () => setActionResult(await increment(1))}
-        style={{ marginTop: 18, border: 0, borderRadius: 999, padding: "12px 18px" }}
       >
         Server Action result: {actionResult ?? "idle"}
       </button>
     </div>
   );
+}
+`,
+      },
+      {
+        path: "app/counter.module.css",
+        language: "css",
+        description:
+          "A route-scoped CSS Module imported through a hydrated Client Component.",
+        content: `.button {
+  margin-top: 18px;
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 18px;
+  color: white;
+  background: var(--accent);
+  cursor: pointer;
 }
 `,
       },
@@ -2481,12 +2519,17 @@ export default function LessonLayout({ children }: { children: ReactNode }) {
         language: "tsx",
         description:
           "A dynamic App Router page using promised params and searchParams.",
-        content: `import { headers } from "next/headers";
+        content: `import type { Metadata } from "next";
+import { headers } from "next/headers";
 
 type LessonPageProps = {
   params: Promise<{ lessonId: string }>;
   searchParams: Promise<{ mode?: string }>;
 };
+
+export async function generateMetadata({ params }: LessonPageProps): Promise<Metadata> {
+  return { title: \`Lesson \${(await params).lessonId}\` };
+}
 
 export default async function LessonPage({ params, searchParams }: LessonPageProps) {
   const [{ lessonId }, { mode }] = await Promise.all([params, searchParams]);
@@ -2790,7 +2833,7 @@ export default async function FetchCachePage() {
         path: "app/globals.css",
         language: "css",
         description:
-          "Future CSS checkpoint; the current RSC slice uses inline styles and does not load this file.",
+          "Global CSS imported by the root layout and embedded in matched-route HTML.",
         content: `:root {
   color-scheme: light;
   --bg: #f3e6d5;

@@ -49,6 +49,10 @@ and rerun the compatibility suite.
 | `cacheLife` and `cacheTag`               | Built-in/custom lifetimes and explicit tags are collected inside Next's cache work-unit context         |
 | Cached Client boundaries                 | A cached Server Component can contain a Client Component and round-trip through Flight cache streams    |
 | Patched `fetch`                          | Explicit `next.revalidate`/`next.tags` requests use Next's patched fetch and the host data-cache bridge |
+| Static and dynamic metadata              | Next's own metadata components resolve `metadata`, `generateMetadata`, parent templates, and URL fields |
+| Imported global CSS                      | Lightning CSS transforms imported styles and only the matched route's reachable CSS is embedded          |
+| CSS Modules                              | Deterministic scoped names work in Server and Client Components and remain present through hydration      |
+| UTF-8 `public/` assets                   | Text-editable assets are artifact bytes with content types, ETags, conditional GET, and HEAD semantics    |
 | Tag invalidation                         | `updateTag` expires immediately; `revalidateTag(..., "max")` serves stale once and refreshes            |
 | Path invalidation                        | `revalidatePath` expires entries through Next-generated implicit path tags                              |
 | Cache generation reuse                   | Entries survive source generations for one workspace while identical keys in other workspaces isolate   |
@@ -98,6 +102,31 @@ response so untrusted student code cannot write cookies on Tuto's own origin.
 If proxy request overrides remove `next-action`, Tuto cancels action dispatch
 instead of executing the action through its out-of-band transport metadata.
 
+Metadata follows a deliberately different boundary from CSS. Tuto constructs a
+loader tree for the matched immutable route and calls Next's own
+`createMetadataComponents`, so static `metadata`, dynamic `generateMetadata`,
+parent resolution, title templates, viewport defaults, Open Graph, Twitter,
+alternates, robots, icons, and the rest of Next's tag generator stay governed by
+the pinned Next version. As in Next itself, a layout title template applies to
+child route segments, not a page in the same segment.
+
+CSS is bundler functionality rather than an exposed Next compiler API. Tuto
+therefore uses Lightning CSS for syntax lowering and deterministic CSS Module
+names. CSS imports are retained as dependencies in the immutable artifact;
+request dispatch embeds only styles reachable from the selected page, layouts,
+and their Server/Client Component closure. The browser bundle imports CSS
+Modules as the same class-name map used by server rendering, so hydration sees
+identical class attributes without running a development server.
+
+Files under `public/` are stored as bytes inside each immutable generation and
+are dispatched after `proxy.ts` continuation/rewrite but before App Router page
+or Route Handler matching. Stable public URLs use `max-age=0, must-revalidate`
+because a later generation can replace their content, while strong ETags avoid
+resending unchanged bytes. The current editor model stores strings, so this
+checkpoint supports UTF-8/text-editable assets (including SVG, JSON, manifests,
+and robots files). Binary images, fonts, and uploads require an explicit binary
+workspace-file representation rather than accidental string coercion.
+
 This interface is the correct extension point for R2, but a production R2
 implementation is not included yet. Cache values can live in R2; tag versions
 and concurrent invalidation need a coordinated metadata strategy (for example
@@ -126,7 +155,8 @@ the expensive event, not every request or ordinary Server Component edit.
 - Full Next segment semantics: parallel/intercepted routes and complete loading, error, and thrown `notFound()` behavior
 - Captured inline Server Action arguments, progressive-enhancement form posts, `useActionState`, redirects, and action transitions
 - External proxy rewrites and streaming proxy IPC
-- CSS, static assets, metadata, images, fonts, and arbitrary `next/*` imports
+- Next's webpack/Turbopack/PostCSS plugin pipeline, Sass, Tailwind directives, and CSS `url()` asset graph rewriting
+- Binary public uploads, `next/image` optimization, font optimization, and metadata file conventions such as generated OG images
 - Durable object storage, signed artifact capabilities, and cross-instance reuse
 - A production isolation boundary for hostile student code
 
@@ -148,7 +178,8 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next vertical slice should add framework assets: imported/global CSS,
-metadata, and static files. A durable cache adapter should follow once Tuto
-chooses the cross-instance metadata coordinator; that storage decision should
-not be hidden inside the student runtime.
+The next vertical slice should add progressive Server Action forms and captured
+inline arguments, followed by more complete error/not-found/loading semantics.
+A durable cache adapter should follow once Tuto chooses the cross-instance
+metadata coordinator; that storage decision should not be hidden inside the
+student runtime.

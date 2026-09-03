@@ -233,7 +233,7 @@ export async function POST(request: Request) {
           {
             id: crypto.randomUUID(),
             level: "info",
-            message: `Router: ${artifact.router.routes.length} page route(s), ${artifact.router.handlers.length} Route Handler(s), ${Object.values(artifact.actionManifest).filter((reference) => reference.kind === "action").length} Server Action reference(s), ${Object.values(artifact.actionManifest).filter((reference) => reference.kind === "cache").length} Cache Component reference(s). Matched ${response.headers.get("x-tuto-next-route-pattern") ?? "404"}.`,
+            message: `Router: ${artifact.router.routes.length} page route(s), ${artifact.router.handlers.length} Route Handler(s), ${Object.values(artifact.actionManifest).filter((reference) => reference.kind === "action").length} Server Action reference(s), ${Object.values(artifact.actionManifest).filter((reference) => reference.kind === "cache").length} Cache Component reference(s), ${Object.keys(artifact.styles).length} stylesheet(s), ${Object.keys(artifact.staticAssets).length} public asset(s). Matched ${response.headers.get("x-tuto-next-route-pattern") ?? "404"}.`,
             timestamp: new Date().toISOString(),
           },
           {

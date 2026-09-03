@@ -67,6 +67,96 @@ export default function Counter({ initial }: { initial: number }) {
   ];
 }
 
+function frameworkAssetWorkspace(): WorkspaceFile[] {
+  return [
+    {
+      content: `import { NextResponse, type NextRequest } from "next/server";
+export const config = { matcher: ["/mark-alias"] };
+export function proxy(request: NextRequest) {
+  const response = NextResponse.rewrite(new URL("/mark.svg", request.url));
+  response.headers.set("x-asset-proxy", "rewritten");
+  return response;
+}`,
+      language: "ts",
+      path: "proxy.ts",
+    },
+    {
+      content: `import "./global.css";
+export const metadata = {
+  description: "Request-compiled lessons",
+  title: { default: "Tuto", template: "%s | Tuto" },
+};
+export default function Layout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}`,
+      language: "tsx",
+      path: "app/layout.tsx",
+    },
+    {
+      content: `import "./page.css";
+import LessonCard from "./lesson-card";
+export async function generateMetadata({ searchParams }: {
+  searchParams: Promise<{ lesson?: string }>;
+}) {
+  const lesson = (await searchParams).lesson ?? "RSC";
+  return { openGraph: { title: lesson }, title: "Lesson " + lesson };
+}
+export default function Page() {
+  return <main><LessonCard /></main>;
+}`,
+      language: "tsx",
+      path: "app/page.tsx",
+    },
+    {
+      content: `"use client";
+import styles from "./lesson-card.module.css";
+export default function LessonCard() {
+  return <button className={styles.card}>interactive lesson</button>;
+}`,
+      language: "tsx",
+      path: "app/lesson-card.tsx",
+    },
+    {
+      content: "body { background: rgb(1, 2, 3); }",
+      language: "css",
+      path: "app/global.css",
+    },
+    {
+      content: "main { padding: 17px; }",
+      language: "css",
+      path: "app/page.css",
+    },
+    {
+      content: ".card { color: rebeccapurple; }",
+      language: "css",
+      path: "app/lesson-card.module.css",
+    },
+    {
+      content: `import "./unused.css";
+export const metadata = { title: "Other" };
+export default function Other() { return <main>other route</main>; }`,
+      language: "tsx",
+      path: "app/other/page.tsx",
+    },
+    {
+      content: "main { border: 99px solid red; }",
+      language: "css",
+      path: "app/other/unused.css",
+    },
+    {
+      content:
+        '<svg xmlns="http://www.w3.org/2000/svg"><title>Tuto mark</title></svg>',
+      language: "html",
+      path: "public/mark.svg",
+    },
+    {
+      content: "User-agent: *\nDisallow:",
+      language: "md",
+      path: "public/robots.txt",
+    },
+  ];
+}
+
 function routeWorkspace(): WorkspaceFile[] {
   return [
     {
@@ -681,6 +771,145 @@ describe("request-compiled Next RSC runtime", () => {
     expect(hydratable).toContain(artifact.generation);
   });
 
+  test("renders Next metadata and only the CSS reachable from the matched route", async () => {
+    const artifact = await compileNextRequestWorkspace(
+      frameworkAssetWorkspace(),
+      {
+        serverReferenceHashSalt: actionSalt,
+        workspaceKey: "framework-assets",
+      },
+    );
+
+    expect(Object.keys(artifact.styles)).toEqual([
+      "app/global.css",
+      "app/lesson-card.module.css",
+      "app/other/unused.css",
+      "app/page.css",
+    ]);
+    expect(artifact.styles["app/lesson-card.module.css"].exports.card).toMatch(
+      /^tuto_[A-Za-z0-9_-]+_card$/,
+    );
+
+    const response = await renderNextRequestArtifact(artifact, {
+      url: "/?lesson=Actions",
+    });
+    const html = await response.text();
+    expect(html).toContain("<title>Lesson Actions</title>");
+    expect(html).toContain(
+      '<meta name="description" content="Request-compiled lessons"',
+    );
+    expect(html).toContain('<meta property="og:title" content="Actions"');
+    expect(html).toContain('data-tuto-next-style="app/global.css"');
+    expect(html).toContain('data-tuto-next-style="app/page.css"');
+    expect(html).toContain(
+      'data-tuto-next-style="app/lesson-card.module.css"',
+    );
+    expect(html).not.toContain("app/other/unused.css");
+    expect(html).toContain(
+      `class="${artifact.styles["app/lesson-card.module.css"].exports.card}"`,
+    );
+    expect(artifact.clientBundle.code).toContain(
+      artifact.styles["app/lesson-card.module.css"].exports.card,
+    );
+
+    const nestedHtml = await (
+      await renderNextRequestArtifact(artifact, { url: "/other" })
+    ).text();
+    expect(nestedHtml).toContain("<title>Other | Tuto</title>");
+    expect(nestedHtml).toContain("app/other/unused.css");
+    expect(nestedHtml).not.toContain("app/page.css");
+  });
+
+  test("serves immutable-generation public assets with HTTP revalidation", async () => {
+    const artifact = await compileNextRequestWorkspace(
+      frameworkAssetWorkspace(),
+      {
+        serverReferenceHashSalt: actionSalt,
+        workspaceKey: "public-assets",
+      },
+    );
+
+    const first = await executeNextRequestArtifact(artifact, {
+      url: "/mark.svg",
+    });
+    expect(first.status).toBe(200);
+    expect(first.headers.get("content-type")).toBe(
+      "image/svg+xml; charset=utf-8",
+    );
+    expect(first.headers.get("cache-control")).toBe(
+      "public, max-age=0, must-revalidate",
+    );
+    expect(first.headers.get("x-tuto-next-runtime-kind")).toBe(
+      "public-asset",
+    );
+    expect(await first.text()).toContain("Tuto mark");
+
+    const rewritten = await executeNextRequestArtifact(artifact, {
+      url: "/mark-alias",
+    });
+    expect(rewritten.status).toBe(200);
+    expect(rewritten.headers.get("x-asset-proxy")).toBe("rewritten");
+    expect(rewritten.headers.get("x-tuto-next-proxy")).toBe(
+      "matched=1; outcome=rewrite",
+    );
+    expect(rewritten.headers.get("x-tuto-next-runtime-kind")).toBe(
+      "public-asset",
+    );
+    expect(await rewritten.text()).toContain("Tuto mark");
+
+    const etag = first.headers.get("etag");
+    expect(etag).toBeTruthy();
+    const unchanged = await executeNextRequestArtifact(artifact, {
+      headers: { "if-none-match": etag! },
+      url: "/mark.svg",
+    });
+    expect(unchanged.status).toBe(304);
+    expect(await unchanged.text()).toBe("");
+
+    const head = await executeNextRequestArtifact(artifact, {
+      method: "HEAD",
+      url: "/robots.txt",
+    });
+    expect(head.status).toBe(200);
+    expect(head.headers.get("content-type")).toBe(
+      "text/plain; charset=utf-8",
+    );
+    expect(Number(head.headers.get("content-length"))).toBeGreaterThan(0);
+    expect(await head.text()).toBe("");
+  });
+
+  test("publishes CSS and public-file edits without rebuilding student modules", async () => {
+    const files = frameworkAssetWorkspace();
+    const options = {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "framework-asset-edits",
+    };
+    const before = await compileNextRequestWorkspace(files, options);
+    const editedFiles = files.map((file) =>
+      file.path === "app/global.css"
+        ? { ...file, content: `${file.content}\nbody { color: navy; }` }
+        : file.path === "public/robots.txt"
+          ? { ...file, content: `${file.content}\nAllow: /lessons` }
+          : file,
+    );
+    const after = await compileNextRequestWorkspace(editedFiles, options);
+    const diff = diffNextRequestArtifacts(before, after);
+
+    expect(after.generation).not.toBe(before.generation);
+    expect(diff.changedServerModules).toEqual([]);
+    expect(diff.changedClientModules).toEqual([]);
+    expect(diff.clientBundleChanged).toBe(false);
+    expect(diff.routeManifestChanged).toBe(false);
+    expect(diff.stylesChanged).toEqual(["app/global.css"]);
+    expect(diff.staticAssetsChanged).toEqual(["/robots.txt"]);
+    expect(after.buildMetrics.serverTransformCacheHits).toBe(
+      after.buildMetrics.serverTransforms,
+    );
+    expect(after.buildMetrics.browserTransformCacheHits).toBe(
+      after.buildMetrics.browserTransforms,
+    );
+  });
+
   test("publishes a new generation while preserving unchanged client artifacts", async () => {
     const before = await compileNextRequestWorkspace(workspace("server-v1"), {
       serverReferenceHashSalt: actionSalt,
@@ -701,7 +930,11 @@ describe("request-compiled Next RSC runtime", () => {
       clientManifestChanged: false,
       removedClientModules: [],
       removedServerModules: [],
+      removedStaticAssets: [],
+      removedStyles: [],
       routeManifestChanged: false,
+      staticAssetsChanged: [],
+      stylesChanged: [],
     });
     expect(after.buildMetrics.browserTransformCacheHits).toBe(1);
     expect(after.buildMetrics.serverTransformCacheHits).toBe(2);
