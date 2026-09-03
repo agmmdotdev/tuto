@@ -116,7 +116,12 @@ const serverlessNextjsRuntimeRequestTraceGlobs = [
   "./lib/serverless-next/**/*.generated.json",
   "./node_modules/@esbuild/**/*",
   "./lib/serverless-nextjs-runtime/**/*.cjs",
-  ...collectRuntimePackageGlobs(["next", "react", "react-dom"]),
+  ...collectRuntimePackageGlobs([
+    "lightningcss",
+    "next",
+    "react",
+    "react-dom",
+  ]),
 ];
 
 const serverlessTypeTraceGlobs = collectRuntimePackageGlobs([
@@ -135,7 +140,7 @@ const serverlessExpressTypeTraceGlobs = collectRuntimePackageGlobs([
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1", "::1"],
-  serverExternalPackages: ["esbuild"],
+  serverExternalPackages: ["esbuild", "lightningcss"],
   outputFileTracingIncludes: {
     "/api/serverless/compile": serverlessCompileTraceGlobs,
     "/api/serverless/expressjs/request": serverlessExpressRequestTraceGlobs,

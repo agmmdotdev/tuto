@@ -29,7 +29,24 @@ async function flightToHtml(
   artifact: NextRequestArtifact,
   result: NextFlightWorkerResult,
 ) {
-  return getNextSsrWorkerPool().render(artifact, result.flight);
+  const html = await getNextSsrWorkerPool().render(artifact, result.flight);
+  const styleElements = result.stylePaths
+    .map((stylePath) => {
+      const style = artifact.styles[stylePath];
+      if (!style) return "";
+      const safePath = stylePath
+        .replaceAll("&", "&amp;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+      return `<style data-tuto-next-style="${safePath}">${style.css.replaceAll("</style", "<\\/style")}</style>`;
+    })
+    .join("");
+  if (!styleElements) return html;
+  if (html.includes("</head>")) {
+    return html.replace("</head>", `${styleElements}</head>`);
+  }
+  return `${styleElements}${html}`;
 }
 
 function inlineScript(code: string) {
@@ -443,6 +460,50 @@ function requestBody(options: NextRouteHandlerRequest) {
   return undefined;
 }
 
+function staticAssetPath(pathname: string) {
+  try {
+    return decodeURIComponent(pathname);
+  } catch {
+    return pathname;
+  }
+}
+
+function etagMatches(value: string | null, etag: string) {
+  if (!value) return false;
+  return value.split(",").some((candidate) => {
+    const normalized = candidate.trim().replace(/^W\//, "");
+    return normalized === "*" || normalized === etag;
+  });
+}
+
+function serveNextStaticAsset(
+  artifact: NextRequestArtifact,
+  requestUrl: URL,
+  method: string,
+  requestHeaders: HeadersInit,
+) {
+  const asset = artifact.staticAssets[staticAssetPath(requestUrl.pathname)];
+  if (!asset || (method !== "GET" && method !== "HEAD")) return null;
+  const body = Buffer.from(asset.bodyBase64, "base64");
+  const headers = new Headers({
+    "accept-ranges": "bytes",
+    "cache-control": "public, max-age=0, must-revalidate",
+    "content-length": String(body.byteLength),
+    "content-type": asset.contentType,
+    etag: asset.etag,
+    "x-tuto-next-generation": artifact.generation,
+    "x-tuto-next-runtime-kind": "public-asset",
+  });
+  if (etagMatches(new Headers(requestHeaders).get("if-none-match"), asset.etag)) {
+    headers.delete("content-length");
+    return new Response(null, { headers, status: 304 });
+  }
+  return new Response(method === "HEAD" ? null : body, {
+    headers,
+    status: 200,
+  });
+}
+
 export async function invokeNextProxy(
   artifact: NextRequestArtifact,
   options: NextRouteHandlerRequest = {},
@@ -504,8 +565,11 @@ export async function executeNextRequestArtifact(
   ];
   const parsedUrl = new URL(url, "http://next.local");
   const matchedHandler = matchNextRouteHandler(artifact.router, parsedUrl);
-  let response: Response;
-  if (matchedHandler) {
+  let response = serveNextStaticAsset(artifact, parsedUrl, method, headers);
+  if (response) {
+    // Public files are immutable bytes inside this compiled generation. The
+    // URL remains revalidated because a later generation may change the file.
+  } else if (matchedHandler) {
     response = await invokeNextRouteHandler(artifact, {
       body: options.body,
       headers,

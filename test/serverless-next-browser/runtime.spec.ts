@@ -9,7 +9,9 @@ import {
 
 const files: WorkspaceFile[] = [
   {
-    content: `export default function Layout({ children }: { children: React.ReactNode }) {
+    content: `import "./global.css";
+export const metadata = { title: "Next browser checkpoint" };
+export default function Layout({ children }: { children: React.ReactNode }) {
   return <html><body><h1>Next request runtime</h1>{children}</body></html>;
 }`,
     language: "tsx",
@@ -24,12 +26,23 @@ export default function Page() { return <main><p>server-browser-checkpoint</p><C
   {
     content: `"use client";
 import { useState } from 'react';
+import styles from "./counter.module.css";
 export default function Counter() {
   const [count, setCount] = useState(0);
-  return <button data-client="counter" onClick={() => setCount((value) => value + 1)}>count:{count}</button>;
+  return <button className={styles.counter} data-client="counter" onClick={() => setCount((value) => value + 1)}>count:{count}</button>;
 }`,
     language: "tsx",
     path: "app/counter.tsx",
+  },
+  {
+    content: "body { background: rgb(240, 241, 242); }",
+    language: "css",
+    path: "app/global.css",
+  },
+  {
+    content: ".counter { color: rgb(102, 51, 153); }",
+    language: "css",
+    path: "app/counter.module.css",
   },
 ];
 
@@ -105,7 +118,12 @@ test("hydrates a Next SWC client boundary and preserves interaction", async ({
   await page.setContent(document, { waitUntil: "load" });
 
   await expect(page.locator("text=server-browser-checkpoint")).toBeVisible();
+  await expect(page).toHaveTitle("Next browser checkpoint");
   await expect(page.locator('[data-client="counter"]')).toHaveText("count:0");
+  await expect(page.locator('[data-client="counter"]')).toHaveCSS(
+    "color",
+    "rgb(102, 51, 153)",
+  );
   await expect
     .poll(() =>
       page.evaluate(

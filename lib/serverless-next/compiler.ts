@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { build, type Plugin } from "esbuild";
+import { transform as transformCss } from "lightningcss";
 import type { WorkspaceFile } from "@/lib/ide/types";
 import clientKernelManifest from "./client-kernel-manifest.generated.json";
 import {
@@ -11,7 +12,9 @@ import {
   putNextRequestArtifact,
   type NextClientModule,
   type NextCompiledModule,
+  type NextCompiledStyle,
   type NextRequestArtifact,
+  type NextStaticAsset,
 } from "./artifact";
 import {
   NEXT_COMPILER_FINGERPRINT,
@@ -31,6 +34,17 @@ type SourceModule = {
   canonicalPath: string;
   content: string;
   path: string;
+};
+
+type SourceStyle = {
+  content: string;
+  path: string;
+};
+
+type WorkspaceResources = {
+  modules: Map<string, SourceModule>;
+  staticAssets: Record<string, NextStaticAsset>;
+  styles: Map<string, SourceStyle>;
 };
 
 function normalizeFilePath(filePath: string) {
@@ -61,41 +75,88 @@ function sanitizeActionSalt(actionSalt: string) {
   return normalized;
 }
 
-function sourceModules(files: WorkspaceFile[], workspaceKey: string) {
+function assetContentType(filePath: string) {
+  const extension = path.posix.extname(filePath).toLowerCase();
+  return (
+    {
+      ".css": "text/css; charset=utf-8",
+      ".csv": "text/csv; charset=utf-8",
+      ".html": "text/html; charset=utf-8",
+      ".ico": "image/x-icon",
+      ".js": "text/javascript; charset=utf-8",
+      ".json": "application/json; charset=utf-8",
+      ".map": "application/json; charset=utf-8",
+      ".md": "text/markdown; charset=utf-8",
+      ".mjs": "text/javascript; charset=utf-8",
+      ".svg": "image/svg+xml; charset=utf-8",
+      ".txt": "text/plain; charset=utf-8",
+      ".webmanifest": "application/manifest+json; charset=utf-8",
+      ".xml": "application/xml; charset=utf-8",
+    }[extension] ?? "application/octet-stream"
+  );
+}
+
+function workspaceResources(
+  files: WorkspaceFile[],
+  workspaceKey: string,
+): WorkspaceResources {
   if (files.length === 0)
     throw new Error("At least one workspace file is required.");
   if (files.length > maxFileCount)
     throw new Error("The Next workspace has too many files.");
   const modules = new Map<string, SourceModule>();
+  const styles = new Map<string, SourceStyle>();
+  const staticAssets: Record<string, NextStaticAsset> = {};
+  const seen = new Set<string>();
   let totalBytes = 0;
   for (const file of files) {
     const normalizedPath = normalizeFilePath(file.path);
-    if (
-      normalizedPath.endsWith(".d.ts") ||
-      !sourceExtensions.some((extension) => normalizedPath.endsWith(extension))
-    )
-      continue;
+    if (seen.has(normalizedPath))
+      throw new Error(`Duplicate workspace file: ${normalizedPath}`);
+    seen.add(normalizedPath);
     const bytes = Buffer.byteLength(file.content);
     if (bytes > maxFileBytes)
       throw new Error(`Workspace file is too large: ${normalizedPath}`);
     totalBytes += bytes;
     if (totalBytes > maxWorkspaceBytes)
       throw new Error("The Next workspace is too large.");
-    if (modules.has(normalizedPath))
-      throw new Error(`Duplicate workspace file: ${normalizedPath}`);
+    if (normalizedPath.startsWith("public/")) {
+      const publicPath = `/${normalizedPath.slice("public/".length)}`;
+      if (publicPath === "/")
+        throw new Error("A public asset must have a filename.");
+      const body = Buffer.from(file.content);
+      const hash = contentHash(file.content);
+      staticAssets[publicPath] = {
+        bodyBase64: body.toString("base64"),
+        contentType: assetContentType(normalizedPath),
+        etag: `\"${hash}\"`,
+        hash,
+        path: publicPath,
+      };
+      continue;
+    }
+    if (normalizedPath.endsWith(".css")) {
+      styles.set(normalizedPath, { content: file.content, path: normalizedPath });
+      continue;
+    }
+    if (
+      normalizedPath.endsWith(".d.ts") ||
+      !sourceExtensions.some((extension) => normalizedPath.endsWith(extension))
+    )
+      continue;
     modules.set(normalizedPath, {
       canonicalPath: canonicalNextWorkspacePath(workspaceKey, normalizedPath),
       content: file.content,
       path: normalizedPath,
     });
   }
-  return modules;
+  return { modules, staticAssets, styles };
 }
 
 function resolveWorkspaceImport(
   importer: string,
   specifier: string,
-  modules: Map<string, SourceModule>,
+  resources: Map<string, { path: string }>,
 ) {
   if (!specifier.startsWith(".")) return null;
   const base = path.posix.normalize(
@@ -107,8 +168,9 @@ function resolveWorkspaceImport(
     ...sourceExtensions.map((extension) =>
       path.posix.join(base, `index${extension}`),
     ),
+    `${base}.css`,
   ];
-  return candidates.find((candidate) => modules.has(candidate)) ?? null;
+  return candidates.find((candidate) => resources.has(candidate)) ?? null;
 }
 
 function importSpecifiers(source: string) {
@@ -126,16 +188,16 @@ function importSpecifiers(source: string) {
 function compiledDependencies(
   modulePath: string,
   code: string,
-  modules: Map<string, SourceModule>,
+  resources: Map<string, { path: string }>,
 ) {
   const dependencies = new Set<string>();
   const requirePattern = /require\(\s*["']([^"']+)["']\s*\)/g;
   let match: RegExpExecArray | null;
   while ((match = requirePattern.exec(code))) {
-    const resolved = resolveWorkspaceImport(modulePath, match[1], modules);
+    const resolved = resolveWorkspaceImport(modulePath, match[1], resources);
     if (resolved) dependencies.add(resolved);
   }
-  return [...dependencies].sort();
+  return [...dependencies];
 }
 
 function contentHash(code: string) {
@@ -146,9 +208,40 @@ function clientModuleId(modulePath: string) {
   return `next-client-${createHash("sha256").update(modulePath).digest("hex").slice(0, 20)}`;
 }
 
+function compileStyles(sourceStyles: Map<string, SourceStyle>) {
+  const styles: Record<string, NextCompiledStyle> = {};
+  for (const source of sourceStyles.values()) {
+    const isModule = source.path.endsWith(".module.css");
+    const transformed = transformCss({
+      code: Buffer.from(source.content),
+      filename: source.path,
+      minify: false,
+      ...(isModule
+        ? { cssModules: { pattern: "tuto_[hash]_[local]" } }
+        : {}),
+    });
+    const css = transformed.code.toString();
+    const exports = Object.fromEntries(
+      Object.entries(transformed.exports ?? {}).map(([name, value]) => [
+        name,
+        [value.name, ...value.composes.map((item) => item.name)].join(" "),
+      ]),
+    );
+    styles[source.path] = {
+      css,
+      exports,
+      hash: contentHash(`${css}\0${JSON.stringify(exports)}`),
+      kind: isModule ? "module" : "global",
+      path: source.path,
+    };
+  }
+  return styles;
+}
+
 function clientClosure(
   clientEntries: string[],
   modules: Map<string, SourceModule>,
+  resources: Map<string, { path: string }>,
 ) {
   const closure = new Set<string>();
   const queue = [...clientEntries];
@@ -167,11 +260,11 @@ function clientClosure(
     }
     if (isActionModule) continue;
     for (const specifier of importSpecifiers(source.content)) {
-      const resolved = resolveWorkspaceImport(modulePath, specifier, modules);
+      const resolved = resolveWorkspaceImport(modulePath, specifier, resources);
       if (!resolved && specifier.startsWith(".")) {
         throw new Error(`Unable to resolve ${specifier} from ${modulePath}.`);
       }
-      if (resolved) queue.push(resolved);
+      if (resolved && modules.has(resolved)) queue.push(resolved);
     }
   }
   return [...closure].sort();
@@ -180,6 +273,7 @@ function clientClosure(
 async function buildClientBundle(
   clientModules: Record<string, NextClientModule>,
   clientEntries: string[],
+  styles: Record<string, NextCompiledStyle>,
 ) {
   if (clientEntries.length === 0) {
     return { code: "", entryIds: [], hash: contentHash("") };
@@ -206,14 +300,16 @@ async function buildClientBundle(
             args.importer,
             args.path,
             new Map(
-              Object.values(clientModules).map((module) => [
-                module.path,
-                {
-                  canonicalPath: module.canonicalPath,
-                  content: "",
-                  path: module.path,
-                },
-              ]),
+              [
+                ...Object.values(clientModules).map((module) => [
+                  module.path,
+                  { path: module.path },
+                ] as const),
+                ...Object.values(styles).map((style) => [
+                  style.path,
+                  { path: style.path },
+                ] as const),
+              ],
             ),
           );
           if (!resolved)
@@ -264,6 +360,13 @@ async function buildClientBundle(
           };
         }
         const clientModule = clientModules[args.path];
+        const style = styles[args.path];
+        if (style) {
+          return {
+            contents: `module.exports = ${JSON.stringify(style.exports)};`,
+            loader: "js",
+          };
+        }
         if (!clientModule) {
           return { errors: [{ text: `Missing browser module ${args.path}.` }] };
         }
@@ -312,7 +415,19 @@ export async function compileNextRequestWorkspaceWithStatus(
   const startedAt = performance.now();
   const workspaceKey = sanitizeWorkspaceKey(options.workspaceKey);
   const actionSalt = sanitizeActionSalt(options.serverReferenceHashSalt);
-  const modules = sourceModules(files, workspaceKey);
+  const resources = workspaceResources(files, workspaceKey);
+  const { modules, staticAssets } = resources;
+  const styles = compileStyles(resources.styles);
+  const dependencyResources = new Map<string, { path: string }>([
+    ...[...modules].map(([modulePath]) => [
+      modulePath,
+      { path: modulePath },
+    ] as const),
+    ...Object.keys(styles).map((stylePath) => [
+      stylePath,
+      { path: stylePath },
+    ] as const),
+  ]);
   const router = buildNextRouteManifest(modules.keys());
   const revision = createNextWorkspaceRevision(
     files,
@@ -355,7 +470,7 @@ export async function compileNextRequestWorkspaceWithStatus(
       dependencies: compiledDependencies(
         source.path,
         transformed.code,
-        modules,
+        dependencyResources,
       ),
       hash: contentHash(transformed.code),
       path: source.path,
@@ -364,7 +479,11 @@ export async function compileNextRequestWorkspaceWithStatus(
 
   const clientModules: Record<string, NextClientModule> = {};
   let browserTransformCacheHits = 0;
-  for (const modulePath of clientClosure(clientEntries, modules)) {
+  for (const modulePath of clientClosure(
+    clientEntries,
+    modules,
+    dependencyResources,
+  )) {
     const source = modules.get(modulePath)!;
     const transformed = await transformNextModule({
       actionSalt,
@@ -379,7 +498,7 @@ export async function compileNextRequestWorkspaceWithStatus(
       dependencies: compiledDependencies(
         source.path,
         transformed.code,
-        modules,
+        dependencyResources,
       ),
       hash: contentHash(transformed.code),
       id: clientModuleId(source.path),
@@ -401,7 +520,11 @@ export async function compileNextRequestWorkspaceWithStatus(
       ];
     }),
   );
-  const clientBundle = await buildClientBundle(clientModules, clientEntries);
+  const clientBundle = await buildClientBundle(
+    clientModules,
+    clientEntries,
+    styles,
+  );
 
   const artifact: NextRequestArtifact = {
     actionManifest: Object.fromEntries(Object.entries(actionManifest).sort()),
@@ -421,6 +544,8 @@ export async function compileNextRequestWorkspaceWithStatus(
     revision,
     router,
     serverModules,
+    staticAssets: Object.fromEntries(Object.entries(staticAssets).sort()),
+    styles: Object.fromEntries(Object.entries(styles).sort()),
     version: NEXT_REQUEST_ARTIFACT_VERSION,
     workspaceKey,
   };
