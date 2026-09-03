@@ -2,7 +2,8 @@ import { expect, test } from "@playwright/test";
 import type { WorkspaceFile } from "../../lib/ide/types";
 import { compileNextRequestWorkspace } from "../../lib/serverless-next/compiler";
 import {
-  invokeNextServerAction,
+  executeNextRequestArtifact,
+  executeNextServerActionArtifact,
   renderHydratableNextRequestArtifact,
 } from "../../lib/serverless-next/runtime";
 
@@ -34,6 +35,19 @@ export default function Counter() {
 
 const actionFiles: WorkspaceFile[] = [
   {
+    content: `import { NextResponse, type NextRequest } from "next/server";
+export const config = { matcher: ["/"] };
+export function proxy(request: NextRequest) {
+  const headers = new Headers(request.headers);
+  if (request.headers.has("next-action")) headers.set("x-action-proxy", "passed");
+  const response = NextResponse.next({ request: { headers } });
+  response.cookies.set("proxy-action", "continued", { path: "/" });
+  return response;
+}`,
+    language: "ts",
+    path: "proxy.ts",
+  },
+  {
     content: `export default function Layout({ children }: { children: React.ReactNode }) {
   return <html><body>{children}</body></html>;
 }`,
@@ -42,17 +56,25 @@ const actionFiles: WorkspaceFile[] = [
   },
   {
     content: `"use server";
+import { cookies, headers } from "next/headers";
 let total = 0;
-export async function increment(delta: number) { total += delta; return total; }
+export async function increment(delta: number) {
+  const requestCookies = await cookies();
+  const previous = requestCookies.get("last-action")?.value ?? "none";
+  total += delta;
+  requestCookies.set("last-action", String(total), { path: "/" });
+  return [total, (await headers()).get("x-action-proxy"), requestCookies.get("proxy-action")?.value, previous].join("|");
+}
 export async function current() { return total; }`,
     language: "ts",
     path: "app/actions.ts",
   },
   {
-    content: `import { current } from "./actions";
+    content: `import { cookies } from "next/headers";
+import { current } from "./actions";
 import ActionButton from "./action-button";
 export default async function Page() {
-  return <main><p data-server-total>server-total:{await current()}</p><ActionButton /></main>;
+  return <main><p data-server-total>server-total:{await current()}</p><p data-action-cookie>action-cookie:{(await cookies()).get("last-action")?.value ?? "none"}</p><ActionButton /></main>;
 }`,
     language: "tsx",
     path: "app/page.tsx",
@@ -62,7 +84,7 @@ export default async function Page() {
 import { useState } from "react";
 import { increment } from "./actions";
 export default function ActionButton() {
-  const [result, setResult] = useState<number | null>(null);
+  const [result, setResult] = useState<string | null>(null);
   return <button data-action="increment" onClick={async () => setResult(await increment(4))}>action-result:{result ?? "idle"}</button>;
 }`,
     language: "tsx",
@@ -110,20 +132,36 @@ test("dispatches a Server Action and applies its refreshed Flight tree", async (
   const actionEndpoint = "http://next-action.local/action";
   await page.route(actionEndpoint, async (route) => {
     const payload = JSON.parse(route.request().postData() ?? "{}") as {
-      action: Parameters<typeof invokeNextServerAction>[1] & {
+      action: Parameters<typeof executeNextServerActionArtifact>[1] & {
         revision: string;
       };
     };
     expect(payload.action.revision).toBe(artifact.revision);
-    const response = await invokeNextServerAction(artifact, payload.action);
+    const response = await executeNextServerActionArtifact(
+      artifact,
+      payload.action,
+    );
+    const headers = new Headers(response.headers);
+    const setCookies = headers.getSetCookie();
+    headers.delete("set-cookie");
+    if (setCookies.length > 0) {
+      headers.set(
+        "x-tuto-next-virtual-set-cookie",
+        Buffer.from(JSON.stringify(setCookies)).toString("base64"),
+      );
+    }
     await route.fulfill({
       body: Buffer.from(await response.arrayBuffer()),
-      headers: Object.fromEntries(response.headers.entries()),
+      headers: Object.fromEntries(headers.entries()),
       status: response.status,
     });
   });
   const document = await (
-    await renderHydratableNextRequestArtifact(artifact, { actionEndpoint })
+    await executeNextRequestArtifact(artifact, {
+      actionEndpoint,
+      hydrate: true,
+      url: "/",
+    })
   ).text();
   await page.setContent(document, { waitUntil: "load" });
 
@@ -135,9 +173,16 @@ test("dispatches a Server Action and applies its refreshed Flight tree", async (
   );
   await page.locator('[data-action="increment"]').click();
   await expect(page.locator('[data-action="increment"]')).toHaveText(
-    "action-result:4",
+    "action-result:4|passed|continued|none",
   );
   await expect(page.locator("[data-server-total]")).toHaveText(
     "server-total:4",
+  );
+  await expect(page.locator("[data-action-cookie]")).toHaveText(
+    "action-cookie:4",
+  );
+  await page.locator('[data-action="increment"]').click();
+  await expect(page.locator('[data-action="increment"]')).toHaveText(
+    "action-result:8|passed|continued|4",
   );
 });

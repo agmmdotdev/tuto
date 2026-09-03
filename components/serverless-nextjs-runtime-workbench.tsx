@@ -70,14 +70,14 @@ export function ServerlessNextjsRuntimeWorkbench({
   return (
     <ServerlessExpressIdeWorkbench
       config={{
-        storageKey: "tuto-serverless-nextjs-runtime-workspace-v2",
+        storageKey: "tuto-serverless-nextjs-runtime-workspace-v3",
         defaultFilePath: "app/page.tsx",
         htmlPreviewSource: "tuto-serverless-nextjs-runtime-preview-log",
         title: "Request-compiled Next RSC Runtime",
         badge: "NEXT CORE",
         dependencyLabel: "Next SWC + React Flight",
         explorerCopy:
-          "This checkpoint compiles with Next SWC, renders Flight, dispatches Server Actions and Route Handlers, runs proxy.ts matchers/rewrites/redirects, and connects Next cache APIs to a host adapter. Try GET /proxy-rewrite or /proxy-response.",
+          "This checkpoint compiles with Next SWC, renders Flight, sends Server Actions through proxy.ts, dispatches Route Handlers, and connects Next cache APIs to a host adapter. Run the root action button or try GET /proxy-rewrite.",
         modeValue: "serverless",
         runtimeValue: "next-rsc",
         requestPathPlaceholder: "/lessons/rsc?mode=practice",
