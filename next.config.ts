@@ -7,7 +7,7 @@ const require = createRequire(import.meta.url);
 const projectRoot = process.cwd();
 const enableNextRequestRuntimeTrace =
   process.env.VERCEL !== "1" ||
-  process.env.TUTO_NEXT_REQUEST_RUNTIME_ENABLED === "1";
+  process.env.TUTO_NEXT_EXECUTION_MODE === "secure-exec";
 function toProjectGlob(absoluteDirectoryPath: string) {
   const relativePath = relative(projectRoot, absoluteDirectoryPath).replaceAll(
     "\\",
@@ -121,6 +121,8 @@ const serverlessNextjsRuntimeRequestTraceGlobs = [
     "next",
     "react",
     "react-dom",
+    "secure-exec",
+    "web-streams-polyfill",
   ]),
 ];
 
@@ -140,7 +142,14 @@ const serverlessExpressTypeTraceGlobs = collectRuntimePackageGlobs([
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1", "::1"],
-  serverExternalPackages: ["esbuild", "lightningcss"],
+  serverExternalPackages: [
+    "@secure-exec/core",
+    "@secure-exec/node",
+    "esbuild",
+    "isolated-vm",
+    "lightningcss",
+    "secure-exec",
+  ],
   outputFileTracingIncludes: {
     "/api/serverless/compile": serverlessCompileTraceGlobs,
     "/api/serverless/expressjs/request": serverlessExpressRequestTraceGlobs,

@@ -67,10 +67,57 @@ and rerun the compatibility suite.
 | Durable cache values                     | Hashed JSON envelopes round-trip through an AWS-signed S3 API compatible with Cloudflare R2                                   |
 | Cross-instance invalidation              | Monotonic coordinator sequences prevent late object writes from resurrecting invalidated values                               |
 | Cross-instance cache locks               | Coordinator leases serialize writers; fencing tokens reject computations that predate a newer invalidation                    |
-| Bounded execution                        | Reusable RSC and SSR child workers have a 256 MB V8 heap cap and a 15 second request timeout                                  |
+| Secure execution backend                 | SecureExec runs the real RSC/SSR workers in capability-limited V8 isolates without a student-owned process or server           |
+| Tenant isolation                         | An isolate is pinned to one workspace; bounded LRU pools evict idle workspaces instead of sharing mutable JS globals           |
+| Capability policy                        | Host environment, filesystem writes, child processes, and unlisted outbound origins are denied                                |
+| Bounded execution                        | Each isolate has a 256 MB limit, payload/handle/timer/output budgets, and a host-enforced request deadline                     |
 
 The generated browser kernel contains React, React DOM, and Next's compiled
 Flight browser client. Its content hash is part of every artifact identity.
+
+## Secure execution mode
+
+Local development continues to default to the faster child-process backend.
+The request API refuses that backend on Vercel because a Node child process is
+not a hostile-code boundary. Production-shaped execution is selected with:
+
+```dotenv
+TUTO_NEXT_EXECUTION_MODE=secure-exec
+TUTO_NEXT_SECURE_WORKERS=2
+TUTO_NEXT_REQUEST_TIMEOUT_MS=15000
+TUTO_NEXT_NETWORK_ALLOWLIST=https://api.example.com,https://cdn.example.com
+```
+
+`TUTO_NEXT_SECURE_WORKERS` is the maximum number of warm workspace isolates in
+each of the RSC and SSR pools (default 2, maximum 8). Workers are created lazily.
+One worker can retain multiple immutable generations of one workspace, but it
+rejects an artifact from any other workspace. When the pool is full, the least
+recently used idle workspace is terminated before a new one starts. If all
+slots are busy, allocation waits instead of exceeding the configured bound.
+This is a fixed warm capacity, not a permanent server or sandbox per student.
+
+The sandbox receives only `NODE_ENV` and Next's internal feature flags. Student
+module imports are allowlisted by the evaluator; filesystem writes and child
+processes are denied by SecureExec as a second boundary. Outbound `fetch` is
+denied unless every URL origin, including redirects, is listed in
+`TUTO_NEXT_NETWORK_ALLOWLIST`. The host validates response size and keeps the
+cache and AES-GCM bridges on unguessable internal endpoints. Cache operations
+must also carry the workspace currently active in that isolate.
+
+SecureExec 0.1.0 does not yet expose every Node/browser primitive Next 16 uses.
+The compatibility layer supplies Web streams, form-data/file behavior,
+`EventTarget`, Web Crypto bridging, and request-local memoization. Two narrow
+read-time patches adapt Next's hardened global-fetch assignment and its
+`performance.timeOrigin` cache clock. Both patches assert the exact pinned Next
+source shape so a Next upgrade fails closed rather than silently changing
+semantics.
+
+The production Next bundle keeps `secure-exec` and `isolated-vm` external so
+their ESM `import.meta.url` values retain filesystem meaning. The request
+route's output trace includes their transitive packages and Linux native ABI
+prebuilds. A local `VERCEL=1` production-server smoke reached the built API,
+selected SecureExec, and returned SSR HTML successfully; running the same trace
+inside Fluid Compute remains the required deployment canary.
 
 The cache boundary is host-owned. Student modules call the real `next/cache`
 functions in the RSC worker, while cache reads, writes, and tag mutations cross
@@ -244,11 +291,10 @@ checkpoint supports UTF-8/text-editable assets (including SVG, JSON, manifests,
 and robots files). Binary images, fonts, and uploads require an explicit binary
 workspace-file representation rather than accidental string coercion.
 
-The R2/S3 value implementation and coordinator protocol are included, but the
-repository does not yet contain a separately deployable Cloudflare Worker and
-Durable Object package. Until that service is deployed and the environment
-variables above are configured, the request API deliberately keeps using its
-bounded in-process adapter.
+The R2/S3 value implementation, coordinator protocol, and deployable
+Cloudflare Worker/Durable Object package are included. Until that service is
+deployed and the environment variables above are configured, the request API
+deliberately keeps using its bounded in-process adapter.
 
 ## Local checkpoint measurement
 
@@ -267,6 +313,23 @@ The shared minified browser kernel is 221,849 bytes before HTTP compression.
 This result supports the shared-runtime design: cold compiler initialization is
 the expensive event, not every request or ordinary Server Component edit.
 
+A separate SecureExec run on 2026-09-03 measured the same compile-plus-HTML
+shape with one RSC isolate and one SSR isolate. Unlike the child-process table,
+the RSS values include the isolates because they live inside the Vitest host
+process. They are end-of-phase deltas rather than sampled peaks.
+
+| Secure request      |     Wall | Host CPU | Host RSS delta | End RSS   |
+| ------------------- | -------: | -------: | -------------: | --------: |
+| Cold compile + HTML | 3675.9 ms | 3145.9 ms |     +134.7 MiB | 192.2 MiB |
+| Hot unchanged HTML  |   70.0 ms |  146.3 ms |      +15.0 MiB | 207.2 MiB |
+| Server edit + HTML  |   61.0 ms |  132.8 ms |      -16.3 MiB | 190.9 MiB |
+
+The secure cold path is about two seconds slower than the earlier child-worker
+checkpoint because it initializes two isolates and their compatibility layer.
+The important edit path remains request-based: it reuses the warm framework,
+compiler cache, manifests, and workspace isolates rather than rebuilding or
+restarting Next.js.
+
 ## Deliberately not supported yet
 
 - Parallel/intercepted routes, `global-error.tsx`, templates, and route slots
@@ -274,14 +337,17 @@ the expensive event, not every request or ordinary Server Component edit.
 - External proxy rewrites and streaming proxy IPC
 - Next's webpack/Turbopack/PostCSS plugin pipeline, Sass, Tailwind directives, and CSS `url()` asset graph rewriting
 - Binary public uploads, `next/image` optimization, font optimization, and metadata file conventions such as generated OG images
-- A packaged Cloudflare coordinator deployment and automatic R2 cache-object garbage collection
 - Signed artifact capabilities and cross-region coordinator failover
-- A production isolation boundary for hostile student code
+- A deployed Vercel Fluid Compute proof that validates SecureExec native loading, cold memory, concurrency, and termination behavior in Vercel's actual runtime
+- Independent security review and fuzzing of the SecureExec 0.1.0 compatibility/capability boundary
 
-The workers reduce startup cost and contain crashes, but a Node child process is
-not a security sandbox: student code can still reach ambient JavaScript globals.
-The workbench must remain local/explicitly gated until it runs behind Tuto's
-production isolation and capability boundary.
+The child-process backend only reduces startup cost and contains crashes; it is
+not a security sandbox. The Vercel request route therefore accepts only the
+SecureExec backend. The local hostile-code suite verifies tenant-global
+separation, environment and network denial, forbidden module imports, bounded
+LRU eviction, and termination of an infinite CPU loop. That is an engineering
+checkpoint, not a substitute for the Vercel deployment proof or a security
+audit.
 
 Once Server Actions are enabled, deployments must configure one stable
 `TUTO_NEXT_SERVER_REFERENCE_HASH_SALT` value so action IDs remain stable across
@@ -296,7 +362,8 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next production slice should package the coordinator as a Cloudflare
-Durable Object, add R2 lifecycle/garbage-collection policy, and load-test
-cross-region invalidation and lease contention. The runtime contract itself is
-now independent of that deployment choice.
+The next production slice is a Vercel canary: deploy one Fluid function with
+SecureExec enabled, exercise cold/warm/edit requests and concurrent workspaces,
+and record native-module loading, wall/CPU/RSS, timeout cleanup, and LRU
+behavior. After that, load-test the already-packaged cache coordinator across
+regions and fuzz the sandbox capability boundary.

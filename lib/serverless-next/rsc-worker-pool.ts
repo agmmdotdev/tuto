@@ -2,6 +2,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { delimiter, resolve } from "node:path";
 import type { NextRequestArtifact } from "./artifact";
+import { getNextExecutionMode } from "./execution-mode";
+import { compileNextProxyMatchers } from "./proxy-matchers";
+import { NextSecureExecWorkspacePool } from "./secure-exec-worker";
 import {
   getNextCacheAdapter,
   type NextCacheGetInput,
@@ -23,6 +26,7 @@ type WorkerReply = {
   ok: boolean;
   proxyMatched?: boolean;
   proxyOutcome?: "next" | "redirect" | "response" | "rewrite";
+  proxyConfig?: unknown;
   requestHeaders?: Array<[string, string]>;
   routePattern?: string | null;
   status?: number;
@@ -107,8 +111,11 @@ const workerTimeoutMs = 15_000;
 
 export class NextRscWorkerPool {
   private child: ChildProcess | undefined;
+  private readonly executionMode = getNextExecutionMode();
   private installed = new Set<string>();
   private pending = new Map<string, Pending>();
+  private proxyMatchers = new Map<string, unknown[] | null>();
+  private secureWorkers: NextSecureExecWorkspacePool | undefined;
 
   private async handleCacheRequest(
     child: ChildProcess,
@@ -192,6 +199,10 @@ export class NextRscWorkerPool {
   }
 
   private send(message: Record<string, unknown>) {
+    if (this.executionMode === "secure-exec") {
+      this.secureWorkers ??= new NextSecureExecWorkspacePool("rsc");
+      return this.secureWorkers.send(message) as Promise<WorkerReply>;
+    }
     const child = this.getChild();
     const id = randomUUID();
     return new Promise<WorkerReply>((resolveReply, rejectReply) => {
@@ -372,9 +383,22 @@ export class NextRscWorkerPool {
       await this.send({ artifact, type: "install" });
       this.installed.add(artifact.generation);
     }
+    let proxyMatchers: unknown[] | null | undefined;
+    if (this.executionMode === "secure-exec") {
+      proxyMatchers = this.proxyMatchers.get(artifact.generation);
+      if (proxyMatchers === undefined) {
+        const config = await this.send({
+          generation: artifact.generation,
+          type: "proxy-config",
+        });
+        proxyMatchers = compileNextProxyMatchers(config.proxyConfig);
+        this.proxyMatchers.set(artifact.generation, proxyMatchers);
+      }
+    }
     const reply = await this.send({
       ...input,
       generation: artifact.generation,
+      ...(proxyMatchers === undefined ? {} : { proxyMatchers }),
       type: "proxy",
     });
     if (
@@ -399,16 +423,20 @@ export class NextRscWorkerPool {
   }
 
   async close() {
+    const secureWorkers = this.secureWorkers;
+    this.secureWorkers = undefined;
+    await secureWorkers?.close();
     const child = this.child;
     this.child = undefined;
     this.installed.clear();
+    this.proxyMatchers.clear();
     if (!child) return;
     child.disconnect();
     child.kill();
   }
 }
 
-const poolKey = Symbol.for("tuto.serverless-next.rsc-worker-pool.v1");
+const poolKey = Symbol.for("tuto.serverless-next.rsc-worker-pool.v2");
 
 export function getNextRscWorkerPool() {
   const globals = globalThis as typeof globalThis & {
