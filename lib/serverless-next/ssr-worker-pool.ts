@@ -2,6 +2,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import type { NextRequestArtifact } from "./artifact";
+import { getNextExecutionMode } from "./execution-mode";
+import { NextSecureExecWorkspacePool } from "./secure-exec-worker";
 
 type WorkerReply = {
   error?: string;
@@ -26,8 +28,10 @@ const workerTimeoutMs = 15_000;
 
 export class NextSsrWorkerPool {
   private child: ChildProcess | undefined;
+  private readonly executionMode = getNextExecutionMode();
   private installed = new Set<string>();
   private pending = new Map<string, Pending>();
+  private secureWorkers: NextSecureExecWorkspacePool | undefined;
 
   private getChild() {
     if (this.child?.connected) return this.child;
@@ -64,6 +68,10 @@ export class NextSsrWorkerPool {
   }
 
   private send(message: Record<string, unknown>) {
+    if (this.executionMode === "secure-exec") {
+      this.secureWorkers ??= new NextSecureExecWorkspacePool("ssr");
+      return this.secureWorkers.send(message) as Promise<WorkerReply>;
+    }
     const child = this.getChild();
     const id = randomUUID();
     return new Promise<WorkerReply>((resolveReply, rejectReply) => {
@@ -112,6 +120,9 @@ export class NextSsrWorkerPool {
   }
 
   async close() {
+    const secureWorkers = this.secureWorkers;
+    this.secureWorkers = undefined;
+    await secureWorkers?.close();
     const child = this.child;
     this.child = undefined;
     this.installed.clear();
@@ -121,7 +132,7 @@ export class NextSsrWorkerPool {
   }
 }
 
-const poolKey = Symbol.for("tuto.serverless-next.ssr-worker-pool.v1");
+const poolKey = Symbol.for("tuto.serverless-next.ssr-worker-pool.v2");
 
 export function getNextSsrWorkerPool() {
   const globals = globalThis as typeof globalThis & {

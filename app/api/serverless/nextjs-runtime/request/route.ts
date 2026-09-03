@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import type { BuildDiagnostic, WorkspaceFile } from "@/lib/ide/types";
+import { assertNextProductionExecutionIsolated } from "@/lib/serverless-next/execution-mode";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -123,14 +124,7 @@ export function OPTIONS() {
 export async function POST(request: Request) {
   let isActionRequest = false;
   try {
-    if (
-      process.env.VERCEL === "1" &&
-      process.env.TUTO_NEXT_REQUEST_RUNTIME_ENABLED !== "1"
-    ) {
-      throw new Error(
-        "The request-compiled Next checkpoint is disabled in production until student execution is behind Tuto's isolation boundary.",
-      );
-    }
+    const executionMode = assertNextProductionExecutionIsolated();
     const { configureNextCacheAdapterFromEnvironment } =
       await import("../../../../../lib/serverless-next/durable-cache-adapter");
     configureNextCacheAdapterFromEnvironment();
@@ -315,6 +309,12 @@ export async function POST(request: Request) {
             id: crypto.randomUUID(),
             level: "info",
             message: `Router: ${artifact.router.routes.length} page route(s), ${artifact.router.handlers.length} Route Handler(s), ${Object.values(artifact.actionManifest).filter((reference) => reference.kind === "action").length} Server Action reference(s), ${Object.values(artifact.actionManifest).filter((reference) => reference.kind === "cache").length} Cache Component reference(s), ${Object.keys(artifact.styles).length} stylesheet(s), ${Object.keys(artifact.staticAssets).length} public asset(s). Matched ${response.headers.get("x-tuto-next-route-pattern") ?? "404"}.`,
+            timestamp: new Date().toISOString(),
+          },
+          {
+            id: crypto.randomUUID(),
+            level: "info",
+            message: `Execution: ${executionMode === "secure-exec" ? "SecureExec V8 isolate" : "trusted local Node child process"}.`,
             timestamp: new Date().toISOString(),
           },
           {

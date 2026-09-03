@@ -54,7 +54,8 @@
     "react-dom": "19.2.6",
     "rolldown": "^1.0.3",
     "secure-exec": "0.1.0",
-    "vite": "^8.0.1"
+    "vite": "^8.0.1",
+    "web-streams-polyfill": "4.3.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260903.1",

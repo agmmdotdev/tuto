@@ -9062,6 +9062,7 @@ __metadata:
     vinext: "npm:0.0.54"
     vite: "npm:^8.0.1"
     vitest: "npm:^4.1.8"
+    web-streams-polyfill: "npm:4.3.0"
     wrangler: "npm:^4.128.0"
   languageName: unknown
   linkType: soft
@@ -9661,6 +9662,13 @@ __metadata:
   version: 1.1.2
   resolution: "vm-browserify@npm:1.1.2"
   checksum: 10c0/0cc1af6e0d880deb58bc974921320c187f9e0a94f25570fca6b1bd64e798ce454ab87dfd797551b1b0cc1849307421aae0193cedf5f06bdb5680476780ee344b
+  languageName: node
+  linkType: hard
+
+"web-streams-polyfill@npm:4.3.0":
+  version: 4.3.0
+  resolution: "web-streams-polyfill@npm:4.3.0"
+  checksum: 10c0/b00df8bc814e2a9dcb4b7e80972ff7b0a18415bc3ba58eb1fb94aacc912df936a8f2465ab1e8c548e37ea4e5c9ce1898b407f962e9782ee7ae2dca2396cccd6e
   languageName: node
   linkType: hard
 
