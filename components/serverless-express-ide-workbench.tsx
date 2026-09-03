@@ -332,6 +332,8 @@ export function ServerlessExpressIdeWorkbench({
   const navigatePreview = useEffectEvent(
     async (navigation: string, path?: string) => {
       const history = previewHistoryRef.current;
+      const previousPath =
+        history.entries[history.index] ?? activeRequest.path;
       let nextPath: string;
       if (navigation === "back") {
         if (history.index === 0) return;
@@ -359,6 +361,12 @@ export function ServerlessExpressIdeWorkbench({
         nextHeaders = parseHeadersText(requestHeadersText);
       } catch {
         nextHeaders = {};
+      }
+      for (const name of Object.keys(nextHeaders)) {
+        if (name.toLowerCase() === "next-url") delete nextHeaders[name];
+      }
+      if (navigation !== "refresh") {
+        nextHeaders["next-url"] = previousPath;
       }
       const navigationToken = ++previewNavigationTokenRef.current;
       if (config.virtualNavigation) {
@@ -419,7 +427,6 @@ export function ServerlessExpressIdeWorkbench({
       const saved = window.localStorage.getItem(config.storageKey);
 
       if (!saved) {
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage hydration starts the first request.
         setRequestVersion(1);
         return;
       }
