@@ -16,6 +16,7 @@ import {
 import { clearNextTransformCacheForTests } from "../../lib/serverless-next/next-compiler-adapter";
 import { clearNextCacheAdapterForTests } from "../../lib/serverless-next/cache-adapter";
 import {
+  executeNextServerActionArtifact,
   executeNextRequestArtifact,
   invokeNextServerAction,
   invokeNextRouteHandler,
@@ -510,6 +511,98 @@ export async function POST(request: Request) {
 }`,
       language: "ts",
       path: "app/api/echo/route.ts",
+    },
+  ];
+}
+
+function proxyActionWorkspace(): WorkspaceFile[] {
+  return [
+    {
+      content: `import { NextResponse, type NextRequest } from "next/server";
+
+export const config = { matcher: ["/actions/:path*"] };
+
+export async function proxy(request: NextRequest) {
+  const outcome = request.headers.get("x-action-outcome");
+  if (outcome === "redirect") {
+    return NextResponse.redirect(new URL("/login", request.url));
+  }
+  if (outcome === "response") {
+    return NextResponse.json({ blockedBy: "action-proxy" }, { status: 409 });
+  }
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-action-proxy", request.headers.has("next-action") ? "passed" : "missing");
+  requestHeaders.set("x-action-body", (await request.text()).length > 0 ? "present" : "missing");
+  if (outcome === "remove-action-header") requestHeaders.delete("next-action");
+  const response = request.nextUrl.pathname === "/actions/source"
+    ? NextResponse.rewrite(new URL("/actions/destination", request.url), {
+        request: { headers: requestHeaders },
+      })
+    : NextResponse.next({ request: { headers: requestHeaders } });
+  response.headers.set("x-action-proxy-response", "continued");
+  response.cookies.set("proxy-action-cookie", "continued", { path: "/" });
+  return response;
+}`,
+      language: "ts",
+      path: "proxy.ts",
+    },
+    {
+      content: `export default function Layout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}`,
+      language: "tsx",
+      path: "app/layout.tsx",
+    },
+    {
+      content: `"use server";
+import { cookies, headers } from "next/headers";
+
+export async function inspectAction(value: string) {
+  const requestHeaders = await headers();
+  const requestCookies = await cookies();
+  requestCookies.set("action-cookie", "written", { path: "/" });
+  return [
+    value,
+    requestHeaders.get("x-action-proxy"),
+    requestHeaders.get("x-action-body"),
+    requestCookies.get("proxy-action-cookie")?.value,
+    requestCookies.get("session")?.value,
+  ].join("|");
+}
+
+export async function inspectUpload(file: File) {
+  return [
+    file.name,
+    file.type,
+    await file.text(),
+    (await headers()).get("x-action-body"),
+  ].join("|");
+}`,
+      language: "ts",
+      path: "app/actions/action.ts",
+    },
+    {
+      content: `"use client";
+import { inspectAction } from "./action";
+export default function ActionButton() {
+  return <button onClick={() => inspectAction("browser")}>Run action</button>;
+}`,
+      language: "tsx",
+      path: "app/actions/action-button.tsx",
+    },
+    ...["source", "destination"].map((segment) => ({
+      content: `import { cookies, headers } from "next/headers";
+import ActionButton from "../action-button";
+export default async function Page() {
+  return <main>${segment}-action-page:proxy:{(await headers()).get("x-action-proxy")}:proxy-cookie:{(await cookies()).get("proxy-action-cookie")?.value ?? "none"}:action-cookie:{(await cookies()).get("action-cookie")?.value ?? "none"}<ActionButton /></main>;
+}`,
+      language: "tsx" as const,
+      path: `app/actions/${segment}/page.tsx`,
+    })),
+    {
+      content: `export default function Login() { return <main>login</main>; }`,
+      language: "tsx",
+      path: "app/login/page.tsx",
     },
   ];
 }
@@ -1249,6 +1342,164 @@ describe("request-compiled Next RSC runtime", () => {
       { url: "/protected" },
     );
     expect(await afterInvalidConfig.text()).toContain("/protected");
+  });
+
+  test("runs generated Server Actions through proxy continuation and rewrites", async () => {
+    const artifact = await compileNextRequestWorkspace(proxyActionWorkspace(), {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "proxy-actions",
+    });
+    const actionEntry = Object.entries(artifact.actionManifest).find(
+      ([, reference]) => reference.exportName === "inspectAction",
+    );
+    expect(actionEntry).toBeDefined();
+    const body = await serializeNextActionBody(
+      await rscClient.encodeReply(["unit"]),
+    );
+
+    const continued = await executeNextServerActionArtifact(artifact, {
+      actionId: actionEntry![0],
+      body,
+      headers: { cookie: "session=student-action" },
+      url: "/actions/destination",
+    });
+    const continuedFlight = await continued.text();
+    expect(continued.status).toBe(200);
+    expect(continued.headers.get("x-tuto-next-runtime-kind")).toBe(
+      "server-action",
+    );
+    expect(continued.headers.get("x-tuto-next-proxy")).toBe(
+      "matched=1; outcome=next",
+    );
+    expect(continued.headers.get("x-action-proxy-response")).toBe("continued");
+    expect(continued.headers.get("set-cookie")).toContain(
+      "proxy-action-cookie=continued",
+    );
+    expect(continued.headers.get("set-cookie")).toContain(
+      "action-cookie=written",
+    );
+    expect(continuedFlight).toContain(
+      '"actionResult":"unit|passed|present|continued|student-action"',
+    );
+    expect(continuedFlight).toContain("destination-action-page");
+    expect(continuedFlight).toContain("proxy-cookie:");
+    expect(continuedFlight).toContain("action-cookie:");
+    expect(continuedFlight).toContain("written");
+
+    const rewritten = await executeNextServerActionArtifact(artifact, {
+      actionId: actionEntry![0],
+      body,
+      url: "/actions/source",
+    });
+    expect(rewritten.headers.get("x-tuto-next-proxy")).toBe(
+      "matched=1; outcome=rewrite",
+    );
+    expect(rewritten.headers.get("x-tuto-next-route-pattern")).toBe(
+      "/actions/destination",
+    );
+    expect(await rewritten.text()).toContain("destination-action-page");
+
+    const uploadEntry = Object.entries(artifact.actionManifest).find(
+      ([, reference]) => reference.exportName === "inspectUpload",
+    );
+    const upload = await executeNextServerActionArtifact(artifact, {
+      actionId: uploadEntry![0],
+      body: await serializeNextActionBody(
+        await rscClient.encodeReply([
+          new File(["flight-file"], "lesson.txt", { type: "text/plain" }),
+        ]),
+      ),
+      url: "/actions/destination",
+    });
+    expect(await upload.text()).toContain(
+      '"actionResult":"lesson.txt|text/plain|flight-file|present"',
+    );
+  });
+
+  test("short-circuits Server Actions on proxy redirects and direct responses", async () => {
+    const artifact = await compileNextRequestWorkspace(proxyActionWorkspace(), {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "proxy-action-terminal",
+    });
+    const actionEntry = Object.entries(artifact.actionManifest).find(
+      ([, reference]) => reference.exportName === "inspectAction",
+    );
+    const body = await serializeNextActionBody(
+      await rscClient.encodeReply(["blocked"]),
+    );
+
+    const direct = await executeNextServerActionArtifact(artifact, {
+      actionId: actionEntry![0],
+      body,
+      headers: { "x-action-outcome": "response" },
+      url: "/actions/destination",
+    });
+    expect(direct.status).toBe(409);
+    expect(direct.headers.get("x-tuto-next-runtime-kind")).toBe("proxy");
+    expect(await direct.json()).toEqual({ blockedBy: "action-proxy" });
+
+    const redirect = await executeNextServerActionArtifact(artifact, {
+      actionId: actionEntry![0],
+      body,
+      headers: { "x-action-outcome": "redirect" },
+      url: "/actions/destination",
+    });
+    expect(redirect.status).toBe(307);
+    expect(redirect.headers.get("location")).toBe("/login");
+
+    const removedHeader = await executeNextServerActionArtifact(artifact, {
+      actionId: actionEntry![0],
+      body,
+      headers: { "x-action-outcome": "remove-action-header" },
+      url: "/actions/destination",
+    });
+    expect(removedHeader.status).toBe(400);
+    expect(await removedHeader.text()).toMatch(/was not dispatched/i);
+  });
+
+  test("virtualizes Server Action cookies at the integrated host boundary", async () => {
+    const artifact = await compileNextRequestWorkspace(proxyActionWorkspace(), {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "proxy-action-transport",
+    });
+    const actionEntry = Object.entries(artifact.actionManifest).find(
+      ([, reference]) => reference.exportName === "inspectAction",
+    );
+    const response = await requestRoute(
+      new Request("http://tuto.local/api/serverless/nextjs-runtime/request", {
+        body: JSON.stringify({
+          action: {
+            actionId: actionEntry![0],
+            body: await serializeNextActionBody(
+              await rscClient.encodeReply(["transport"]),
+            ),
+            headers: { cookie: "session=transport-student" },
+            revision: artifact.revision,
+            url: "/actions/destination",
+          },
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(response.headers.get("x-tuto-next-proxy")).toBe(
+      "matched=1; outcome=next",
+    );
+    const virtualCookies = JSON.parse(
+      Buffer.from(
+        response.headers.get("x-tuto-next-virtual-set-cookie")!,
+        "base64",
+      ).toString("utf8"),
+    ) as string[];
+    expect(virtualCookies.join("; ")).toContain(
+      "proxy-action-cookie=continued",
+    );
+    expect(virtualCookies.join("; ")).toContain("action-cookie=written");
+    expect(await response.text()).toContain(
+      '"actionResult":"transport|passed|present|continued|transport-student"',
+    );
   });
 
   test("serves the Tuto workbench template through the integrated request route", async () => {

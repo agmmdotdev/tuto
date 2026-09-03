@@ -2238,9 +2238,9 @@ This checkpoint runs real Next compiler and React Server Components machinery wi
 - An immutable generation is reused when the workspace is unchanged
 - A host-owned adapter stores Next data-cache entries outside student modules
 
-Current checkpoint: nested layouts and static/dynamic/catch-all routes, async Server Components, Client Components, Flight, SSR, hydration, module-level Server Actions, App Router Route Handlers, Next 16 \`proxy.ts\` (plus legacy \`middleware.ts\`), matcher rules, request/response headers, cookies, rewrites, redirects, direct responses, \`waitUntil\`, Web \`Request\`/\`Response\`, \`NextRequest\`/\`NextResponse\`, streaming responses, React request memoization, \`unstable_cache\`, Cache Components with \`"use cache"\`/\`cacheLife\`/\`cacheTag\`, patched \`fetch\`, tag invalidation, path invalidation, and stale-while-revalidate.
+Current checkpoint: nested layouts and static/dynamic/catch-all routes, async Server Components, Client Components, Flight, SSR, hydration, module-level Server Actions, proxy-aware action POSTs and refreshes, App Router Route Handlers, Next 16 \`proxy.ts\` (plus legacy \`middleware.ts\`), matcher rules, request/response headers, cookies, rewrites, redirects, direct responses, \`waitUntil\`, Web \`Request\`/\`Response\`, \`NextRequest\`/\`NextResponse\`, streaming responses, React request memoization, \`unstable_cache\`, Cache Components with \`"use cache"\`/\`cacheLife\`/\`cacheTag\`, patched \`fetch\`, tag invalidation, path invalidation, and stale-while-revalidate.
 
-Try \`GET /lessons/rsc?mode=practice\`, \`GET /api/lessons/rsc?mode=practice\`, \`POST /api/lessons/rsc\` with a JSON body, \`GET /proxy-rewrite\`, \`GET /proxy-redirect\`, \`GET /proxy-response\`, \`GET /api/stream\`, \`GET /cache\`, \`GET /cache-components\`, and \`GET /fetch-cache\` after the root page. The default cache adapter is process-memory and workspace-scoped: data and fetch entries survive generation edits and worker restarts within one warm host. Cache Component keys include the immutable generation, matching Next's build-ID safety rule. This is not cross-instance durable storage. Proxy execution for the generated Server Action transport and captured inline action arguments are deliberately not claimed yet.`,
+Try the Server Action button on \`GET /\`, then \`GET /lessons/rsc?mode=practice\`, \`GET /api/lessons/rsc?mode=practice\`, \`POST /api/lessons/rsc\` with a JSON body, \`GET /proxy-rewrite\`, \`GET /proxy-redirect\`, \`GET /proxy-response\`, \`GET /api/stream\`, \`GET /cache\`, \`GET /cache-components\`, and \`GET /fetch-cache\`. The default cache adapter is process-memory and workspace-scoped: data and fetch entries survive generation edits and worker restarts within one warm host. Cache Component keys include the immutable generation, matching Next's build-ID safety rule. This is not cross-instance durable storage. Captured inline action arguments are deliberately not claimed yet.`,
       },
       {
         path: "package.json",
@@ -2297,6 +2297,7 @@ Try \`GET /lessons/rsc?mode=practice\`, \`GET /api/lessons/rsc?mode=practice\`, 
 
 export const config = {
   matcher: [
+    "/",
     "/lessons/:path*",
     "/api/:path*",
     "/proxy-rewrite",
@@ -2322,6 +2323,9 @@ export function proxy(request: NextRequest, event: NextFetchEvent) {
 
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-tuto-proxy-path", request.nextUrl.pathname);
+  if (request.method === "POST" && request.headers.has("next-action")) {
+    requestHeaders.set("x-tuto-action-proxy", "matched");
+  }
   const response = NextResponse.next({
     request: { headers: requestHeaders },
     headers: { "x-tuto-proxy-response": "continued" },
@@ -2406,7 +2410,7 @@ import { increment } from "./actions";
 
 export default function Counter({ initial }: { initial: number }) {
   const [count, setCount] = useState(initial);
-  const [actionResult, setActionResult] = useState<number | null>(null);
+  const [actionResult, setActionResult] = useState<string | null>(null);
   return (
     <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
       <button
@@ -2435,11 +2439,20 @@ export default function Counter({ initial }: { initial: number }) {
           "Module-level Server Actions compiled into genuine Next server references.",
         content: `"use server";
 
+import { cookies, headers } from "next/headers";
+
 let total = 0;
 
 export async function increment(delta: number) {
   total += delta;
-  return total;
+  const requestCookies = await cookies();
+  const requestHeaders = await headers();
+  requestCookies.set("last-action-total", String(total), { path: "/" });
+  return [
+    "total=" + total,
+    "proxy=" + (requestHeaders.get("x-tuto-action-proxy") ?? "missing"),
+    "cookie=" + (requestCookies.get("tuto-proxy")?.value ?? "missing"),
+  ].join("; ");
 }
 
 export async function current() {

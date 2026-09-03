@@ -39,6 +39,10 @@ and rerun the compatibility suite.
 | Boundary enforcement                     | A client graph importing `server-only` is rejected                                                      |
 | Module-level Server Actions              | Next SWC emits genuine action IDs and browser proxies; Flight `encodeReply`/`decodeReply` carries args  |
 | Action refresh                           | The action result and re-rendered route return in one Flight payload and the browser applies both       |
+| Action proxy lifecycle                   | Generated action POSTs carry `next-action`, args, headers, and cookies through proxy matching/dispatch  |
+| Action rewrites and termination          | Continued/internal-rewritten actions execute; proxy redirects and direct responses short-circuit        |
+| Action request mutations                 | Proxy request headers/cookies reach `headers()`/`cookies()` in both the action and refreshed RSC render |
+| Action response cookies                  | Proxy/action cookies cross IPC and update a virtual preview jar without mutating Tuto host cookies      |
 | React `cache`                            | Repeated calls share one value during a render and recompute for the next RSC request                   |
 | `unstable_cache`                         | Next's own wrapper executes inside its work/request AsyncLocalStorage contexts over a Tuto adapter      |
 | Cache Components                         | Next SWC rewrites `"use cache"` functions and async Server Components through its real cache wrapper    |
@@ -83,6 +87,17 @@ Proxy response cookies are also made visible to the downstream request, matching
 Next's middleware-cookie propagation. External rewrites are rejected because
 the current host has no explicit external-proxy capability boundary.
 
+Generated Server Action calls now enter the same proxy dispatcher as page and
+Route Handler requests. The host synthesizes the real action request shape—a
+POST with `next-action`, the RSC argument body, content type, and virtual request
+headers—before running Next's Web adapter. Continuation and internal rewrites
+then execute the action against the resulting URL and request context. Mutable
+cookies from the proxy and action are returned to the preview as an encoded
+virtual cookie update; they are deliberately removed from the outer API
+response so untrusted student code cannot write cookies on Tuto's own origin.
+If proxy request overrides remove `next-action`, Tuto cancels action dispatch
+instead of executing the action through its out-of-band transport metadata.
+
 This interface is the correct extension point for R2, but a production R2
 implementation is not included yet. Cache values can live in R2; tag versions
 and concurrent invalidation need a coordinated metadata strategy (for example
@@ -110,7 +125,7 @@ the expensive event, not every request or ordinary Server Component edit.
 
 - Full Next segment semantics: parallel/intercepted routes and complete loading, error, and thrown `notFound()` behavior
 - Captured inline Server Action arguments, progressive-enhancement form posts, `useActionState`, redirects, and action transitions
-- Proxy execution on the generated Server Action transport, external rewrites, and streaming proxy IPC
+- External proxy rewrites and streaming proxy IPC
 - CSS, static assets, metadata, images, fonts, and arbitrary `next/*` imports
 - Durable object storage, signed artifact capabilities, and cross-instance reuse
 - A production isolation boundary for hostile student code
@@ -133,8 +148,7 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next vertical slice should either close the generated Server Action proxy
-transport gap or move to framework assets (CSS, metadata, and static files). A
-durable cache adapter should follow once Tuto chooses the cross-instance
-metadata coordinator; that storage decision should not be hidden inside the
-student runtime.
+The next vertical slice should add framework assets: imported/global CSS,
+metadata, and static files. A durable cache adapter should follow once Tuto
+chooses the cross-instance metadata coordinator; that storage decision should
+not be hidden inside the student runtime.

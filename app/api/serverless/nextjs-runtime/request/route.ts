@@ -67,6 +67,7 @@ async function readPayload(request: Request) {
     action?: {
       actionId?: string;
       body?: unknown;
+      headers?: Record<string, string> | Array<[string, string]>;
       revision?: string;
       url?: string;
     };
@@ -79,6 +80,32 @@ async function readPayload(request: Request) {
     };
     workspaceKey?: string;
   };
+}
+
+function virtualizeActionCookies(response: Response) {
+  const headers = new Headers(response.headers);
+  const setCookies =
+    typeof headers.getSetCookie === "function"
+      ? headers.getSetCookie()
+      : headers.get("set-cookie")
+        ? [headers.get("set-cookie")!]
+        : [];
+  headers.delete("set-cookie");
+  if (setCookies.length > 0) {
+    headers.set(
+      "x-tuto-next-virtual-set-cookie",
+      Buffer.from(JSON.stringify(setCookies)).toString("base64"),
+    );
+  }
+  headers.set(
+    "access-control-expose-headers",
+    "location, x-tuto-next-virtual-set-cookie",
+  );
+  return new Response(response.body, {
+    headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
 }
 
 export function OPTIONS() {
@@ -106,7 +133,7 @@ export async function POST(request: Request) {
     const payload = await readPayload(request);
     if (payload.action) {
       isActionRequest = true;
-      const [{ getNextRequestArtifact }, { invokeNextServerAction }] =
+      const [{ getNextRequestArtifact }, { executeNextServerActionArtifact }] =
         await Promise.all([
           import("../../../../../lib/serverless-next/artifact"),
           import("../../../../../lib/serverless-next/runtime"),
@@ -133,13 +160,16 @@ export async function POST(request: Request) {
           },
         );
       }
-      return invokeNextServerAction(artifact, {
-        actionId: payload.action.actionId,
-        body: payload.action.body as Parameters<
-          typeof invokeNextServerAction
-        >[1]["body"],
-        url: payload.action.url,
-      });
+      return virtualizeActionCookies(
+        await executeNextServerActionArtifact(artifact, {
+          actionId: payload.action.actionId,
+          body: payload.action.body as Parameters<
+            typeof executeNextServerActionArtifact
+          >[1]["body"],
+          headers: payload.action.headers,
+          url: payload.action.url,
+        }),
+      );
     }
     const method = (payload.request?.method ?? "GET").toUpperCase();
     const pathname = payload.request?.path ?? "/";

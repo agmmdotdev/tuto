@@ -53,6 +53,7 @@ export type NextSerializedActionBody =
 export type NextFlightWorkerResult = {
   cacheMetrics: NextCacheMetrics;
   flight: Buffer;
+  headers: Array<[string, string]>;
   routePattern: string | null;
   status: number;
 };
@@ -210,6 +211,7 @@ export class NextRscWorkerPool {
         writes: 0,
       },
       flight: Buffer.from(reply.bodyBase64, "base64"),
+      headers: reply.headers ?? [],
       routePattern: reply.routePattern ?? null,
       status: reply.status ?? 200,
     };
@@ -258,6 +260,7 @@ export class NextRscWorkerPool {
     input: {
       actionId: string;
       body: NextSerializedActionBody;
+      headers: Array<[string, string]>;
       url: string;
     },
   ) {

@@ -56,6 +56,7 @@ function hydrationBootstrap(
   config: {
     actionEndpoint?: string;
     generation: string;
+    headers: Array<[string, string]>;
     revision: string;
     url: string;
   },
@@ -65,6 +66,7 @@ function hydrationBootstrap(
   const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
   const stream = new ReadableStream({ start(controller) { controller.enqueue(bytes); controller.close(); } });
   const kernel = globalThis.__TUTO_NEXT_CLIENT_KERNEL__;
+  const actionHeaders = new Headers(${JSON.stringify(config.headers)});
   let root;
   function bytesToBase64(bytes) {
     let binary = "";
@@ -88,19 +90,65 @@ function hydrationBootstrap(
     }
     return { entries, kind: "form-data" };
   }
+  function applyVirtualCookies(response) {
+    const encoded = response.headers.get("x-tuto-next-virtual-set-cookie");
+    if (!encoded) return;
+    const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+    const setCookies = JSON.parse(new TextDecoder().decode(bytes));
+    const jar = new Map();
+    for (const part of (actionHeaders.get("cookie") || "").split(";")) {
+      const pair = part.trim();
+      const equals = pair.indexOf("=");
+      if (equals > 0) jar.set(pair.slice(0, equals), pair.slice(equals + 1));
+    }
+    for (const setCookie of setCookies) {
+      const pair = setCookie.split(";", 1)[0];
+      const equals = pair.indexOf("=");
+      if (equals <= 0) continue;
+      const name = pair.slice(0, equals).trim();
+      const value = pair.slice(equals + 1);
+      const maxAge = /(?:^|;)\\s*max-age\\s*=\\s*(-?\\d+)/i.exec(setCookie);
+      const expires = /(?:^|;)\\s*expires\\s*=\\s*([^;]+)/i.exec(setCookie);
+      const expired = maxAge
+        ? Number(maxAge[1]) <= 0
+        : expires
+          ? Date.parse(expires[1]) <= Date.now()
+          : false;
+      if (expired) jar.delete(name);
+      else jar.set(name, value);
+    }
+    if (jar.size > 0) {
+      actionHeaders.set("cookie", [...jar].map(([name, value]) => name + "=" + value).join("; "));
+    } else {
+      actionHeaders.delete("cookie");
+    }
+  }
   globalThis.__TUTO_NEXT_CALL_SERVER__ = async (actionId, args) => {
     const endpoint = ${JSON.stringify(config.actionEndpoint)};
     if (!endpoint) throw new Error("This preview has no Server Action endpoint.");
     const body = await kernel.rscClient.encodeReply(args);
     const response = await fetch(endpoint, {
       body: JSON.stringify({
-        action: { actionId, body: await serializeBody(body), revision: ${JSON.stringify(config.revision)}, url: ${JSON.stringify(config.url)} },
+        action: { actionId, body: await serializeBody(body), headers: Object.fromEntries(actionHeaders.entries()), revision: ${JSON.stringify(config.revision)}, url: ${JSON.stringify(config.url)} },
       }),
       headers: { "content-type": "text/plain;charset=UTF-8" },
       method: "POST",
+      redirect: "manual",
     });
+    applyVirtualCookies(response);
     if (!response.ok || !response.body) {
-      throw new Error((await response.text()) || "The Server Action request failed.");
+      const location = response.headers.get("location");
+      throw new Error(
+        location
+          ? "The Server Action proxy redirected to " + location + "."
+          : (await response.text()) || "The Server Action request failed.",
+      );
+    }
+    if (!(response.headers.get("content-type") || "").startsWith("text/x-component")) {
+      throw new Error(
+        (await response.text()) ||
+          "The Server Action proxy returned a non-Flight response.",
+      );
     }
     const payload = await kernel.rscClient.createFromReadableStream(response.body, {
       callServer: globalThis.__TUTO_NEXT_CALL_SERVER__,
@@ -151,6 +199,7 @@ export async function renderHydratableNextRequestArtifact(
     hydrationBootstrap(result.flight, {
       actionEndpoint: options.actionEndpoint,
       generation: artifact.generation,
+      headers: [...new Headers(options.headers).entries()],
       revision: artifact.revision,
       url,
     }),
@@ -219,20 +268,136 @@ export async function invokeNextServerAction(
   input: {
     actionId: string;
     body: NextSerializedActionBody;
+    headers?: HeadersInit;
     url?: string;
   },
 ) {
   const result = await getNextRscWorkerPool().invokeAction(artifact, {
     actionId: input.actionId,
     body: input.body,
+    headers: [...new Headers(input.headers).entries()],
     url: input.url ?? "/",
   });
+  const headers = new Headers(
+    responseHeaders(artifact, result, "text/x-component; charset=utf-8"),
+  );
+  for (const [name, value] of result.headers) {
+    if (name === "set-cookie") headers.append(name, value);
+    else headers.set(name, value);
+  }
+  headers.set("access-control-allow-origin", "*");
   return new Response(Uint8Array.from(result.flight), {
-    headers: {
-      ...responseHeaders(artifact, result, "text/x-component; charset=utf-8"),
-      "access-control-allow-origin": "*",
-    },
+    headers,
     status: result.status,
+  });
+}
+
+async function serializedActionProxyBody(body: NextSerializedActionBody) {
+  if (body.kind === "string") {
+    return {
+      body: Buffer.from(body.value),
+      contentType: "text/plain;charset=UTF-8",
+    };
+  }
+  const formData = new FormData();
+  for (const entry of body.entries) {
+    if (entry.kind === "string") {
+      formData.append(entry.name, entry.value);
+    } else {
+      formData.append(
+        entry.name,
+        new File([Buffer.from(entry.value, "base64")], entry.filename, {
+          type: entry.contentType,
+        }),
+      );
+    }
+  }
+  const request = new Request("http://next.local", {
+    body: formData,
+    method: "POST",
+  });
+  return {
+    body: Buffer.from(await request.arrayBuffer()),
+    contentType: request.headers.get("content-type") ?? "multipart/form-data",
+  };
+}
+
+export async function executeNextServerActionArtifact(
+  artifact: NextRequestArtifact,
+  input: {
+    actionId: string;
+    body: NextSerializedActionBody;
+    headers?: HeadersInit;
+    url?: string;
+  },
+) {
+  const originalUrl = input.url ?? "/";
+  const actionBody = await serializedActionProxyBody(input.body);
+  const originalHeaders = new Headers(input.headers);
+  originalHeaders.delete("content-length");
+  originalHeaders.delete("host");
+  originalHeaders.delete("transfer-encoding");
+  originalHeaders.set("accept", "text/x-component");
+  originalHeaders.set("content-type", actionBody.contentType);
+  originalHeaders.set("next-action", input.actionId);
+  const proxy = artifact.router.proxy
+    ? await invokeNextProxy(artifact, {
+        body: actionBody.body,
+        headers: originalHeaders,
+        method: "POST",
+        url: originalUrl,
+      })
+    : null;
+  if (proxy?.outcome === "redirect" || proxy?.outcome === "response") {
+    const headers = new Headers(proxy.headers);
+    headers.set("x-tuto-next-proxy", `matched=1; outcome=${proxy.outcome}`);
+    headers.set("x-tuto-next-runtime-kind", "proxy");
+    return new Response(
+      proxy.body.length > 0 ? Uint8Array.from(proxy.body) : null,
+      {
+        headers,
+        status: proxy.status,
+        statusText: proxy.statusText,
+      },
+    );
+  }
+
+  const actionHeaders = new Headers(proxy?.requestHeaders ?? originalHeaders);
+  const actionId = actionHeaders.get("next-action");
+  if (!actionId) {
+    const headers = new Headers({
+      "cache-control": "private, no-store",
+      "content-type": "text/plain; charset=utf-8",
+      "x-tuto-next-proxy": proxy
+        ? `matched=${proxy.matched ? 1 : 0}; outcome=${proxy.outcome}`
+        : "absent",
+      "x-tuto-next-runtime-kind": "server-action",
+    });
+    return new Response(
+      "The proxy removed the next-action header, so the Server Action was not dispatched.",
+      { headers, status: 400 },
+    );
+  }
+  const response = await invokeNextServerAction(artifact, {
+    actionId,
+    body: input.body,
+    headers: actionHeaders,
+    url: proxy?.url ?? originalUrl,
+  });
+  response.headers.set("x-tuto-next-runtime-kind", "server-action");
+  if (!proxy) {
+    response.headers.set("x-tuto-next-proxy", "absent");
+    return response;
+  }
+  const combinedHeaders = mergeProxyResponseHeaders(proxy.headers, response);
+  combinedHeaders.set(
+    "x-tuto-next-proxy",
+    `matched=${proxy.matched ? 1 : 0}; outcome=${proxy.outcome}`,
+  );
+  return new Response(response.body, {
+    headers: combinedHeaders,
+    status: response.status,
+    statusText: response.statusText,
   });
 }
 
