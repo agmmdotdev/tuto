@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:next-cache-coordinator": "wrangler dev --config workers/next-cache-coordinator/wrangler.jsonc",
     "build": "next build",
+    "build:next-cache-coordinator": "wrangler deploy --dry-run --outdir ../../.tmp/next-cache-coordinator-dist --config workers/next-cache-coordinator/wrangler.jsonc",
     "build:serverless-tanstack-start-transform": "esbuild lib/serverless-tanstack-start/server-functions-transform.ts --bundle --platform=node --format=cjs --target=node22 --outfile=lib/serverless-tanstack-start/server-functions-transform.generated.cjs --external:@tanstack/router-plugin --external:@tanstack/start-plugin-core",
     "build:serverless-next-kernel": "node scripts/build-serverless-next-kernel.mjs",
     "build:serverless-tanstack-start-runners": "node scripts/build-serverless-tanstack-start-runners.mjs",
@@ -15,6 +17,9 @@
     "measure:offline-compilers": "node scripts/measure-offline-compilers.mjs",
     "measure:tanstack-start-kernels": "yarn build:serverless-tanstack-start-runtime && node scripts/measure-tanstack-start-kernels.mjs",
     "experiment:tanstack-real-runtime": "yarn build:serverless-tanstack-start-transform && node scripts/experiment-tanstack-real-runtime.mjs",
+    "deploy:next-cache-coordinator": "wrangler deploy --config workers/next-cache-coordinator/wrangler.jsonc",
+    "load:next-cache-coordinator": "node scripts/load-next-cache-coordinator.mjs",
+    "typecheck:next-cache-coordinator": "tsc --project workers/next-cache-coordinator/tsconfig.json --pretty false",
     "test:serverless-nextjs-runtime": "vitest run --config vitest.serverless-nextjs-runtime.config.mjs",
     "test:serverless-next": "vitest run --config vitest.serverless-next.config.mjs",
     "test:serverless-next-browser": "playwright test --config playwright.serverless-next.config.ts",
@@ -52,6 +57,7 @@
     "vite": "^8.0.1"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260903.1",
     "@playwright/test": "1.62.1",
     "@tailwindcss/postcss": "^4",
     "@types/express": "^5",
@@ -66,7 +72,8 @@
     "tailwindcss": "^4",
     "typescript": "^5",
     "vinext": "0.0.54",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "wrangler": "^4.128.0"
   },
   "packageManager": "yarn@4.13.0"
 }
