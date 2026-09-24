@@ -9,7 +9,11 @@ SWC loader options and bundled React Flight modules are internal Next APIs, not
 a stable public compiler SDK. A Next upgrade must rebuild the browser kernel
 and rerun the compatibility suite.
 
-## Verified in the current checkpoint
+The 16.3.6 upgrade is under validation. The results below were established on
+16.2.6 and must not be treated as proof of compatibility with 16.3.6. The
+compiler rejects a browser kernel built against another Next version.
+
+## Verified with Next 16.2.6
 
 | Capability                               | Evidence                                                                                                                      |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
