@@ -141,6 +141,7 @@ function loaderOptions({
       : WEBPACK_LAYERS.appPagesBrowser,
     cacheHandlers: {},
     compilerOptions: {},
+    configDir: "/tuto/next",
     development: false,
     esm: true,
     filename: canonicalPath,
