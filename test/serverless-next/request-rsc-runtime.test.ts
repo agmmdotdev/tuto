@@ -1191,7 +1191,7 @@ describe("request-compiled Next RSC runtime", () => {
       workspaceKey: "lesson-rsc",
     });
 
-    expect(artifact.nextVersion).toBe("16.2.6");
+    expect(artifact.nextVersion).toBe("16.3.6");
     expect(artifact.kernelId).toMatch(/^[a-f0-9]{20}$/);
     expect(artifact.router.routes).toMatchObject([
       {
@@ -1772,7 +1772,7 @@ describe("request-compiled Next RSC runtime", () => {
       workspaceKey: "next-app-router-topology",
     });
 
-    expect(artifact.version).toBe(10);
+    expect(artifact.version).toBe(11);
     expect(artifact.router.routes.map((route) => route.pattern)).toEqual([
       "/dashboard/settings",
       "/photo/[id]",

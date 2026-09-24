@@ -1,0 +1,48 @@
+name: Next request runtime compatibility
+
+on:
+  push:
+    branches:
+      - feat/next-16-3-6-compat
+  pull_request:
+    paths:
+      - '.github/workflows/next-runtime-compat.yml'
+      - 'lib/serverless-next/**'
+      - 'test/serverless-next/**'
+      - 'test/serverless-next-browser/**'
+      - 'scripts/build-serverless-next-kernel.mjs'
+      - 'package.json'
+      - 'yarn.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: corepack enable
+      # Allow this upgrade branch to resolve the new package graph. Commit the
+      # generated lockfile after the probe, then restore immutable installs.
+      - run: yarn install
+        env:
+          YARN_ENABLE_IMMUTABLE_INSTALLS: 'false'
+      - run: yarn build:serverless-next-kernel
+      - uses: actions/upload-artifact@v4
+        with:
+          name: next-16-3-6-generated
+          path: |
+            yarn.lock
+            lib/serverless-next/client-kernel.generated.js
+            lib/serverless-next/client-kernel-manifest.generated.json
+      - run: yarn test:serverless-next
+      - run: yarn tsc --noEmit
+      - run: yarn playwright install --with-deps firefox
+      - run: yarn test:serverless-next-browser
+      - run: VERCEL=1 TUTO_NEXT_EXECUTION_MODE=secure-exec yarn build

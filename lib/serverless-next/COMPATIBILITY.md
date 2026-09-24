@@ -4,7 +4,7 @@ This is the real-Next direction for Tuto. It does not use Next Lite, `next
 build`, `next dev`, Wasmer, or a per-student server. Student source is compiled
 against a shared, precompiled runtime and executed for a request.
 
-The compiler adapter is intentionally pinned to Next.js 16.2.6 because the RSC
+The compiler adapter is intentionally pinned to Next.js 16.3.6 because the RSC
 SWC loader options and bundled React Flight modules are internal Next APIs, not
 a stable public compiler SDK. A Next upgrade must rebuild the browser kernel
 and rerun the compatibility suite.

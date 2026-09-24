@@ -7,7 +7,7 @@ globalThis.AsyncLocalStorage ??= AsyncLocalStorage;
 
 const requireNext = createRequire(path.join(process.cwd(), "package.json"));
 const nextPackage = requireNext("next/package.json") as { version: string };
-const PINNED_NEXT_VERSION = "16.2.6";
+const PINNED_NEXT_VERSION = "16.3.6";
 
 type NextTransformResult = {
   cacheHit: boolean;
