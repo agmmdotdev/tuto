@@ -5,6 +5,7 @@ import {
   executeNextRequestArtifact,
   executeNextServerActionArtifact,
   renderHydratableNextRequestArtifact,
+  renderHydratableNextRequestArtifactStream,
 } from "../../lib/serverless-next/runtime";
 
 const files: WorkspaceFile[] = [
@@ -138,6 +139,52 @@ export default function ActionForm({ action }: {
 }`,
     language: "tsx",
     path: "app/action-form.tsx",
+  },
+];
+
+const slotBoundaryFiles: WorkspaceFile[] = [
+  {
+    content: `export default function Layout({ children, modal }: { children: React.ReactNode; modal: React.ReactNode }) {
+  return <html><body><h1>slot-boundary-browser</h1>{children}<aside data-modal>{modal}</aside></body></html>;
+}`,
+    language: "tsx",
+    path: "app/layout.tsx",
+  },
+  {
+    content: `export default async function Page({ params }: { params: Promise<{ outcome: string }> }) {
+  return <main>primary:{(await params).outcome}</main>;
+}`,
+    language: "tsx",
+    path: "app/[outcome]/page.tsx",
+  },
+  {
+    content: `import { notFound } from "next/navigation";
+export default async function Modal({ params }: { params: Promise<{ outcome: string }> }) {
+  const { outcome } = await params;
+  if (outcome === "error") throw new Error("browser modal exploded");
+  if (outcome === "missing") notFound();
+  return <p>modal:{outcome}</p>;
+}`,
+    language: "tsx",
+    path: "app/@modal/[outcome]/page.tsx",
+  },
+  {
+    content: `"use client";
+export default function Error({ error }: { error: Error }) {
+  return <p data-modal-error>modal-error:{error.message}</p>;
+}`,
+    language: "tsx",
+    path: "app/@modal/error.tsx",
+  },
+  {
+    content: `export default function Loading() { return <p data-modal-loading>modal-loading</p>; }`,
+    language: "tsx",
+    path: "app/@modal/loading.tsx",
+  },
+  {
+    content: `export default function NotFound() { return <p data-modal-not-found>modal-not-found</p>; }`,
+    language: "tsx",
+    path: "app/@modal/not-found.tsx",
   },
 ];
 
@@ -278,4 +325,50 @@ test("dispatches a Server Action and applies its refreshed Flight tree", async (
   await expect(page.locator("[data-form-submit]")).toHaveText("Saving");
   await expect(page.locator("[data-form-state]")).toHaveText("rsc|idle|lesson");
   await expect(page.locator("[data-form-submit]")).toHaveText("Save");
+});
+
+test("hydrates streamed parallel-route error and not-found boundaries locally", async ({
+  page,
+}) => {
+  const artifact = await compileNextRequestWorkspace(slotBoundaryFiles, {
+    serverReferenceHashSalt: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    workspaceKey: "browser-slot-boundary-checkpoint",
+  });
+
+  const render = async (outcome: "error" | "missing") => {
+    const document = await (
+      await renderHydratableNextRequestArtifactStream(artifact, {
+        url: `/${outcome}`,
+      })
+    ).text();
+    expect(document).toContain("modal-loading");
+    expect(document).not.toContain(
+      outcome === "error" ? "modal-error:" : "modal-not-found",
+    );
+    await page.setContent(document, { waitUntil: "load" });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              globalThis as typeof globalThis & {
+                __TUTO_NEXT_HYDRATED__?: string;
+              }
+            ).__TUTO_NEXT_HYDRATED__,
+        ),
+      )
+      .toBe(artifact.generation);
+  };
+
+  await render("error");
+  await expect(page.locator("main")).toHaveText("primary:error");
+  await expect(page.locator("[data-modal-error]")).toHaveText(
+    "modal-error:browser modal exploded",
+  );
+
+  await render("missing");
+  await expect(page.locator("main")).toHaveText("primary:missing");
+  await expect(page.locator("[data-modal-not-found]")).toHaveText(
+    "modal-not-found",
+  );
 });

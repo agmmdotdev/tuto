@@ -576,9 +576,19 @@ export default function GlobalError({ error, reset }: { error: Error; reset(): v
       path: "app/dashboard/template.tsx",
     },
     {
-      content: `export default function Page() { return <main>dashboard-page</main>; }`,
+      content: `import { headers } from "next/headers";
+export default async function Page() {
+  if ((await headers()).get("x-dashboard-error") === "1") throw new Error("dashboard page exploded");
+  return <main>dashboard-page</main>;
+}`,
       language: "tsx",
       path: "app/dashboard/page.tsx",
+    },
+    {
+      content: `"use client";
+export default function Error({ error }: { error: Error }) { return <p>dashboard-error:{error.message}</p>; }`,
+      language: "tsx",
+      path: "app/dashboard/error.tsx",
     },
     {
       content: `export default function Page() { return <main>dashboard-settings</main>; }`,
@@ -611,6 +621,38 @@ export default function GlobalError({ error, reset }: { error: Error; reset(): v
       path: "app/dashboard/@modal/default.tsx",
     },
     {
+      content: `import { headers } from "next/headers";
+export default async function Layout({ children }: { children: React.ReactNode }) {
+  if ((await headers()).get("x-modal-layout-error") === "1") throw new Error("modal layout exploded");
+  return <div data-modal-layout>{children}</div>;
+}`,
+      language: "tsx",
+      path: "app/dashboard/@modal/layout.tsx",
+    },
+    {
+      content: `"use client";
+import styles from "./boundary.module.css";
+export default function Error({ error }: { error: Error }) { return <p className={styles.fallback}>modal-error:{error.message}</p>; }`,
+      language: "tsx",
+      path: "app/dashboard/@modal/error.tsx",
+    },
+    {
+      content: `export default function Loading() { return <p>modal-loading</p>; }`,
+      language: "tsx",
+      path: "app/dashboard/@modal/loading.tsx",
+    },
+    {
+      content: `import styles from "./boundary.module.css";
+export default function NotFound() { return <p className={styles.fallback}>modal-not-found</p>; }`,
+      language: "tsx",
+      path: "app/dashboard/@modal/not-found.tsx",
+    },
+    {
+      content: `.fallback { --tuto-slot-boundary: ready; }`,
+      language: "css",
+      path: "app/dashboard/@modal/boundary.module.css",
+    },
+    {
       content: `export default function EmptyDefault() { return <p>empty-slot-default</p>; }`,
       language: "tsx",
       path: "app/dashboard/@empty/default.tsx",
@@ -623,7 +665,12 @@ export default function GlobalError({ error, reset }: { error: Error; reset(): v
       path: "app/dashboard/@modal/template.tsx",
     },
     {
-      content: `export default async function ModalPhoto({ params }: { params: Promise<{ id: string }> }) {
+      content: `import { headers } from "next/headers";
+import { notFound } from "next/navigation";
+export default async function ModalPhoto({ params }: { params: Promise<{ id: string }> }) {
+  const outcome = (await headers()).get("x-modal-outcome");
+  if (outcome === "error") throw new Error("modal page exploded");
+  if (outcome === "missing") notFound();
   return <dialog open>intercepted-photo:{(await params).id}</dialog>;
 }`,
       language: "tsx",
@@ -1725,7 +1772,7 @@ describe("request-compiled Next RSC runtime", () => {
       workspaceKey: "next-app-router-topology",
     });
 
-    expect(artifact.version).toBe(9);
+    expect(artifact.version).toBe(10);
     expect(artifact.router.routes.map((route) => route.pattern)).toEqual([
       "/dashboard/settings",
       "/photo/[id]",
@@ -1814,6 +1861,116 @@ describe("request-compiled Next RSC runtime", () => {
     expect(interceptedPhotoHtml).toContain("intercepted-photo:<!-- -->42");
     expect(interceptedPhotoHtml).toContain('data-template="modal"');
     expect(interceptedPhotoHtml).not.toContain("canonical-photo");
+
+    const modalFailure = await renderNextRequestArtifact(artifact, {
+      headers: {
+        "next-url": "/dashboard",
+        "x-modal-outcome": "error",
+      },
+      url: "/photo/42",
+    });
+    const modalFailureHtml = await modalFailure.text();
+    expect(modalFailure.status).toBe(500);
+    expect(modalFailureHtml).toContain(
+      "modal-error:<!-- -->modal page exploded",
+    );
+    expect(modalFailureHtml).toContain("dashboard-page");
+    expect(modalFailureHtml).toContain("team-home");
+    expect(modalFailureHtml).toContain("analytics-home");
+    expect(modalFailureHtml).not.toContain("dashboard-error");
+    expect(modalFailureHtml).toContain("--tuto-slot-boundary: ready");
+
+    const streamedModalFailure = await executeNextRequestArtifact(artifact, {
+      headers: {
+        "next-url": "/dashboard",
+        "x-modal-outcome": "error",
+      },
+      hydrate: true,
+      stream: true,
+      url: "/photo/42",
+    });
+    expect(streamedModalFailure.status).toBe(200);
+    const streamedModalFailureHtml = await streamedModalFailure.text();
+    expect(streamedModalFailureHtml).toContain("modal-loading");
+    expect(streamedModalFailureHtml).toContain("modal page exploded");
+    expect(streamedModalFailureHtml).not.toContain(
+      "modal-error:<!-- -->modal page exploded",
+    );
+
+    const modalLayoutFailure = await renderNextRequestArtifact(artifact, {
+      headers: {
+        "next-url": "/dashboard",
+        "x-modal-layout-error": "1",
+      },
+      url: "/photo/42",
+    });
+    const modalLayoutFailureHtml = await modalLayoutFailure.text();
+    expect(modalLayoutFailure.status).toBe(500);
+    expect(modalLayoutFailureHtml).toContain(
+      "dashboard-error:<!-- -->modal layout exploded",
+    );
+    expect(modalLayoutFailureHtml).toContain("dashboard-page");
+    expect(modalLayoutFailureHtml).toContain("team-home");
+    expect(modalLayoutFailureHtml).not.toContain("modal-error");
+
+    const modalMissing = await renderNextRequestArtifact(artifact, {
+      headers: {
+        "next-url": "/dashboard",
+        "x-modal-outcome": "missing",
+      },
+      url: "/photo/42",
+    });
+    const modalMissingHtml = await modalMissing.text();
+    expect(modalMissing.status).toBe(404);
+    expect(modalMissingHtml).toContain("modal-not-found");
+    expect(modalMissingHtml).toContain("dashboard-page");
+    expect(modalMissingHtml).toContain("team-home");
+    expect(modalMissingHtml).toContain("--tuto-slot-boundary: ready");
+
+    const streamedModalMissing = await executeNextRequestArtifact(artifact, {
+      headers: {
+        "next-url": "/dashboard",
+        "x-modal-outcome": "missing",
+      },
+      hydrate: true,
+      stream: true,
+      url: "/photo/42",
+    });
+    expect(streamedModalMissing.status).toBe(200);
+    const streamedModalMissingHtml = await streamedModalMissing.text();
+    expect(streamedModalMissingHtml).toContain("modal-loading");
+    expect(streamedModalMissingHtml).toContain(
+      "NEXT_HTTP_ERROR_FALLBACK;404",
+    );
+
+    const modalLoading = await executeNextRequestArtifact(artifact, {
+      headers: { "next-url": "/dashboard" },
+      hydrate: true,
+      loading: true,
+      url: "/photo/42",
+    });
+    const modalLoadingHtml = await modalLoading.text();
+    expect(modalLoading.status).toBe(200);
+    expect(modalLoading.headers.get("x-tuto-next-runtime-kind")).toBe(
+      "page-loading",
+    );
+    expect(modalLoadingHtml).toContain("modal-loading");
+    expect(modalLoadingHtml).toContain("dashboard-page");
+    expect(modalLoadingHtml).toContain("team-home");
+    expect(modalLoadingHtml).not.toContain("intercepted-photo");
+
+    const primaryFailure = await renderNextRequestArtifact(artifact, {
+      headers: { "x-dashboard-error": "1" },
+      url: "/dashboard",
+    });
+    const primaryFailureHtml = await primaryFailure.text();
+    expect(primaryFailure.status).toBe(500);
+    expect(primaryFailureHtml).toContain(
+      "dashboard-error:<!-- -->dashboard page exploded",
+    );
+    expect(primaryFailureHtml).toContain("team-home");
+    expect(primaryFailureHtml).toContain("analytics-home");
+    expect(primaryFailureHtml).toContain("modal-empty");
 
     const integratedResponse = await requestRoute(
       new Request("http://tuto.local/api/serverless/nextjs-runtime/request", {

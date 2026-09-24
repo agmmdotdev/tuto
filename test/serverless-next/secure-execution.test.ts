@@ -86,7 +86,28 @@ function secureTopologyWorkspace(): WorkspaceFile[] {
       path: "app/feed/@modal/default.tsx",
     },
     {
-      content: `export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+      content: `"use client";
+export default function Error({ error }: { error: Error }) { return <p>secure-modal-error:{error.message}</p>; }`,
+      language: "tsx",
+      path: "app/feed/@modal/error.tsx",
+    },
+    {
+      content: `export default function Loading() { return <p>secure-modal-loading</p>; }`,
+      language: "tsx",
+      path: "app/feed/@modal/loading.tsx",
+    },
+    {
+      content: `export default function NotFound() { return <p>secure-modal-not-found</p>; }`,
+      language: "tsx",
+      path: "app/feed/@modal/not-found.tsx",
+    },
+    {
+      content: `import { headers } from "next/headers";
+import { notFound } from "next/navigation";
+export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  const outcome = (await headers()).get("x-secure-modal-outcome");
+  if (outcome === "error") throw new Error("secure modal exploded");
+  if (outcome === "missing") notFound();
   return <dialog open>secure-intercept:{(await params).id}</dialog>;
 }`,
       language: "tsx",
@@ -307,6 +328,44 @@ export default async function Page({ searchParams }: {
     expect(interceptedHtml).toContain("secure-feed");
     expect(interceptedHtml).toContain("secure-intercept:<!-- -->7");
     expect(interceptedHtml).not.toContain("secure-photo");
+
+    const failed = await renderNextRequestArtifact(artifact, {
+      headers: {
+        "next-url": "/feed",
+        "x-secure-modal-outcome": "error",
+      },
+      url: "/photo/7",
+    });
+    const failedHtml = await failed.text();
+    expect(failed.status).toBe(500);
+    expect(failedHtml).toContain(
+      "secure-modal-error:<!-- -->secure modal exploded",
+    );
+    expect(failedHtml).toContain("secure-feed");
+
+    const missing = await renderNextRequestArtifact(artifact, {
+      headers: {
+        "next-url": "/feed",
+        "x-secure-modal-outcome": "missing",
+      },
+      url: "/photo/7",
+    });
+    const missingHtml = await missing.text();
+    expect(missing.status).toBe(404);
+    expect(missingHtml).toContain("secure-modal-not-found");
+    expect(missingHtml).toContain("secure-feed");
+
+    const loading = await executeNextRequestArtifact(artifact, {
+      headers: { "next-url": "/feed" },
+      hydrate: true,
+      loading: true,
+      url: "/photo/7",
+    });
+    const loadingHtml = await loading.text();
+    expect(loading.status).toBe(200);
+    expect(loadingHtml).toContain("secure-modal-loading");
+    expect(loadingHtml).toContain("secure-feed");
+    expect(loadingHtml).not.toContain("secure-intercept");
   });
 
   test("falls back before the first byte for redirect and not-found control flow", async () => {

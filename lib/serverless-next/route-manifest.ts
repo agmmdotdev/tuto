@@ -160,7 +160,8 @@ function routeDefinition(
   options: { minimumDirectory?: string; routeSegments?: string[] } = {},
 ): NextRouteDefinition {
   const directory = path.posix.dirname(page);
-  const directories = ancestors(directory).filter(
+  const boundaryDirectories = ancestors(directory);
+  const directories = boundaryDirectories.filter(
     (entry) =>
       !options.minimumDirectory ||
       entry === options.minimumDirectory ||
@@ -169,13 +170,16 @@ function routeDefinition(
   const { matcher, pattern } = matcherFor(
     options.routeSegments ?? appSegments(directory),
   );
-  const nearest = (basename: "error" | "loading" | "not-found") =>
-    [...directories]
+  const nearest = (
+    basename: "error" | "loading" | "not-found",
+    candidates = directories,
+  ) =>
+    [...candidates]
       .reverse()
       .map((entry) => routeFile(paths, entry, basename))
       .find(Boolean);
   return {
-    boundaries: directories
+    boundaries: boundaryDirectories
       .map((entry) => ({
         directory: entry,
         ...(routeFile(paths, entry, "error")
@@ -191,7 +195,9 @@ function routeDefinition(
       .filter(
         (boundary) => boundary.error || boundary.loading || boundary.notFound,
       ),
-    ...(nearest("error") ? { error: nearest("error") } : {}),
+    ...(nearest("error", boundaryDirectories)
+      ? { error: nearest("error", boundaryDirectories) }
+      : {}),
     layouts: directories
       .map((entry) => routeFile(paths, entry, "layout"))
       .filter((entry): entry is string => Boolean(entry)),
