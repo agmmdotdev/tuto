@@ -1,5 +1,7 @@
 import type { NextNavigationRequest } from "@/lib/serverless-next/navigation";
 import { randomBytes } from "node:crypto";
+import { nextPrefetchKey, nextPrefetchTickets } from "@/lib/serverless-next/prefetch";
+import { matchNextRoute, matchNextRouteHandler } from "@/lib/serverless-next/route-manifest";
 import { NextResponse } from "next/server";
 import type { BuildDiagnostic, WorkspaceFile } from "@/lib/ide/types";
 import { assertNextProductionExecutionIsolated } from "@/lib/serverless-next/execution-mode";
@@ -153,6 +155,9 @@ async function readPayload(request: Request) {
       revision: string;
       url: string;
       sequence?: number;
+      prefetch?: boolean;
+      prefetchOwner?: string;
+      prefetchTicket?: string;
       headers?: Record<string, string>;
     };
     files?: WorkspaceFile[];
@@ -185,7 +190,7 @@ function virtualizeActionCookies(response: Response) {
   }
   headers.set(
     "access-control-expose-headers",
-    "location, x-action-redirect, x-tuto-next-virtual-set-cookie",
+    "location, x-action-redirect, x-tuto-next-virtual-set-cookie, x-tuto-next-prefetch",
   );
   return new Response(response.body, {
     headers,
@@ -322,7 +327,9 @@ export async function POST(request: Request) {
           },
         );
       }
-      let response = await nextRuntime.executeNextProgressiveActionArtifact(
+      nextPrefetchTickets.invalidate(artifact);
+      let response;
+      try { response = await nextRuntime.executeNextProgressiveActionArtifact(
         artifact,
         {
           actionEndpoint: request.url,
@@ -330,7 +337,7 @@ export async function POST(request: Request) {
           headers: request.headers,
           url: `${routeUrl.pathname}${routeUrl.search}`,
         },
-      );
+      ); } finally { nextPrefetchTickets.invalidate(artifact); }
       if (
         (response.headers.get("content-type") ?? "").startsWith("text/html")
       ) {
@@ -358,12 +365,71 @@ export async function POST(request: Request) {
       });
       const url = new URL(payload.navigation.url, "http://next.local");
       if (url.origin !== "http://next.local") throw new Error("Preview navigation must stay inside the workspace.");
-      const response = await executeNextRequestArtifact(artifact, {
-        headers: payload.navigation.headers,
-        navigation: payload.navigation,
-        stream: true,
-        url: url.pathname + url.search,
-      });
+      const navigation = payload.navigation;
+      const owner = navigation.prefetchOwner;
+      const cacheKey = nextPrefetchKey(artifact.revision, navigation.url, navigation.headers ?? {}, navigation.state);
+      if (navigation.prefetch) {
+        if (typeof owner !== "string" || owner.length > 128 || !["push", "replace"].includes(navigation.kind)) {
+          throw new Error("Invalid preview prefetch request.");
+        }
+        // Opt-in page rendering only. Never invoke GET handlers, assets or proxy
+        // middleware speculatively, or apply prefetch cookies to the document.
+        if (artifact.router.proxy || matchNextRouteHandler(artifact.router, url) ||
+          artifact.staticAssets[url.pathname] || !matchNextRoute(artifact.router, url)) {
+          return new Response(null, {status:204, headers:{"access-control-allow-origin":"*", "cache-control":"no-store"}});
+        }
+        request.signal.throwIfAborted();
+        const epoch = nextPrefetchTickets.epoch(artifact);
+        const response = await executeNextRequestArtifact(artifact, {
+          headers:navigation.headers, navigation, stream:true, url:url.pathname + url.search,
+        });
+        let body = new Uint8Array();
+        if (response.body) {
+          const reader = response.body.getReader();
+          const abort = () => {void reader.cancel().catch(() => {});};
+          request.signal.addEventListener("abort", abort, {once:true});
+          const chunks: Uint8Array[] = [];
+          let length = 0;
+          try {
+            for (;;) {
+              request.signal.throwIfAborted();
+              const chunk = await reader.read();
+              request.signal.throwIfAborted();
+              if (chunk.done) break;
+              length += chunk.value.byteLength;
+              if (length > nextPrefetchTickets.maxEntryBytes) break;
+              chunks.push(chunk.value);
+            }
+          } finally { request.signal.removeEventListener("abort", abort); await reader.cancel(); }
+          if (length <= nextPrefetchTickets.maxEntryBytes) {
+            body = new Uint8Array(length);
+            let offset = 0;
+            for (const chunk of chunks) {body.set(chunk, offset); offset += chunk.byteLength;}
+          }
+        }
+        const text = new TextDecoder().decode(body);
+        const ticket = response.status === 200 && body.length &&
+          response.headers.get("content-type")?.startsWith("text/x-component") &&
+          !response.headers.has("set-cookie") && !response.headers.has("location") &&
+          !/(?:^|\n)[0-9a-f]+:E\{/.test(text)
+          ? nextPrefetchTickets.put({artifact, owner, key:cacheKey, epoch, body,
+            headers:[...response.headers.entries()], status:response.status}) : null;
+        return ticket ? Response.json({ticket, ttlMs:nextPrefetchTickets.ttlMs}, {
+          headers:{"access-control-allow-origin":"*", "cache-control":"no-store"},
+        }) : new Response(null, {status:204, headers:{"access-control-allow-origin":"*", "cache-control":"no-store"}});
+      }
+      if (navigation.kind === "refresh") nextPrefetchTickets.invalidate(artifact);
+      const cached = typeof navigation.prefetchTicket === "string" && typeof owner === "string" &&
+        ["push", "replace"].includes(navigation.kind)
+        ? nextPrefetchTickets.take(navigation.prefetchTicket, artifact, owner, cacheKey) : null;
+      let response: Response;
+      try {
+        response = cached ? new Response(Uint8Array.from(cached.body), {headers:cached.headers, status:cached.status})
+          : await executeNextRequestArtifact(artifact, {
+            headers:navigation.headers, navigation, stream:true, url:url.pathname + url.search,
+          });
+      } finally { if (navigation.kind === "refresh") nextPrefetchTickets.invalidate(artifact); }
+      response.headers.set("x-tuto-next-prefetch", cached ? "hit" : "miss");
       const token = new URL(request.url).searchParams.get("preview");
       const capability = resolvePreviewCapability(token);
       const sequence = payload.navigation.sequence;
@@ -412,7 +478,8 @@ export async function POST(request: Request) {
           },
         );
       }
-      return virtualizeActionCookies(
+      nextPrefetchTickets.invalidate(artifact);
+      try { return virtualizeActionCookies(
         await executeNextServerActionArtifact(artifact, {
           actionId: payload.action.actionId,
           body: payload.action.body as Parameters<
@@ -421,7 +488,7 @@ export async function POST(request: Request) {
           headers: payload.action.headers,
           url: payload.action.url,
         }),
-      );
+      ); } finally { nextPrefetchTickets.invalidate(artifact); }
     }
     const method = (payload.request?.method ?? "GET").toUpperCase();
     const pathname = payload.request?.path ?? "/";

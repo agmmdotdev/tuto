@@ -3,6 +3,7 @@ import path from "node:path";
 import type { NextNavigationRequest } from "./navigation";
 import type { NextRequestArtifact } from "./artifact";
 import { matchNextRouteHandler } from "./route-manifest";
+import { nextPrefetchKey } from "./prefetch";
 import {
   getNextRscWorkerPool,
   type NextFlightWorkerResult,
@@ -162,6 +163,70 @@ function hydrationBootstrap(
   let pendingNavigation;
   const navigationCommits = new Map();
   globalThis.__TUTO_NEXT_NAVIGATION_COMMIT__ = (id) => navigationCommits.get(id)?.();
+  const prefetchKey = ${nextPrefetchKey.toString()};
+  const prefetchOwner = [...crypto.getRandomValues(new Uint8Array(16))].map(value => value.toString(16).padStart(2,"0")).join("");
+  const prefetchEntries = new Map();
+  let prefetchEpoch = 0;
+  let prefetchSequence = 0;
+  let prefetchPending;
+  function invalidatePrefetch() {
+    prefetchEpoch++;
+    prefetchPending?.abort();
+    prefetchPending = undefined;
+    const entries = [...prefetchEntries.values()];
+    prefetchEntries.clear();
+    for (const entry of entries) {
+      clearTimeout(entry.timer);
+      for (const callback of entry.callbacks) { try { callback(); } catch (error) { console.error(error); } }
+    }
+  }
+  function currentPrefetchKey(target) {
+    return prefetchKey(${JSON.stringify(config.revision)}, target.pathname + target.search,
+      Object.fromEntries(actionHeaders.entries()), globalThis.__TUTO_NEXT_ROUTER_STATE__);
+  }
+  globalThis.__TUTO_NEXT_PREFETCH__ = async (href, options = {}) => {
+    if (!endpoint) return;
+    const target = new URL(String(href), new URL(globalThis.__TUTO_NEXT_URL__, "http://next.local"));
+    if (target.origin !== "http://next.local") return;
+    const key = currentPrefetchKey(target);
+    let entry = prefetchEntries.get(key);
+    if (entry) {
+      if (typeof options.onInvalidate === "function") entry.callbacks.add(options.onInvalidate);
+      return entry.promise;
+    }
+    if (prefetchEntries.size >= 8) invalidatePrefetch();
+    // Only one speculative render at a time. Explicit callers can retry later.
+    if (prefetchPending) return;
+    const controller = new AbortController();
+    prefetchPending = controller;
+    const epoch = prefetchEpoch;
+    entry = {callbacks:new Set(typeof options.onInvalidate === "function" ? [options.onInvalidate] : []), controller};
+    prefetchEntries.set(key, entry);
+    entry.promise = (async () => {
+      try {
+        const response = await fetch(endpoint, {
+          method:"POST", headers:{"content-type":"text/plain;charset=UTF-8"}, signal:controller.signal,
+          body:JSON.stringify({navigation:{kind:"push", id:"prefetch:" + ++prefetchSequence,
+            prefetch:true, prefetchOwner, revision:${JSON.stringify(config.revision)},
+            url:target.pathname + target.search, state:globalThis.__TUTO_NEXT_ROUTER_STATE__,
+            headers:Object.fromEntries(actionHeaders.entries())}}),
+        });
+        if (response.status !== 200 || epoch !== prefetchEpoch) {prefetchEntries.delete(key); return;}
+        const result = await response.json();
+        if (epoch !== prefetchEpoch || prefetchEntries.get(key) !== entry) return;
+        entry.ticket = result.ticket;
+        entry.timer = setTimeout(() => {
+          if (prefetchEntries.get(key) !== entry) return;
+          prefetchEntries.delete(key);
+          for (const callback of entry.callbacks) {try {callback();} catch(error) {console.error(error);}}
+        }, result.ttlMs);
+      } catch (error) {
+        if (prefetchEntries.get(key) === entry) prefetchEntries.delete(key);
+        if (error.name !== "AbortError") console.error(error);
+      } finally { if (prefetchPending === controller) prefetchPending = undefined; }
+    })();
+    return entry.promise;
+  };
   const historyEntries = [];
   let historyIndex = -1;
   const historyToken = Math.random().toString(36).slice(2);
@@ -184,6 +249,7 @@ function hydrationBootstrap(
       window.parent?.postMessage({ kind: "navigate", navigation, path, source: "tuto-serverless-nextjs-runtime-preview-log" }, "*");
       return;
     }
+    if (navigation === "refresh") invalidatePrefetch();
     rememberInitialEntry();
     if (navigation === "back" || navigation === "forward") {
       const index = historyIndex + (navigation === "back" ? -1 : 1);
@@ -210,6 +276,12 @@ function hydrationBootstrap(
     let payload;
     let status = 200;
     if (!hashOnly || navigation === "refresh" || restoring) {
+      const cacheKey = currentPrefetchKey(target);
+      const prefetched = !restoring && navigation !== "refresh" ? prefetchEntries.get(cacheKey) : undefined;
+      // Never let speculative work delay an actual navigation.
+      const ticket = prefetched?.ticket;
+      if (prefetched) {prefetchEntries.delete(cacheKey); clearTimeout(prefetched.timer);}
+      prefetchPending?.abort();
       const response = await fetch(endpoint, {
         method: "POST",
         headers: { "content-type": "text/plain;charset=UTF-8" },
@@ -217,6 +289,8 @@ function hydrationBootstrap(
           kind: navigation,
           id: String(token),
           sequence: token,
+          prefetchOwner,
+          ...(ticket ? {prefetchTicket:ticket} : {}),
           revision: ${JSON.stringify(config.revision)},
           url: pathOf(target),
           state: restored?.state || globalThis.__TUTO_NEXT_ROUTER_STATE__,
@@ -226,6 +300,11 @@ function hydrationBootstrap(
         redirect: "manual",
       });
       if (token !== navigationSequence) return;
+      if (ticket && response.headers.get("x-tuto-next-prefetch") === "miss") {
+        const callbacks = [...prefetched.callbacks];
+        prefetched.callbacks.clear();
+        for (const callback of callbacks) {try {callback();} catch (error) {console.error(error);}}
+      }
       applyVirtualCookies(response);
       const location = response.headers.get("location");
       if (location) return navigate("replace", location, options);
@@ -247,7 +326,7 @@ function hydrationBootstrap(
     }
     if (payload) {
       const committed = new Promise((resolve, reject) => {
-        const id = String(token);
+        const id = payload.state?.navigationId || String(token);
         const onAbort = () => {
           navigationCommits.delete(id);
           controller.signal.removeEventListener("abort", onAbort);
@@ -269,6 +348,7 @@ function hydrationBootstrap(
       if (token !== navigationSequence) return;
     }
     kernel.router.setUrl(pathOf(target));
+    invalidatePrefetch();
     if (restoring) historyIndex = restoreIndex;
     else if (navigation === "push") {
       historyEntries.splice(historyIndex + 1);
@@ -336,6 +416,7 @@ function hydrationBootstrap(
   function applyVirtualCookies(response) {
     const encoded = response.headers.get("x-tuto-next-virtual-set-cookie");
     if (!encoded) return;
+    invalidatePrefetch();
     const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
     const setCookies = JSON.parse(new TextDecoder().decode(bytes));
     const jar = new Map();
@@ -369,6 +450,7 @@ function hydrationBootstrap(
   globalThis.__TUTO_NEXT_CALL_SERVER__ = async (actionId, args) => {
     const endpoint = ${JSON.stringify(config.actionEndpoint)};
     if (!endpoint) throw new Error("This preview has no Server Action endpoint.");
+    invalidatePrefetch();
     const body = await kernel.rscClient.encodeReply(args);
     const response = await fetch(endpoint, {
       body: JSON.stringify({
@@ -378,6 +460,7 @@ function hydrationBootstrap(
       method: "POST",
       redirect: "manual",
     });
+    invalidatePrefetch();
     applyVirtualCookies(response);
     const location = response.headers.get("location");
     if (location) {
