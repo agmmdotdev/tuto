@@ -160,8 +160,13 @@ function routeDefinition(
   options: { minimumDirectory?: string; routeSegments?: string[] } = {},
 ): NextRouteDefinition {
   const directory = path.posix.dirname(page);
-  const boundaryDirectories = ancestors(directory);
-  const directories = boundaryDirectories.filter(
+  const isDefault = /^default\./.test(path.posix.basename(page));
+  // Next's loader represents an unmatched slot as a __DEFAULT__ leaf, not
+  // the slot's normal segment tree. Its layout/child slots must not activate.
+  const boundaryDirectories = ancestors(directory).filter(
+    (entry) => !isDefault || entry !== directory,
+  );
+  const directories = isDefault ? [] : boundaryDirectories.filter(
     (entry) =>
       !options.minimumDirectory ||
       entry === options.minimumDirectory ||
@@ -217,12 +222,9 @@ function slotInformation(modulePath: string) {
   const slotIndexes = segments
     .map((segment, index) => (segment.startsWith("@") ? index : -1))
     .filter((index) => index >= 0);
-  if (slotIndexes.length > 1) {
-    throw new Error(
-      `Nested parallel route slots are not supported yet: ${modulePath}`,
-    );
-  }
-  const slotIndex = slotIndexes[0];
+  // Each page belongs to its nearest slot. Ancestor slots are separate
+  // branches whose layouts own the nested slot props.
+  const slotIndex = slotIndexes.at(-1);
   if (slotIndex === undefined) return null;
   const name = segments[slotIndex].slice(1);
   if (!name || name === "children" || name === "params") {
@@ -242,8 +244,12 @@ function interceptionInformation(modulePath: string) {
   if (segments.slice(markerIndex + 1).some((segment) => interceptionMarker(segment))) {
     throw new Error(`A route can contain only one interception marker: ${modulePath}`);
   }
-  const slot = slotInformation(modulePath);
-  const slotIndex = segments.findIndex((segment) => segment === `@${slot?.name}`);
+  const slot = slotInformation(
+    path.posix.join("app", ...segments.slice(0, markerIndex), "page.tsx"),
+  );
+  const slotIndex = slot
+    ? appSegments(slot.slotDirectory).length - 1
+    : -1;
   if (!slot || markerIndex <= slotIndex) {
     throw new Error(
       `Tuto currently supports interception routes only inside a named parallel slot: ${modulePath}`,
@@ -328,6 +334,20 @@ export function buildNextRouteManifest(
   const routes: NextRouteDefinition[] = [];
   const slotMap = new Map<string, NextParallelRouteDefinition>();
   const interceptions: NextInterceptionDefinition[] = [];
+  // Discover every slot directory, including shells whose descendants are
+  // all in nested slots. Looking only at page/default files loses those owners.
+  for (const modulePath of paths) {
+    const segments = appSegments(path.posix.dirname(modulePath));
+    segments.forEach((segment, index) => {
+      if (!segment.startsWith("@")) return;
+      const slot = slotInformation(
+        path.posix.join("app", ...segments.slice(0, index + 1), "page.tsx"),
+      )!;
+      if (!slotMap.has(slot.slotDirectory)) {
+        slotMap.set(slot.slotDirectory, { ...slot, routes: [] });
+      }
+    });
+  }
   for (const defaultPage of defaultPaths) {
     const slot = slotInformation(defaultPage);
     if (!slot) {
@@ -335,12 +355,10 @@ export function buildNextRouteManifest(
         `A default component must belong to a named parallel route slot: ${defaultPage}`,
       );
     }
-    slotMap.set(slot.slotDirectory, {
-      ...slot,
-      default: routeDefinition(paths, defaultPage, {
-        minimumDirectory: slot.slotDirectory,
-      }),
-      routes: [],
+    const interception = interceptionInformation(defaultPage);
+    slotMap.get(slot.slotDirectory)!.default = routeDefinition(paths, defaultPage, {
+      minimumDirectory: slot.slotDirectory,
+      ...(interception ? { routeSegments: interception.routeSegments } : {}),
     });
   }
   for (const page of pagePaths) {
@@ -358,7 +376,7 @@ export function buildNextRouteManifest(
       };
       slotMap.set(slot.slotDirectory, parallelRoute);
     }
-    if (interception) {
+    if (interception && interception.slotDirectory === slot.slotDirectory) {
       const route = routeDefinition(paths, page, {
         minimumDirectory: slot.slotDirectory,
         routeSegments: interception.routeSegments,
@@ -375,7 +393,10 @@ export function buildNextRouteManifest(
       });
     } else {
       parallelRoute.routes.push(
-        routeDefinition(paths, page, { minimumDirectory: slot.slotDirectory }),
+        routeDefinition(paths, page, {
+          minimumDirectory: slot.slotDirectory,
+          ...(interception ? { routeSegments: interception.routeSegments } : {}),
+        }),
       );
     }
   }
