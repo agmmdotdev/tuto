@@ -20,13 +20,13 @@ Verified on 2026-09-30 in the Tuto cloud environment with Node 24.19.0,
 Yarn 4.13.0, and Linux x64:
 
 - Immutable dependency installation and browser-kernel generation passed.
-  The kernel is 221,265 bytes and targets Next 16.3.6 / React 19.2.6.
-- `yarn test:serverless-next`: 58 tests passed, including SecureExec isolation,
+  The kernel is 223,378 bytes and targets Next 16.3.6 / React 19.2.6.
+- `yarn test:serverless-next`: 61 tests passed, including SecureExec isolation,
   streaming, cache invalidation, Cache Components, and App Router topology.
 - `yarn test:serverless-nextjs-runtime`: 111 tests passed.
-- The five Next browser checkpoints passed in installed Chromium 151 with
+- The thirteen Next browser checkpoints passed in installed Chromium 151 with
   both child-process and SecureExec execution. They cover hydration,
-  navigation, Server Actions, virtual cookies, forms, and streamed slot-local
+  persistent navigation, independent slot history, refresh/state retention, native iframe reloads, Server Actions, virtual cookies, forms, and streamed slot-local
   error/not-found boundaries, recursive slots, and ancestor error propagation.
   Firefox was not run because its download hosts
   are denied by the environment's network policy.
@@ -88,13 +88,13 @@ this upgrade. The nested dashboard differential below uses Next 16.3.6.
 | Captured and bound Server Actions        | Inline closure values are Flight-serialized, artifact-key encrypted, and combined with explicit `.bind()` args                |
 | Progressive Server Action forms          | React `$ACTION_ID_*`/`$ACTION_REF_*` fields decode without JavaScript and return refreshed SSR HTML                           |
 | Action form hooks                        | `useActionState` form-state replay and `useFormStatus` pending UI work in the shared client kernel                            |
-| Action refresh                           | The action result and re-rendered route return in one Flight payload and the browser applies both                             |
+| Action refresh                           | The action result returns in Flight; the browser requests a state-aware refresh of its active branches                             |
 | Action proxy lifecycle                   | Generated action POSTs carry `next-action`, args, headers, and cookies through proxy matching/dispatch                        |
 | Action rewrites and termination          | Continued/internal-rewritten actions execute; proxy redirects and direct responses short-circuit                              |
 | Action request mutations                 | Proxy request headers/cookies reach `headers()`/`cookies()` in both the action and refreshed RSC render                       |
 | Action response cookies                  | Proxy/action cookies cross IPC and update a virtual preview jar without mutating Tuto host cookies                            |
 | Redirect and not-found control flow      | Next's redirect/not-found errors preserve 307/308/303/404 semantics and select eligible nested not-found boundaries           |
-| Preview navigation                       | `next/link`, `useRouter`, raw internal links, redirects, replace, refresh, back, and forward hand off to host-owned history   |
+| Preview navigation                       | `next/link`, `useRouter`, raw links, replace/refresh and native back/forward apply Flight to the current document with per-entry slot state   |
 | React `cache`                            | Repeated calls share one value during a render and recompute for the next RSC request                                         |
 | `unstable_cache`                         | Next's own wrapper executes inside its work/request AsyncLocalStorage contexts over a Tuto adapter                            |
 | Cache Components                         | Next SWC rewrites `"use cache"` functions and async Server Components through its real cache wrapper                          |
@@ -373,17 +373,52 @@ the hard request a 404, matching the important full-reload safety rule. A slot
 that only contains `default.tsx` is supported, which is useful for an initially
 empty modal.
 
-The Tuto workbench owns soft-navigation history. It sends the previous virtual
-location as Next's internal `Next-URL` request header. The runtime uses that
-location for the retained primary tree and matches the new location against
-the interception marker. Thus navigating from `/dashboard` to `/photo/42` can
-keep the dashboard tree and render the intercepted photo inside `@modal`, while
-a direct request or refresh of `/photo/42` renders the canonical photo page.
-All of those branches are compiled into one immutable artifact and execute in
-the existing per-request worker or SecureExec isolate; no student server is
-started.
+The hydrated preview owns state-only native history entries. Each entry stores
+its visible virtual URL and the independently selected primary/named branches.
+The server validates the generation, page identities, branch URLs, and layout
+owner parameters before rendering those branches. Soft navigation matches the
+new URL, retaining unmatched active slots and implicit children under unchanged
+owners. Back/forward restores the saved branch selection rather than inferring
+it from a previous URL; `router.refresh()` re-renders that same selection.
 
-This checkpoint deliberately models the stateless portion of the App Router.
+Flight navigation responses are applied to the existing React root and preview
+document. Layout identities follow physical directories and dynamic owner
+parameters. Bounded React Activity caches preserve client state in visited
+branches (up to eight entries at each branch boundary); eviction or a new source
+generation remounts that state. Defaults remain leaf fallbacks for named slots.
+Implicit `children` defaults restore a slot-only hard load beneath its owning
+layouts. New route CSS arrives with the navigation response.
+
+An intercepted photo retains its background tree during soft navigation and
+refresh, closes on back, and reopens on forward. A fresh hard request uses the
+canonical photo page. Successful navigation also updates the private preview
+capability's current URL, guarded by a per-document session and monotonic
+sequence, so native iframe reloads hard-render that URL rather than the initial
+background. The capability remains process-local and expires after five minutes.
+The workbench keeps the iframe mounted across response tabs; manual Send and
+source saves deliberately start a fresh document/generation.
+
+`usePathname` and read-only `useSearchParams` react to URL changes. `useParams`
+merges the selected branches, and selected-layout-segment hooks use their owning
+layout context. The pinned 16.3.6 implementation exposes `(__SLOT__)` in named
+slot segment arrays and selects the last named-slot segment; Tuto follows that
+observed behavior rather than silently filtering internal/group segments.
+
+Stock Next 16.3.6 without Cache Components was exercised with the same fixture
+for retained active slots/layouts, refresh, modal back/forward, error reset,
+not-found, slot-only hard defaults, replace, and hash navigation. It remounts
+visited pages after leaving them; Tuto's bounded Activity cache additionally
+preserves their state. This is an explicit behavior difference, not proof of
+Next's complete Cache Components/bfcache implementation. The Tuto browser suite
+also exercises its actual POST/GET capability transport and sandboxed iframe.
+
+Navigation currently buffers Flight before commit and keeps the previous view
+visible while waiting. Prefetch remains a no-op; incremental navigation loading
+UI/PPR, `bfcacheId`, native host-address-bar URLs and full unknown-route/global
+fallback state preservation are not established by this checkpoint. Server
+Actions use the current virtual URL and perform an additional state-aware
+refresh after receiving their result.
+
 Named slots can nest recursively, including repeated names under different
 owners, route groups, dynamic/catch-all parameters, and slots inside an
 intercepted branch. Each slot requires a layout in its owner directory. The
@@ -408,12 +443,9 @@ retain HTTP 200 after headers are sent; Tuto's buffered fallback may report
 500/404 instead, while streamed responses preserve the committed status.
 Tuto retains its existing missing-default behavior (request-time 404); the
 stock 16.3.6 webpack loader also validates required named-slot defaults during
-compilation. This slice does not add that compiler validation or generalized
-implicit-`children` default recovery.
-
-Independent per-slot navigation history and persistent soft navigation remain
-separate work. The host still reconstructs a preview document for navigation;
-this change does not establish full App Router client-state parity.
+compilation. This slice does not add that compiler validation. Implicit
+`children` default recovery is now covered for slot-only hard loads. These
+checkpoints do not establish full App Router parity.
 
 ### Next 16.2.6 boundary differential
 
@@ -473,7 +505,7 @@ restarting Next.js.
 
 ## Deliberately not supported yet
 
-- Independent per-slot navigation history and persistent client/layout state on navigation
+- Prefetch, incremental/streamed navigation Flight and loading UI, full `bfcacheId`/Cache Components router caching
 - Incremental Server Action Flight responses and streamed proxy terminal responses
 - External proxy rewrites and streaming proxy IPC
 - Next's webpack/Turbopack/PostCSS plugin pipeline, Sass, Tailwind directives, and CSS `url()` asset graph rewriting
@@ -503,13 +535,8 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next production slice is a Vercel canary: deploy one Fluid function with
-SecureExec enabled, exercise cold/warm/edit requests and concurrent workspaces,
-and record native-module loading, wall/CPU/RSS, timeout cleanup, and LRU
-behavior. After that, load-test the already-packaged cache coordinator across
-regions and fuzz the sandbox capability boundary.
-
-If deployment access is unavailable, the next local framework slice is
-persistent navigation with independent slot-history state. That requires a
-host-owned router-state tree and applying Flight updates to the current preview
-document; recursive stateless slot rendering is already covered above.
+The next local framework slice is incremental navigation Flight: retain the
+current preview root and slot history while streaming a new segment's loading
+boundary, then commit its resolved tree. Add slow/fast navigation and failure
+regressions before implementing prefetch. Deployment validation and sandbox
+security review remain separate operational work.

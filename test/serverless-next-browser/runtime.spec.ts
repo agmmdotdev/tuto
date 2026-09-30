@@ -1,3 +1,4 @@
+import { POST as requestPOST } from "../../app/api/serverless/nextjs-runtime/request/route";
 import { expect, test } from "@playwright/test";
 import type { WorkspaceFile } from "../../lib/ide/types";
 import { nestedParallelWorkspace } from "../serverless-next/fixtures/nested-parallel-workspace";
@@ -271,6 +272,13 @@ test("dispatches a Server Action and applies its refreshed Flight tree", async (
         revision: string;
       };
     };
+    if (!(payload as { action?: unknown }).action) {
+      const response = await requestPOST(new Request(actionEndpoint, {
+        body: route.request().postData()!, headers: { "content-type": "text/plain;charset=UTF-8" }, method: "POST",
+      }));
+      await route.fulfill({ body: Buffer.from(await response.arrayBuffer()), headers: Object.fromEntries(response.headers), status: response.status });
+      return;
+    }
     expect(payload.action.revision).toBe(artifact.revision);
     const response = await executeNextServerActionArtifact(
       artifact,

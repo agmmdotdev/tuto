@@ -13,6 +13,7 @@ const manifestPath = path.resolve(
 );
 const entry = `
 import * as React from "react";
+import createPreviewRouter from "./lib/serverless-next/client-router.cjs";
 import * as ReactJsxRuntime from "react/jsx-runtime";
 import * as ReactDom from "react-dom";
 import * as ReactDomClient from "react-dom/client";
@@ -38,40 +39,11 @@ const actionClient = Object.freeze({
   },
 });
 
-function currentPreviewUrl() {
-  return new URL(globalThis.__TUTO_NEXT_URL__ || "/", "http://next.local");
-}
-
-function navigate(kind, href) {
-  const target = href === undefined ? currentPreviewUrl() : new URL(String(href), currentPreviewUrl());
-  if (target.origin !== "http://next.local") return false;
-  const navigation = globalThis.__TUTO_NEXT_NAVIGATE__;
-  if (typeof navigation !== "function") return false;
-  navigation(kind, target.pathname + target.search + target.hash);
-  return true;
-}
-
-const navigationModule = Object.freeze({
-  usePathname() {
-    return currentPreviewUrl().pathname;
-  },
-  useRouter() {
-    return React.useMemo(() => ({
-      back: () => navigate("back"),
-      forward: () => navigate("forward"),
-      prefetch: async () => {},
-      push: (href) => navigate("push", href),
-      refresh: () => navigate("refresh"),
-      replace: (href) => navigate("replace", href),
-    }), []);
-  },
-  useSearchParams() {
-    return currentPreviewUrl().searchParams;
-  },
-});
+const previewRouter = createPreviewRouter(React);
+const { navigate, navigationModule } = previewRouter;
 
 const Link = React.forwardRef(function Link(
-  { children, href, onClick, replace = false, target, ...props },
+  { children, href, onClick, replace = false, scroll = true, prefetch: _prefetch, target, ...props },
   ref,
 ) {
   const value = href instanceof URL ? href.href : String(href);
@@ -89,7 +61,7 @@ const Link = React.forwardRef(function Link(
         event.altKey ||
         (target && target !== "_self")
       ) return;
-      if (navigate(replace ? "replace" : "push", value)) event.preventDefault();
+      if (navigate(replace ? "replace" : "push", value, { scroll })) event.preventDefault();
     },
     ref,
     target,
@@ -111,11 +83,14 @@ function ErrorFallback({ digest, errorComponent: ErrorComponent, message }) {
 class SegmentErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { error: null };
+    this.state = { error: null, resetKey: props.resetKey };
     this.reset = () => {
       navigate("refresh");
       this.setState({ error: null });
     };
+  }
+  static getDerivedStateFromProps(props, state) {
+    return props.resetKey !== state.resetKey ? { error: null, resetKey: props.resetKey } : null;
   }
   static getDerivedStateFromError(error) {
     return { error };
@@ -140,7 +115,10 @@ function isNotFoundError(error) {
 class SegmentNotFoundBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { error: null };
+    this.state = { error: null, resetKey: props.resetKey };
+  }
+  static getDerivedStateFromProps(props, state) {
+    return props.resetKey !== state.resetKey ? { error: null, resetKey: props.resetKey } : null;
   }
   static getDerivedStateFromError(error) {
     return { error };
@@ -153,6 +131,7 @@ class SegmentNotFoundBoundary extends React.Component {
 }
 
 const runtimeModule = Object.freeze({
+  ...previewRouter,
   ErrorFallback,
   Link,
   SegmentErrorBoundary,
@@ -171,6 +150,8 @@ globalThis.__TUTO_NEXT_CLIENT_KERNEL__ = Object.freeze({
     "react/jsx-runtime": ReactJsxRuntime,
     "react-dom": ReactDom,
   }),
+  react: React,
+  router: previewRouter,
   reactDomClient: ReactDomClient,
   rscClient: RscClient,
 });

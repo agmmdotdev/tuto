@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { delimiter, resolve } from "node:path";
+import type { NextNavigationRequest } from "./navigation";
 import type { NextRequestArtifact } from "./artifact";
 import { getNextExecutionMode } from "./execution-mode";
 import { compileNextProxyMatchers } from "./proxy-matchers";
@@ -363,6 +364,14 @@ export class NextRscWorkerPool {
       url,
     });
     return this.result(reply);
+  }
+
+  async navigate(artifact: NextRequestArtifact, url: string, headers: Array<[string, string]>, navigation: NextNavigationRequest) {
+    if (!this.installed.has(artifact.generation)) {
+      await this.send({ artifact, type: "install" });
+      this.installed.add(artifact.generation);
+    }
+    return this.result(await this.send({ generation: artifact.generation, headers, navigation, type: "navigation", url }));
   }
 
   async renderStream(
