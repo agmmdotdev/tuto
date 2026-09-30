@@ -21,13 +21,14 @@ Yarn 4.13.0, and Linux x64:
 
 - Immutable dependency installation and browser-kernel generation passed.
   The kernel is 221,265 bytes and targets Next 16.3.6 / React 19.2.6.
-- `yarn test:serverless-next`: 50 tests passed, including SecureExec isolation,
+- `yarn test:serverless-next`: 58 tests passed, including SecureExec isolation,
   streaming, cache invalidation, Cache Components, and App Router topology.
 - `yarn test:serverless-nextjs-runtime`: 111 tests passed.
-- The three Next browser checkpoints passed in installed Chromium 151 with
+- The five Next browser checkpoints passed in installed Chromium 151 with
   both child-process and SecureExec execution. They cover hydration,
   navigation, Server Actions, virtual cookies, forms, and streamed slot-local
-  error/not-found boundaries. Firefox was not run because its download hosts
+  error/not-found boundaries, recursive slots, and ancestor error propagation.
+  Firefox was not run because its download hosts
   are denied by the environment's network policy.
 - `yarn lint`, `yarn typecheck:tsgo`, and
   `yarn typecheck:next-cache-coordinator` passed. Lint reports three existing
@@ -43,8 +44,9 @@ Yarn 4.13.0, and Linux x64:
   Suspense shell, delayed Server Component content, and hydration script.
   This remains a local smoke test, not a deployed Fluid Compute canary.
 
-The stock-server boundary differential and performance measurements below
-remain historical Next 16.2.6 evidence; they were not remeasured for this upgrade.
+The explicitly labeled Next 16.2.6 boundary differential and performance
+measurements below remain historical evidence; they were not remeasured for
+this upgrade. The nested dashboard differential below uses Next 16.3.6.
 
 ## Covered by the Next 16.3.6 regression suite
 
@@ -55,7 +57,7 @@ remain historical Next 16.2.6 evidence; they were not remeasured for this upgrad
 | Nested App Router pages                  | Static, dynamic, catch-all, and optional catch-all matchers select pages without `next build`                                 |
 | Layout composition                       | Root and nested layouts wrap the matched page; route groups are omitted from URL patterns                                     |
 | Templates                                | Root, nested, and slot `template.tsx` files remount around the selected branch without becoming layouts                       |
-| Parallel routes                          | Named slots are layout props; hard requests select a matching branch or `default.tsx`, with missing defaults returning 404    |
+| Parallel routes                          | Recursively nested named slots are props of their owning layouts; hard requests match branches or select `default.tsx`, with missing defaults returning 404 |
 | Intercepted routes                       | `(.)`, `(..)`, `(..)(..)`, and `(...)` markers target a named slot on soft navigation while direct loads use canonical pages  |
 | Global error boundary                    | A Client Component `app/global-error.tsx` replaces the root document when no normal segment boundary can handle a failure     |
 | Segment boundary manifest                | Every matched segment retains its own `error.tsx`, `loading.tsx`, and `not-found.tsx` instead of only the nearest file        |
@@ -382,11 +384,36 @@ the existing per-request worker or SecureExec isolate; no student server is
 started.
 
 This checkpoint deliberately models the stateless portion of the App Router.
-It supports one level of named slots and interceptions inside those slots,
-including slot-local error, loading, and not-found lifecycle. It does not yet
-preserve an independent navigation history for every slot or nest a second
-`@slot`. Those cases fail validation instead of pretending to be fully
-Next-compatible.
+Named slots can nest recursively, including repeated names under different
+owners, route groups, dynamic/catch-all parameters, and slots inside an
+intercepted branch. Each slot requires a layout in its owner directory. The
+manifest assigns each page to its nearest slot; rendering, style collection,
+and boundary lookup recurse only through the layouts selected for the request.
+Inactive owners do not activate their descendant slots.
+
+An unmatched `default.tsx` is a leaf fallback: it does not mount that slot's
+normal layout or its descendant slots. Default props contain only parameters
+from its ancestor segments. A page error or `notFound()` selects its local
+boundary; a same-segment layout error skips that segment's own error component
+and uses its owner's boundary. Errors can bubble through multiple slot owners
+while preserving the catching owner's other branches.
+
+The nested dashboard fixture was checked against a stock Next 16.3.6 development
+server in Chromium for matched pages, defaults, page errors, not-found, and
+layout errors. The runtime and browser regressions cover four levels of slots,
+local streaming/Suspense, hydration and interaction, nested default failures,
+ancestor error propagation, route groups, optional catch-all matching, missing
+defaults, and nested interceptions. Stock streamed page error/not-found cases
+retain HTTP 200 after headers are sent; Tuto's buffered fallback may report
+500/404 instead, while streamed responses preserve the committed status.
+Tuto retains its existing missing-default behavior (request-time 404); the
+stock 16.3.6 webpack loader also validates required named-slot defaults during
+compilation. This slice does not add that compiler validation or generalized
+implicit-`children` default recovery.
+
+Independent per-slot navigation history and persistent soft navigation remain
+separate work. The host still reconstructs a preview document for navigation;
+this change does not establish full App Router client-state parity.
 
 ### Next 16.2.6 boundary differential
 
@@ -446,7 +473,7 @@ restarting Next.js.
 
 ## Deliberately not supported yet
 
-- Nested parallel slots and independent per-slot navigation history
+- Independent per-slot navigation history and persistent client/layout state on navigation
 - Incremental Server Action Flight responses and streamed proxy terminal responses
 - External proxy rewrites and streaming proxy IPC
 - Next's webpack/Turbopack/PostCSS plugin pipeline, Sass, Tailwind directives, and CSS `url()` asset graph rewriting
@@ -483,5 +510,6 @@ behavior. After that, load-test the already-packaged cache coordinator across
 regions and fuzz the sandbox capability boundary.
 
 If deployment access is unavailable, the next local framework slice is
-independent slot-history state followed by nested parallel slots. Both require
-a host-owned router-state tree rather than another component-boundary shim.
+persistent navigation with independent slot-history state. That requires a
+host-owned router-state tree and applying Flight updates to the current preview
+document; recursive stateless slot rendering is already covered above.

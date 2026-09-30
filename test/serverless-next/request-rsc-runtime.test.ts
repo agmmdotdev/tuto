@@ -15,6 +15,7 @@ import {
 } from "../../lib/serverless-next/compiler";
 import { clearNextTransformCacheForTests } from "../../lib/serverless-next/next-compiler-adapter";
 import { buildNextRouteManifest } from "../../lib/serverless-next/route-manifest";
+import { nestedParallelWorkspace } from "./fixtures/nested-parallel-workspace";
 import {
   clearNextCacheAdapterForTests,
   setNextCacheAdapter,
@@ -1772,7 +1773,7 @@ describe("request-compiled Next RSC runtime", () => {
       workspaceKey: "next-app-router-topology",
     });
 
-    expect(artifact.version).toBe(11);
+    expect(artifact.version).toBe(12);
     expect(artifact.router.routes.map((route) => route.pattern)).toEqual([
       "/dashboard/settings",
       "/photo/[id]",
@@ -2048,6 +2049,219 @@ describe("request-compiled Next RSC runtime", () => {
         },
       ),
     ).rejects.toThrow(/global-error.*use client/i);
+  });
+
+  test("renders recursive slots with their own layouts, defaults, params, and styles", async () => {
+    const artifact = await compileNextRequestWorkspace(nestedParallelWorkspace(), {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "next-nested-parallel",
+    });
+    const repeatedInfo = artifact.router.parallelRoutes.filter((slot) => slot.name === "info");
+    expect(repeatedInfo.map((slot) => slot.ownerDirectory)).toEqual([
+      "app",
+      "app/@workspace",
+    ]);
+    const detail = artifact.router.parallelRoutes.find((slot) => slot.name === "detail")!;
+    expect(detail.ownerDirectory).toBe("app/@workspace/projects/[project]/@metrics");
+    expect(detail.routes[0].pattern).toBe("/projects/[project]/[outcome]");
+    expect(detail.routes[0].layouts).toEqual([
+      "app/@workspace/projects/[project]/@metrics/@detail/layout.tsx",
+    ]);
+
+    const defaults = await renderNextRequestArtifact(artifact, { url: "/projects/acme" });
+    const defaultHtml = (await defaults.text()).split("<script", 1)[0];
+    expect(defaults.status).toBe(200);
+    expect(defaultHtml).toContain("metrics-default:<!-- -->acme");
+    expect(defaultHtml).not.toContain("detail-default");
+    expect(defaultHtml).not.toContain('data-metrics-layout="true"');
+    expect(defaultHtml).not.toContain('data-badge="true"');
+    expect(defaultHtml).toContain("root-info");
+    expect(defaultHtml).toContain("workspace-info");
+
+    const matched = await renderNextRequestArtifact(artifact, { url: "/projects/acme%20team/ok" });
+    const html = (await matched.text()).split("<script", 1)[0];
+    expect(matched.status).toBe(200);
+    expect(html).toContain("detail:<!-- -->acme team<!-- -->:<!-- -->ok");
+    expect(html).toContain("badge:<!-- -->acme team<!-- -->:<!-- -->default");
+    expect(html).toContain('data-workspace-layout="true"');
+    expect(html).toContain('data-project-layout="true"');
+    expect(html).toContain('data-metrics-layout="true"');
+    expect(html).toContain('data-detail-layout="true"');
+    expect(html).toContain('data-tuto-next-style="app/@workspace/projects/[project]/@metrics/@detail/[outcome]/detail.css"');
+    expect(html).not.toContain("inactive slot executed");
+    expect(html).not.toContain("metrics-default");
+    expect(html).not.toContain("detail-default");
+  });
+
+  test("localizes nested page and layout failures to the owning parallel branch", async () => {
+    const artifact = await compileNextRequestWorkspace(nestedParallelWorkspace(), {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "next-nested-boundaries",
+    });
+    for (const [outcome, status, expected] of [
+      ["error", 500, "detail-error:<!-- -->detail page exploded"],
+      ["missing", 404, "detail-not-found"],
+      ["layout-error", 500, "metrics-error:<!-- -->detail layout exploded"],
+    ] as const) {
+      const response = await renderNextRequestArtifact(artifact, {
+        headers: outcome === "layout-error" ? { "x-detail-layout-error": "1" } : {},
+        url: `/projects/acme/${outcome}`,
+      });
+      const html = (await response.text()).split("<script", 1)[0];
+      expect(response.status, html).toBe(status);
+      expect(html).toContain(expected);
+      expect(html).toContain(`primary:<!-- -->acme<!-- -->:<!-- -->${outcome}`);
+      expect(html).toContain(`metrics:<!-- -->${outcome}`);
+      expect(html).toContain("workspace-info");
+      expect(html).toContain("root-info");
+      if (outcome === "layout-error") {
+        expect(html).not.toContain('data-detail-layout="true"');
+        expect(html).not.toContain("detail-error:");
+      } else {
+        expect(html).toContain('data-detail-layout="true"');
+        expect(html).toContain("badge:<!-- -->acme<!-- -->:<!-- -->default");
+        expect(html).toContain('data-tuto-next-style="app/@workspace/projects/[project]/@metrics/@detail/boundary.css"');
+      }
+    }
+  });
+
+  test("matches optional catch-all nested slots through route groups", async () => {
+    const files = nestedParallelWorkspace().filter((file) => ![
+      "app/projects/[project]/page.tsx",
+      "app/@workspace/projects/[project]/page.tsx",
+    ].includes(file.path)).map((file) => {
+      const filePath = file.path
+        .replace("app/@workspace/projects/", "app/@workspace/(dashboard)/projects/")
+        .replaceAll("/[outcome]/", "/[[...outcome]]/");
+      return {
+        ...file,
+        path: filePath,
+        ...(filePath.endsWith("@detail/[[...outcome]]/page.tsx") ? {
+          content: `export default async function Page({ params }) {
+            const { project, outcome } = await params;
+            return <p>nested-catchall:{project}:{outcome?.join("|") ?? "empty"}</p>;
+          }`,
+        } : {}),
+      };
+    });
+    const artifact = await compileNextRequestWorkspace(files, {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "next-nested-catchall",
+    });
+    for (const [suffix, expected] of [["", "empty"], ["/one/two%20words", "one|two words"]]) {
+      const response = await renderNextRequestArtifact(artifact, { url: `/projects/acme${suffix}` });
+      expect(response.status).toBe(200);
+      expect((await response.text()).split("<script", 1)[0])
+        .toContain(`nested-catchall:<!-- -->acme<!-- -->:<!-- -->${expected}`);
+    }
+  });
+
+  test("catches nested default failures without replacing the owner's other branch", async () => {
+    const artifact = await compileNextRequestWorkspace(nestedParallelWorkspace(), {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "next-nested-default-error",
+    });
+    const response = await renderNextRequestArtifact(artifact, {
+      headers: { "x-badge-error": "1" }, url: "/projects/acme/ok",
+    });
+    const html = (await response.text()).split("<script", 1)[0];
+    expect(response.status).toBe(500);
+    expect(html).toContain("detail-error:<!-- -->badge default exploded");
+    expect(html).toContain("detail:<!-- -->acme<!-- -->:<!-- -->ok");
+    expect(html).toContain("metrics:<!-- -->ok");
+    expect(html).toContain('data-detail-layout="true"');
+  });
+
+  test("bubbles nested errors past layouts without a boundary to their ancestor owner", async () => {
+    const files = nestedParallelWorkspace().filter((file) => !file.path.endsWith("/error.tsx"));
+    files.push({
+      content: `"use client";
+        export default function Error({ error }) { return <p>project-error:{error.message}</p>; }`,
+      language: "tsx", path: "app/@workspace/projects/[project]/error.tsx",
+    });
+    const artifact = await compileNextRequestWorkspace(files, {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "next-nested-ancestor-error",
+    });
+    const response = await renderNextRequestArtifact(artifact, { url: "/projects/acme/error" });
+    const html = (await response.text()).split("<script", 1)[0];
+    expect(response.status).toBe(500);
+    expect(html).toContain("project-error:<!-- -->detail page exploded");
+    expect(html).toContain("workspace:<!-- -->acme");
+    expect(html).toContain("primary:<!-- -->acme<!-- -->:<!-- -->error");
+    expect(html).toContain("workspace-info");
+    expect(html).not.toContain('data-metrics-layout="true"');
+    expect(html).not.toContain('data-detail-layout="true"');
+  });
+
+  test("renders nested slots inside an intercepted branch without affecting its canonical route", async () => {
+    const sources: Record<string, string> = {
+      "app/layout.tsx": `export default function Layout({ children, panel }) { return <html><body>{children}<aside>{panel}</aside></body></html>; }`,
+      "app/feed/page.tsx": `export default function Page() { return <p>canonical-feed</p>; }`,
+      "app/photo/[id]/page.tsx": `export default async function Page({ params }) { return <p>canonical-photo:{(await params).id}</p>; }`,
+      "app/@panel/default.tsx": `export default function Default() { return null; }`,
+      "app/@panel/feed/layout.tsx": `export default function Layout({ children, modal }) { return <section>{children}{modal}</section>; }`,
+      "app/@panel/feed/page.tsx": `export default function Page() { return <p>panel-feed</p>; }`,
+      "app/@panel/feed/@modal/default.tsx": `export default function Default() { return null; }`,
+      "app/@panel/feed/@modal/(..)photo/[id]/layout.tsx": `export default function Layout({ children, facts }) { return <div data-nested-modal>{children}{facts}</div>; }`,
+      "app/@panel/feed/@modal/(..)photo/[id]/page.tsx": `export default async function Page({ params }) { return <p>intercepted-photo:{(await params).id}</p>; }`,
+      "app/@panel/feed/@modal/(..)photo/[id]/@facts/default.tsx": `export default async function Default({ params }) { return <p>nested-facts:{(await params).id}</p>; }`,
+      "app/@panel/feed/@modal/(..)photo/[id]/@facts/page.tsx": `export default async function Page({ params }) { return <p>nested-matched-facts:{(await params).id}</p>; }`,
+    };
+    const artifact = await compileNextRequestWorkspace(Object.entries(sources).map(([filePath, content]) => ({
+      content, language: "tsx", path: filePath,
+    })), {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "next-nested-interception",
+    });
+    expect(artifact.router.interceptions).toHaveLength(1);
+    const intercepted = await renderNextRequestArtifact(artifact, {
+      headers: { "next-url": "/feed" }, url: "/photo/42",
+    });
+    const html = (await intercepted.text()).split("<script", 1)[0];
+    expect(intercepted.status).toBe(200);
+    expect(html).toContain("canonical-feed");
+    expect(html).toContain("panel-feed");
+    expect(html).toContain("intercepted-photo:<!-- -->42");
+    expect(html).toContain("nested-matched-facts:<!-- -->42");
+    expect(html).not.toContain("canonical-photo:");
+    const direct = await renderNextRequestArtifact(artifact, { url: "/photo/42" });
+    const directHtml = (await direct.text()).split("<script", 1)[0];
+    expect(direct.status).toBe(200);
+    expect(directHtml).toContain("canonical-photo:<!-- -->42");
+    expect(directHtml).not.toContain("nested-matched-facts:");
+  });
+
+  test("reports an unmatched nested slot without activating unrelated slot owners", async () => {
+    const files = nestedParallelWorkspace()
+      .filter((file) => !file.path.endsWith("@detail/default.tsx"))
+      .map((file) => ({ ...file, path: file.path.replace("@detail/[outcome]/", "@detail/ok/") }));
+    const artifact = await compileNextRequestWorkspace(files, {
+      serverReferenceHashSalt: actionSalt,
+      workspaceKey: "next-nested-missing-default",
+    });
+    const response = await renderNextRequestArtifact(artifact, { url: "/projects/acme/unmatched" });
+    const html = (await response.text()).split("<script", 1)[0];
+    expect(response.status).toBe(404);
+    expect(html).toContain('data-tuto-next-missing-slot="detail"');
+    expect(html).toContain("metrics:<!-- -->unmatched");
+    expect(html).toContain("primary:<!-- -->acme");
+    expect(html).not.toContain("inactive slot executed");
+  });
+
+  test("discovers layout-only slot ancestors and validates nested slot ownership", () => {
+    const files = [
+      "app/layout.tsx", "app/page.tsx", "app/@panel/layout.tsx",
+      "app/@panel/@deep/default.tsx",
+    ];
+    const manifest = buildNextRouteManifest(files);
+    expect(manifest.parallelRoutes.map((slot) => slot.slotDirectory)).toEqual([
+      "app/@panel", "app/@panel/@deep",
+    ]);
+    expect(() => buildNextRouteManifest(files.filter((file) => file !== "app/@panel/layout.tsx")))
+      .toThrow(/@deep requires a layout in app\/@panel/);
+    expect(() => buildNextRouteManifest([...files, "app/@panel/@params/page.tsx"]))
+      .toThrow(/Invalid parallel route slot @params/);
   });
 
   test("normalizes every interception marker like the pinned Next core", () => {

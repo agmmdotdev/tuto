@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { WorkspaceFile } from "../../lib/ide/types";
+import { nestedParallelWorkspace } from "../serverless-next/fixtures/nested-parallel-workspace";
 import { compileNextRequestWorkspace } from "../../lib/serverless-next/compiler";
 import {
   executeNextRequestArtifact,
@@ -327,6 +328,76 @@ test("dispatches a Server Action and applies its refreshed Flight tree", async (
   await expect(page.locator("[data-form-submit]")).toHaveText("Saving");
   await expect(page.locator("[data-form-state]")).toHaveText("rsc|idle|lesson");
   await expect(page.locator("[data-form-submit]")).toHaveText("Save");
+});
+
+test("hydrates recursive parallel slots and their independently streamed boundaries", async ({ page }) => {
+  const artifact = await compileNextRequestWorkspace(nestedParallelWorkspace(), {
+    serverReferenceHashSalt: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    workspaceKey: "browser-nested-parallel-checkpoint",
+  });
+  for (const outcome of ["ok", "error", "missing", "layout-error", "badge-error"] as const) {
+    const document = await (
+      await renderHydratableNextRequestArtifactStream(artifact, {
+        headers: outcome === "layout-error" ? { "x-detail-layout-error": "1" }
+          : outcome === "badge-error" ? { "x-badge-error": "1" } : {},
+        url: `/projects/acme/${outcome}`,
+      })
+    ).text();
+    if (outcome !== "layout-error" && outcome !== "badge-error") {
+      expect(document.split("<script", 1)[0]).toContain("detail-loading");
+    }
+    await page.setContent(document, { waitUntil: "load" });
+    await expect.poll(() => page.evaluate(() =>
+      (globalThis as typeof globalThis & { __TUTO_NEXT_HYDRATED__?: string }).__TUTO_NEXT_HYDRATED__,
+    )).toBe(artifact.generation);
+    await expect(page.locator("[data-primary]")).toHaveText(`primary:acme:${outcome}`);
+    await expect(page.locator("[data-metrics-page]")).toHaveText(`metrics:${outcome}`);
+    await expect(page.locator("[data-root-info]")).toHaveText("root-info");
+    await expect(page.locator("[data-workspace-info]")).toHaveText("workspace-info");
+    if (outcome === "ok") {
+      await expect(page.locator("[data-detail-page]")).toHaveCSS("color", "rgb(102, 51, 153)");
+      await page.locator("[data-nested-counter]").click();
+      await expect(page.locator("[data-nested-counter]")).toHaveText("nested-count:1");
+    } else if (outcome === "layout-error") {
+      // A layout failure can be reconstructed before streaming starts; later
+      // production Flight errors are redacted by React.
+      await expect(page.locator("[data-metrics-error]")).toHaveText(/^metrics-error:(detail layout exploded|Minified React error #441;)/);
+      await expect(page.locator("[data-detail-layout]")).toHaveCount(0);
+      await expect(page.locator("[data-detail-error]")).toHaveCount(0);
+    } else if (outcome === "badge-error") {
+      await expect(page.locator("[data-badge] [data-detail-error]")).toHaveText(/^detail-error:(badge default exploded|Minified React error #441;)/);
+      await expect(page.locator("[data-detail-page]")).toBeVisible();
+      await page.locator("[data-nested-counter]").click();
+      await expect(page.locator("[data-nested-counter]")).toHaveText("nested-count:1");
+    } else {
+      const boundary = page.locator(outcome === "error" ? "[data-detail-error]" : "[data-detail-not-found]");
+      await expect(boundary).toHaveText(outcome === "error" ? /^detail-error:Minified React error #441;/ : "detail-not-found");
+      await expect(boundary).toHaveCSS("color", "rgb(12, 34, 56)");
+      await expect(page.locator("[data-badge]")).toHaveText("badge:acme:default");
+    }
+  }
+});
+
+test("bubbles streamed nested errors to an ancestor slot owner", async ({ page }) => {
+  const files = nestedParallelWorkspace().filter((file) => !file.path.endsWith("/error.tsx"));
+  files.push({
+    content: `"use client";
+      export default function Error({ error }) { return <p data-project-error>project-error:{error.message}</p>; }`,
+    language: "tsx", path: "app/@workspace/projects/[project]/error.tsx",
+  });
+  const artifact = await compileNextRequestWorkspace(files, {
+    serverReferenceHashSalt: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    workspaceKey: "browser-nested-ancestor-checkpoint",
+  });
+  const document = await (await renderHydratableNextRequestArtifactStream(artifact, {
+    url: "/projects/acme/error",
+  })).text();
+  await page.setContent(document, { waitUntil: "load" });
+  await expect(page.locator("[data-project-error]")).toHaveText(/^project-error:Minified React error #441;/);
+  await expect(page.locator("[data-metrics-layout]")).toHaveCount(0);
+  await expect(page.locator("[data-workspace-page]")).toHaveText("workspace:acme");
+  await expect(page.locator("[data-primary]")).toHaveText("primary:acme:error");
+  await expect(page.locator("[data-workspace-info]")).toHaveText("workspace-info");
 });
 
 test("hydrates streamed parallel-route error and not-found boundaries locally", async ({
