@@ -5,6 +5,7 @@ export type NextRouterBranch = {
 };
 
 export type NextRouterState = {
+  navigationId?: string;
   version: 1;
   revision: string;
   url: string;
@@ -13,6 +14,7 @@ export type NextRouterState = {
 };
 
 export type NextNavigationRequest = {
+  id?: string;
   kind: "push" | "replace" | "refresh" | "restore";
   state?: NextRouterState;
 };

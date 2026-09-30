@@ -20,14 +20,19 @@ Verified on 2026-09-30 in the Tuto cloud environment with Node 24.19.0,
 Yarn 4.13.0, and Linux x64:
 
 - Immutable dependency installation and browser-kernel generation passed.
-  The kernel is 223,378 bytes and targets Next 16.3.6 / React 19.2.6.
-- `yarn test:serverless-next`: 61 tests passed, including SecureExec isolation,
+  The kernel is 224,049 bytes and targets Next 16.3.6 / React 19.2.6.
+- `yarn test:serverless-next`: 63 tests passed, including SecureExec isolation,
   streaming, cache invalidation, Cache Components, and App Router topology.
 - `yarn test:serverless-nextjs-runtime`: 111 tests passed.
-- The thirteen Next browser checkpoints passed in installed Chromium 151 with
+- The eighteen Next browser checkpoints passed in installed Chromium 151 with
   both child-process and SecureExec execution. They cover hydration,
   persistent navigation, independent slot history, refresh/state retention, native iframe reloads, Server Actions, virtual cookies, forms, and streamed slot-local
   error/not-found boundaries, recursive slots, and ancestor error propagation.
+  New navigation cases use a real incremental HTTP response: primary and nested
+  slot loading, successive Suspense chunks, cancellation/ordering, streamed
+  errors/redirects/notFound, and a partially streamed modal background. Four
+  equivalent cases also pass against stock Next 16.3.6; a fifth specifically
+  checks Tuto transport cancellation before handing the shell to React.
   Firefox was not run because its download hosts
   are denied by the environment's network policy.
 - `yarn lint`, `yarn typecheck:tsgo`, and
@@ -412,12 +417,29 @@ preserves their state. This is an explicit behavior difference, not proof of
 Next's complete Cache Components/bfcache implementation. The Tuto browser suite
 also exercises its actual POST/GET capability transport and sandboxed iframe.
 
-Navigation currently buffers Flight before commit and keeps the previous view
-visible while waiting. Prefetch remains a no-op; incremental navigation loading
-UI/PPR, `bfcacheId`, native host-address-bar URLs and full unknown-route/global
+Navigation POST responses stream the Flight envelope, including independently
+resolving primary/nested slot subtrees, into the existing React root. A React
+transition reveals each changed branch's `loading.tsx` while owner layouts stay
+interactive. The branch cache contains its own loading/error boundaries, so a
+new entry can show loading without replacing its shared owner. URL/history
+ownership follows the root's commit; newer requests invalidate older ownership.
+Before a model is handed to React, superseding navigation aborts its transport
+and propagates request cancellation to the worker stream. After React owns it,
+the remaining Flight is drained: aborting then would reject unresolved references
+in retained/hidden Activity branches and can remount the background. This keeps
+existing worker bounds; it does not promise immediate termination of an already
+rendered background task or concurrent execution within a SecureExec workspace.
+
+Streamed redirects preserve Next's control-flow digest and push/replace kind;
+custom error/not-found boundaries receive late failures after headers are sent.
+Such responses retain HTTP 200. Without a loading boundary, the transition keeps
+the previous view until the changed tree can commit. Prefetch remains a no-op;
+PPR, `bfcacheId`, native host-address-bar URLs and full unknown-route/global
 fallback state preservation are not established by this checkpoint. Server
-Actions use the current virtual URL and perform an additional state-aware
-refresh after receiving their result.
+Actions use the current virtual URL and schedule an additional state-aware
+refresh after receiving their result. They do not await its React commit inside
+the action promise, which would deadlock a pending `useActionState` transition.
+Action Flight itself remains buffered.
 
 Named slots can nest recursively, including repeated names under different
 owners, route groups, dynamic/catch-all parameters, and slots inside an
@@ -505,7 +527,7 @@ restarting Next.js.
 
 ## Deliberately not supported yet
 
-- Prefetch, incremental/streamed navigation Flight and loading UI, full `bfcacheId`/Cache Components router caching
+- Prefetch, PPR and full `bfcacheId`/Cache Components router caching
 - Incremental Server Action Flight responses and streamed proxy terminal responses
 - External proxy rewrites and streaming proxy IPC
 - Next's webpack/Turbopack/PostCSS plugin pipeline, Sass, Tailwind directives, and CSS `url()` asset graph rewriting
@@ -535,8 +557,11 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next local framework slice is incremental navigation Flight: retain the
-current preview root and slot history while streaming a new segment's loading
-boundary, then commit its resolved tree. Add slow/fast navigation and failure
-regressions before implementing prefetch. Deployment validation and sandbox
-security review remain separate operational work.
+The next bounded framework slice is prefetch: reuse streamed route data with
+explicit generation, cookie, action-invalidation and selected-slot cache keys,
+without changing the visible URL or private reload capability until navigation
+commits. Test stale entries, intercepted destinations and competing navigation
+before adding automatic Link scheduling. This checkpoint deliberately leaves
+prefetch unchanged rather than treating arbitrary cached Flight as reusable.
+Deployment validation and sandbox security review remain separate operational
+work.

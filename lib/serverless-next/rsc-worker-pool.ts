@@ -378,6 +378,7 @@ export class NextRscWorkerPool {
     artifact: NextRequestArtifact,
     url: string,
     headers: Array<[string, string]> = [],
+    navigation?: NextNavigationRequest,
   ): Promise<NextFlightStreamWorkerResult> {
     if (!this.installed.has(artifact.generation)) {
       await this.send({ artifact, type: "install" });
@@ -386,7 +387,8 @@ export class NextRscWorkerPool {
     const reply = await this.openStream({
       generation: artifact.generation,
       headers,
-      type: "render-stream",
+      type: navigation ? "navigation-stream" : "render-stream",
+      navigation,
       url,
     });
     return {

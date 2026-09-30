@@ -160,6 +160,8 @@ function hydrationBootstrap(
   const endpoint = ${JSON.stringify(config.actionEndpoint)};
   let navigationSequence = 0;
   let pendingNavigation;
+  const navigationCommits = new Map();
+  globalThis.__TUTO_NEXT_NAVIGATION_COMMIT__ = (id) => navigationCommits.get(id)?.();
   const historyEntries = [];
   let historyIndex = -1;
   const historyToken = Math.random().toString(36).slice(2);
@@ -194,8 +196,13 @@ function hydrationBootstrap(
     const target = new URL(path || pathOf(previous), previous);
     if (target.origin !== "http://next.local") throw new Error("Preview navigation must stay inside the workspace.");
     const token = ++navigationSequence;
-    pendingNavigation?.abort();
-    pendingNavigation = new AbortController();
+    // React may retain unresolved Flight references in active/hidden branches.
+    // Cancel transport before handing it to React; afterward drain the bounded
+    // render while sequence checks prevent it from taking navigation ownership.
+    pendingNavigation?.invalidate?.();
+    if (!pendingNavigation?.rendered) pendingNavigation?.abort();
+    const controller = new AbortController();
+    pendingNavigation = controller;
     historyEntries[historyIndex] = snapshot();
     const restoring = navigation === "restore";
     const restored = restoring ? historyEntries[restoreIndex] : undefined;
@@ -208,13 +215,14 @@ function hydrationBootstrap(
         headers: { "content-type": "text/plain;charset=UTF-8" },
         body: JSON.stringify({ navigation: {
           kind: navigation,
+          id: String(token),
           sequence: token,
           revision: ${JSON.stringify(config.revision)},
           url: pathOf(target),
           state: restored?.state || globalThis.__TUTO_NEXT_ROUTER_STATE__,
           headers: Object.fromEntries(actionHeaders.entries()),
         } }),
-        signal: pendingNavigation.signal,
+        signal: controller.signal,
         redirect: "manual",
       });
       if (token !== navigationSequence) return;
@@ -237,11 +245,30 @@ function hydrationBootstrap(
         element.textContent = style.css;
       }
     }
-    kernel.router.setUrl(pathOf(target));
     if (payload) {
-      globalThis.__TUTO_NEXT_ROUTER_STATE__ = payload.state;
-      kernel.modules["react-dom"].flushSync(() => root.render(payload.root));
+      const committed = new Promise((resolve, reject) => {
+        const id = String(token);
+        const onAbort = () => {
+          navigationCommits.delete(id);
+          controller.signal.removeEventListener("abort", onAbort);
+          delete controller.invalidate;
+          reject(new DOMException("Navigation cancelled", "AbortError"));
+        };
+        controller.invalidate = onAbort;
+        controller.signal.addEventListener("abort", onAbort, {once:true});
+        navigationCommits.set(id, () => {
+          controller.signal.removeEventListener("abort", onAbort);
+          navigationCommits.delete(id);
+          delete controller.invalidate;
+          resolve();
+        });
+      });
+      controller.rendered = true;
+      kernel.react.startTransition(() => root.render(payload.root));
+      await committed;
+      if (token !== navigationSequence) return;
     }
+    kernel.router.setUrl(pathOf(target));
     if (restoring) historyIndex = restoreIndex;
     else if (navigation === "push") {
       historyEntries.splice(historyIndex + 1);
@@ -375,7 +402,9 @@ function hydrationBootstrap(
     const payload = await kernel.rscClient.createFromReadableStream(response.body, {
       callServer: globalThis.__TUTO_NEXT_CALL_SERVER__,
     });
-    await navigate("refresh", globalThis.__TUTO_NEXT_URL__, { scroll: false });
+    // A form action transition must finish before its refresh can commit.
+    // Waiting for that commit here would make useActionState wait on itself.
+    globalThis.__TUTO_NEXT_NAVIGATE__("refresh", globalThis.__TUTO_NEXT_URL__, { scroll: false });
     return payload.actionResult;
   };
   const model = await kernel.rscClient.createFromReadableStream(stream, {
@@ -1189,8 +1218,11 @@ export async function executeNextRequestArtifact(
   } else if (method === "GET" || method === "HEAD") {
     response = options.navigation
       ? await (async () => {
-          const result = await getNextRscWorkerPool().navigate(artifact, url, headers, options.navigation!);
-          return new Response(result.flight.length ? Uint8Array.from(result.flight) : null, {
+          const result = options.stream
+            ? await getNextRscWorkerPool().renderStream(artifact, url, headers, options.navigation!)
+            : await getNextRscWorkerPool().navigate(artifact, url, headers, options.navigation!);
+          const body = result.flight instanceof ReadableStream ? result.flight : result.flight.length ? Uint8Array.from(result.flight) : null;
+          return new Response(body, {
             headers: flightResultHeaders(artifact, result, result.contentType), status: result.status,
           });
         })()

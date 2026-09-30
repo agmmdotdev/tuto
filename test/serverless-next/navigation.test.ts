@@ -82,3 +82,57 @@ test("drops retained nested branches when a dynamic layout owner changes", async
   expect(second.state.slots["app/dashboard/[project]/@team/@detail"]).toBeUndefined();
   expect(second.state.primary.url).toBe("/dashboard/beta/views");
 });
+
+test("returns a navigation shell before primary and nested slot Flight chunks resolve", async () => {
+  const {streamedNavigationWorkspace} = await import("./fixtures/streamed-navigation-workspace");
+  const artifact = await compileNextRequestWorkspace(streamedNavigationWorkspace(), {
+    workspaceKey:"streamed-navigation-unit", serverReferenceHashSalt:"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+  });
+  const home = await executeNextRequestArtifact(artifact, {url:"/dashboard",navigation:{kind:"push"}});
+  const {state} = await client.createFromReadableStream(home.body!, {});
+  const response = await executeNextRequestArtifact(artifact, {
+    url:"/dashboard/slow", navigation:{kind:"push",state,id:"stream-unit"}, stream:true,
+  });
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toContain("text/x-component");
+  const reader = response.body!.getReader();
+  let shell = "";
+  let chunks = 0;
+  while (!shell.includes("loading primary")) {
+    const chunk = await reader.read();
+    expect(chunk.done).toBe(false);
+    shell += new TextDecoder().decode(chunk.value);
+    chunks++;
+  }
+  expect(shell).toContain("stream-unit");
+  expect(shell).not.toContain('"stream details"');
+  let complete = shell;
+  for (;;) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    complete += new TextDecoder().decode(chunk.value);
+    chunks++;
+  }
+  expect(complete).toContain('"stream details"');
+  expect(complete).toContain('"detail-slow"');
+  expect(chunks).toBeGreaterThan(1);
+});
+
+test("cancels a partially consumed navigation stream and releases its worker for refresh", async () => {
+  const {streamedNavigationWorkspace} = await import("./fixtures/streamed-navigation-workspace");
+  const artifact = await compileNextRequestWorkspace(streamedNavigationWorkspace(), {
+    workspaceKey:"streamed-navigation-cancel-unit", serverReferenceHashSalt:"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+  });
+  const response = await executeNextRequestArtifact(artifact, {
+    url:"/dashboard/slow", navigation:{kind:"push",id:"cancel-unit"}, stream:true,
+  });
+  const reader = response.body!.getReader();
+  expect((await reader.read()).done).toBe(false);
+  await reader.cancel("superseded navigation");
+  const refreshed = await executeNextRequestArtifact(artifact, {
+    url:"/dashboard", navigation:{kind:"refresh",id:"refresh-unit"}, stream:true,
+  });
+  const {state} = await client.createFromReadableStream(refreshed.body!, {});
+  expect(state.navigationId).toBe("refresh-unit");
+  expect(state.primary.page).toBe("app/dashboard/page.tsx");
+});

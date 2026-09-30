@@ -361,6 +361,7 @@ export async function POST(request: Request) {
       const response = await executeNextRequestArtifact(artifact, {
         headers: payload.navigation.headers,
         navigation: payload.navigation,
+        stream: true,
         url: url.pathname + url.search,
       });
       const token = new URL(request.url).searchParams.get("preview");
@@ -377,7 +378,10 @@ export async function POST(request: Request) {
       }
       response.headers.set("access-control-allow-origin", "*");
       response.headers.set("cache-control", "no-store");
-      return virtualizeActionCookies(response);
+      const streamed = response.body ? new Response(response.body.pipeThrough(new TransformStream(), {signal:request.signal}), {
+        headers:response.headers, status:response.status, statusText:response.statusText,
+      }) : response;
+      return virtualizeActionCookies(streamed);
     }
     if (payload.action) {
       isActionRequest = true;
