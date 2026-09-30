@@ -51,6 +51,7 @@ export class NextSsrWorkerPool {
       process.execPath,
       ["--max-old-space-size=256", workerPath],
       {
+        env: { ...process.env, NODE_ENV: "production" },
         stdio: ["ignore", "ignore", "ignore", "ipc"],
       },
     );

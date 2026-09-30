@@ -413,6 +413,11 @@ export async function compileNextRequestWorkspaceWithStatus(
     workspaceKey: string;
   },
 ): Promise<NextWorkspaceCompileResult> {
+  if (clientKernelManifest.next !== NEXT_COMPILER_VERSION) {
+    throw new Error(
+      `The Next browser kernel targets ${clientKernelManifest.next}, but the request compiler targets ${NEXT_COMPILER_VERSION}. Run yarn build:serverless-next-kernel before compiling a workspace.`,
+    );
+  }
   const startedAt = performance.now();
   const workspaceKey = sanitizeWorkspaceKey(options.workspaceKey);
   const actionSalt = sanitizeActionSalt(options.serverReferenceHashSalt);

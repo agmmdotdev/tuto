@@ -9,13 +9,13 @@ export async function loadNextLiteRenderer(
   artifact: NextLiteBuildArtifact,
 ): Promise<NextLiteRenderer> {
   const moduleUrl = `${pathToFileURL(artifact.entryFile).href}?t=${Date.now()}`;
-  const module = (await import(/* webpackIgnore: true */ moduleUrl)) as Partial<NextLiteRenderer>;
+  const rendererModule = (await import(/* webpackIgnore: true */ moduleUrl)) as Partial<NextLiteRenderer>;
 
-  if (typeof module.renderNextLiteRequest !== "function") {
+  if (typeof rendererModule.renderNextLiteRequest !== "function") {
     throw new Error("next-lite artifact does not export renderNextLiteRequest().");
   }
 
   return {
-    renderNextLiteRequest: module.renderNextLiteRequest,
+    renderNextLiteRequest: rendererModule.renderNextLiteRequest,
   };
 }

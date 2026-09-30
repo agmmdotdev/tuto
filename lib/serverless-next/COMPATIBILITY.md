@@ -4,12 +4,49 @@ This is the real-Next direction for Tuto. It does not use Next Lite, `next
 build`, `next dev`, Wasmer, or a per-student server. Student source is compiled
 against a shared, precompiled runtime and executed for a request.
 
-The compiler adapter is intentionally pinned to Next.js 16.2.6 because the RSC
+The compiler adapter is intentionally pinned to Next.js 16.3.6 because the RSC
 SWC loader options and bundled React Flight modules are internal Next APIs, not
 a stable public compiler SDK. A Next upgrade must rebuild the browser kernel
 and rerun the compatibility suite.
 
-## Verified in the current checkpoint
+The compiler rejects a browser kernel built against another Next version.
+RSC and SSR workers use production mode to match the shared browser kernel;
+production Flight redacts uncaught error messages while retaining Next's
+control-flow digests for streamed not-found boundaries.
+
+## Next 16.3.6 regression checkpoint
+
+Verified on 2026-09-30 in the Tuto cloud environment with Node 24.19.0,
+Yarn 4.13.0, and Linux x64:
+
+- Immutable dependency installation and browser-kernel generation passed.
+  The kernel is 221,265 bytes and targets Next 16.3.6 / React 19.2.6.
+- `yarn test:serverless-next`: 50 tests passed, including SecureExec isolation,
+  streaming, cache invalidation, Cache Components, and App Router topology.
+- `yarn test:serverless-nextjs-runtime`: 111 tests passed.
+- The three Next browser checkpoints passed in installed Chromium 151 with
+  both child-process and SecureExec execution. They cover hydration,
+  navigation, Server Actions, virtual cookies, forms, and streamed slot-local
+  error/not-found boundaries. Firefox was not run because its download hosts
+  are denied by the environment's network policy.
+- `yarn lint`, `yarn typecheck:tsgo`, and
+  `yarn typecheck:next-cache-coordinator` passed. Lint reports three existing
+  warnings in the playground and measurement scripts.
+- The Next 16.3.6 Turbopack production build passed with Google Fonts CSS
+  supplied through `NEXT_FONT_GOOGLE_MOCKED_RESPONSES` and real Space Grotesk
+  / IBM Plex Mono WOFF2 files served locally from Fontsource packages. The
+  ordinary build's Google Fonts requests are denied by this environment;
+  live font retrieval remains unverified. The build retains the existing
+  TanStack runtime-store tracing warning.
+- A local `VERCEL=1`, SecureExec-enabled production server returned HTTP 200
+  for the app, the request control API, and a streamed preview containing the
+  Suspense shell, delayed Server Component content, and hydration script.
+  This remains a local smoke test, not a deployed Fluid Compute canary.
+
+The stock-server boundary differential and performance measurements below
+remain historical Next 16.2.6 evidence; they were not remeasured for this upgrade.
+
+## Covered by the Next 16.3.6 regression suite
 
 | Capability                               | Evidence                                                                                                                      |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
@@ -40,7 +77,7 @@ and rerun the compatibility suite.
 | Proxy terminal responses                 | `redirect`, JSON/direct responses, status, headers, cookies, bodies, and `waitUntil` are verified                             |
 | `"use client"` boundary                  | Next's server transform produces its client-reference proxy                                                                   |
 | Client Component bundle                  | Only the student client closure is bundled against the shared kernel                                                          |
-| Browser hydration                        | A Playwright checkpoint verifies `hydrateRoot` and a stateful click when a browser binary is installed                        |
+| Browser hydration                        | Chromium Playwright checkpoints verify `hydrateRoot` and interaction in child-process and SecureExec modes                     |
 | Immutable generations                    | Source, compiler, kernel, workspace identity, and action salt determine the revision                                          |
 | Unchanged request reuse                  | The hot artifact cache returns the same immutable artifact                                                                    |
 | Server-only edit                         | A new generation changes only the edited server module; the client manifest and bundle are reused                             |
@@ -375,7 +412,7 @@ that the primary page and sibling slots remain mounted.
 
 ## Local checkpoint measurement
 
-A single local run on 2026-09-02 measured the full compile plus hydratable HTML
+A single Next 16.2.6 local run on 2026-09-02 measured the full compile plus hydratable HTML
 request below. These are development-machine directional numbers, not Vercel
 benchmarks. CPU and RSS deltas cover the Vitest host process; child-worker memory
 is separate and each worker has a 256 MB V8 heap ceiling.
