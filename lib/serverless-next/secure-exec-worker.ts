@@ -560,6 +560,10 @@ export class NextSecureExecWorker {
       `${runtimeRoot}/stream-runtime.cjs`,
       await readFile(path.join(sourceRoot, "stream-runtime.cjs"), "utf8"),
     );
+    await filesystem.writeFile(
+      `${runtimeRoot}/client-router.cjs`,
+      await readFile(path.join(sourceRoot, "client-router.cjs"), "utf8"),
+    );
     if (this.kind === "rsc") {
       await filesystem.writeFile(
         `${runtimeRoot}/cache-runtime.cjs`,

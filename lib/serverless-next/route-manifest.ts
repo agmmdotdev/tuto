@@ -166,7 +166,7 @@ function routeDefinition(
   const boundaryDirectories = ancestors(directory).filter(
     (entry) => !isDefault || entry !== directory,
   );
-  const directories = isDefault ? [] : boundaryDirectories.filter(
+  const directories = isDefault && options.minimumDirectory ? [] : (isDefault ? ancestors(directory) : boundaryDirectories).filter(
     (entry) =>
       !options.minimumDirectory ||
       entry === options.minimumDirectory ||
@@ -332,6 +332,7 @@ export function buildNextRouteManifest(
   }
 
   const routes: NextRouteDefinition[] = [];
+  const defaults: NextRouteDefinition[] = [];
   const slotMap = new Map<string, NextParallelRouteDefinition>();
   const interceptions: NextInterceptionDefinition[] = [];
   // Discover every slot directory, including shells whose descendants are
@@ -351,9 +352,8 @@ export function buildNextRouteManifest(
   for (const defaultPage of defaultPaths) {
     const slot = slotInformation(defaultPage);
     if (!slot) {
-      throw new Error(
-        `A default component must belong to a named parallel route slot: ${defaultPage}`,
-      );
+      defaults.push(routeDefinition(paths, defaultPage));
+      continue;
     }
     const interception = interceptionInformation(defaultPage);
     slotMap.get(slot.slotDirectory)!.default = routeDefinition(paths, defaultPage, {
@@ -482,6 +482,7 @@ export function buildNextRouteManifest(
       ? { rootNotFound: routeFile(paths, "app", "not-found") }
       : {}),
     routes,
+    defaults: defaults.sort(compareRoutes),
   };
 }
 

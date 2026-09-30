@@ -687,20 +687,31 @@ export default async function ModalPhoto({ params }: { params: Promise<{ id: str
   ];
 }
 
-function findElementProp(value: unknown, prop: string): unknown {
+async function findElementProp(value: unknown, prop: string): Promise<unknown> {
+  value = await value;
   if (!value || typeof value !== "object") return undefined;
   const record = value as Record<string, unknown>;
+  if (typeof record._init === "function") {
+    try { return await findElementProp((record._init as (payload: unknown) => unknown)(record._payload), prop); }
+    catch (pending) {
+      if (pending && typeof (pending as PromiseLike<unknown>).then === "function") {
+        await pending;
+        return findElementProp(value, prop);
+      }
+      throw pending;
+    }
+  }
   const props = record.props as Record<string, unknown> | undefined;
   if (props && prop in props) return props[prop];
   if (props) {
     for (const child of Object.values(props)) {
-      const found = findElementProp(child, prop);
+      const found = await findElementProp(child, prop);
       if (found !== undefined) return found;
     }
   }
   if (Array.isArray(value)) {
     for (const child of value) {
-      const found = findElementProp(child, prop);
+      const found = await findElementProp(child, prop);
       if (found !== undefined) return found;
     }
   }
@@ -1538,7 +1549,7 @@ describe("request-compiled Next RSC runtime", () => {
         },
       },
     );
-    const action = findElementProp(model, "action");
+    const action = await findElementProp(model, "action");
     expect(action).toBeTypeOf("function");
     const formData = new FormData();
     formData.set("title", "lesson");
@@ -1761,7 +1772,7 @@ describe("request-compiled Next RSC runtime", () => {
       'data-navigation-state="true">/navigation<!-- -->:<!-- -->lesson',
     );
     expect(navigationHtml).toContain(
-      "path: path || globalThis.__TUTO_NEXT_URL__",
+      'kind: "navigation-state"',
     );
     expect(navigationHtml).not.toContain("window.location.assign");
   });
@@ -1773,7 +1784,7 @@ describe("request-compiled Next RSC runtime", () => {
       workspaceKey: "next-app-router-topology",
     });
 
-    expect(artifact.version).toBe(12);
+    expect(artifact.version).toBe(13);
     expect(artifact.router.routes.map((route) => route.pattern)).toEqual([
       "/dashboard/settings",
       "/photo/[id]",

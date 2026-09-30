@@ -87,6 +87,7 @@ export type ServerlessHttpWorkbenchConfig = {
   previewTitle: string;
   showPreviewAsStatic?: boolean;
   virtualNavigation?: boolean;
+  persistentNavigation?: boolean;
   streamingPreview?: boolean;
   defaultCompiler?: ServerlessExpressCompilerKind;
   compilerOptions?: CompilerOption[];
@@ -326,6 +327,8 @@ export function ServerlessExpressIdeWorkbench({
   const [requestError, setRequestError] = useState<string | null>(null);
   const [responseTab, setResponseTab] = useState<ResponseTab>("preview");
   const outputAnchorRef = useRef<HTMLDivElement | null>(null);
+  const previewFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const previewActivePathRef = useRef<string | null>(null);
   const previewHistoryRef = useRef({ entries: ["/"], index: 0 });
   const previewNavigationTokenRef = useRef(0);
 
@@ -607,6 +610,9 @@ export function ServerlessExpressIdeWorkbench({
       delete next[selectedFile.path];
       return next;
     });
+    if (config.persistentNavigation && previewActivePathRef.current) {
+      setActiveRequest((current) => ({ ...current, path: previewActivePathRef.current! }));
+    }
     setRequestVersion((value) => value + 1);
   }
 
@@ -618,6 +624,7 @@ export function ServerlessExpressIdeWorkbench({
       const nextHeaders = parseHeadersText(requestHeadersText);
       const nextBody = nextMethod === "GET" ? "" : requestBodyText;
       previewHistoryRef.current = { entries: [nextPath], index: 0 };
+      previewActivePathRef.current = nextPath;
 
       setRequestError(null);
       setActiveRequest({
@@ -755,10 +762,21 @@ export function ServerlessExpressIdeWorkbench({
             navigation?: string;
             path?: string;
             timestamp?: string;
+            status?: number;
           }
         | undefined;
 
       if (payload?.source !== config.htmlPreviewSource) {
+        return;
+      }
+
+      if (config.persistentNavigation && event.source !== previewFrameRef.current?.contentWindow) return;
+      if (config.persistentNavigation && payload.kind === "navigation-state" && typeof payload.path === "string") {
+        previewActivePathRef.current = normalizeRequestPath(payload.path);
+        setRequestPath(previewActivePathRef.current);
+        setRequestError(null);
+        setBuildState("ready");
+        setResponseView((current) => current ? { ...current, status: payload.status ?? current.status } : current);
         return;
       }
 
@@ -805,7 +823,7 @@ export function ServerlessExpressIdeWorkbench({
     return () => {
       window.removeEventListener("message", handlePreviewMessage);
     };
-  }, [config.htmlPreviewSource]);
+  }, [config.htmlPreviewSource, config.persistentNavigation]);
 
   const outputEntries = useMemo(() => {
     const buildEntries = buildDiagnostics.map((entry) => ({
@@ -1034,7 +1052,7 @@ export function ServerlessExpressIdeWorkbench({
             <div className="flex min-h-0 flex-col bg-[#1e1e1e]">
               <div className="flex h-9 items-center justify-between border-b border-[#2a2d2e] px-4 text-xs uppercase tracking-[0.12em] text-[#858585]">
                 <span>
-                  {activeRequest.method} {activeRequest.path}
+                  {activeRequest.method} {previewActivePathRef.current ?? activeRequest.path}
                 </span>
                 <span>{responseLabel}</span>
               </div>
@@ -1065,15 +1083,17 @@ export function ServerlessExpressIdeWorkbench({
                 )}
               </div>
               <div className="min-h-0 flex-1 bg-[#ffffff]">
-                {responseTab === "preview" && (previewHtml || previewUrl) ? (
+                {(responseTab === "preview" || config.persistentNavigation) && (previewHtml || previewUrl) && (
                   <iframe
-                    className="h-full w-full border-0"
+                    ref={previewFrameRef}
+                    className={responseTab === "preview" ? "h-full w-full border-0" : "hidden"}
                     sandbox="allow-scripts"
                     src={previewUrl ?? undefined}
                     srcDoc={previewUrl ? undefined : (previewDocument ?? "")}
                     title={config.previewTitle}
                   />
-                ) : responseTab === "headers" ? (
+                )}
+                {responseTab === "preview" && (previewHtml || previewUrl) ? null : responseTab === "headers" ? (
                   <pre className="h-full overflow-auto bg-[#111111] p-4 font-mono text-sm text-[#d4d4d4]">
                     {prettyHeaders ?? "No response headers yet."}
                   </pre>

@@ -1,3 +1,4 @@
+import type { NextNavigationRequest } from "@/lib/serverless-next/navigation";
 import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import type { BuildDiagnostic, WorkspaceFile } from "@/lib/ide/types";
@@ -56,12 +57,14 @@ function diagnostic(message: string): BuildDiagnostic {
 
 function injectPreviewBridge(html: string) {
   return html.includes("</body>")
-    ? html.replace("</body>", `${previewBridgeScript}</body>`)
+    ? html.replace("</body>", () => `${previewBridgeScript}</body>`)
     : `${html}${previewBridgeScript}`;
 }
 
 type PreviewCapability = {
   expiresAt: number;
+  navigationSequence?: number;
+  navigationSession?: string;
   headers: Array<[string, string]>;
   revision: string;
   url: string;
@@ -146,6 +149,12 @@ async function readPayload(request: Request) {
       revision?: string;
       url?: string;
     };
+    navigation?: NextNavigationRequest & {
+      revision: string;
+      url: string;
+      sequence?: number;
+      headers?: Record<string, string>;
+    };
     files?: WorkspaceFile[];
     request?: {
       body?: string;
@@ -219,8 +228,12 @@ export async function GET(request: Request) {
         status: 409,
       });
     }
+    capability.navigationSession = randomBytes(16).toString("base64url");
+    capability.navigationSequence = 0;
+    const actionEndpoint = new URL(request.url);
+    actionEndpoint.searchParams.set("navigationSession", capability.navigationSession);
     let response = await nextRuntime.executeNextRequestArtifact(artifact, {
-      actionEndpoint: request.url,
+      actionEndpoint: actionEndpoint.href,
       headers: capability.headers,
       hydrate: true,
       method: "GET",
@@ -330,6 +343,42 @@ export async function POST(request: Request) {
       return virtualizeActionCookies(response);
     }
     const payload = await readPayload(request);
+    if (payload.navigation) {
+      isActionRequest = true;
+      if (typeof payload.navigation.revision !== "string" || typeof payload.navigation.url !== "string") {
+        throw new Error("The preview navigation request is incomplete.");
+      }
+      const [{ getNextRequestArtifact }, { executeNextRequestArtifact }] = await Promise.all([
+        import("../../../../../lib/serverless-next/artifact"),
+        import("../../../../../lib/serverless-next/runtime"),
+      ]);
+      const artifact = getNextRequestArtifact(payload.navigation.revision);
+      if (!artifact) return new Response("The preview generation is no longer hot. Render the workspace again.", {
+        headers: { "access-control-allow-origin": "*", "cache-control": "no-store" }, status: 409,
+      });
+      const url = new URL(payload.navigation.url, "http://next.local");
+      if (url.origin !== "http://next.local") throw new Error("Preview navigation must stay inside the workspace.");
+      const response = await executeNextRequestArtifact(artifact, {
+        headers: payload.navigation.headers,
+        navigation: payload.navigation,
+        url: url.pathname + url.search,
+      });
+      const token = new URL(request.url).searchParams.get("preview");
+      const capability = resolvePreviewCapability(token);
+      const sequence = payload.navigation.sequence;
+      if (capability?.revision === artifact.revision &&
+          capability.navigationSession === new URL(request.url).searchParams.get("navigationSession") && Number.isSafeInteger(sequence) &&
+          sequence! > (capability.navigationSequence ?? 0) &&
+          (response.headers.get("content-type") ?? "").startsWith("text/x-component")) {
+        // Native iframe reloads must hard-render the current virtual URL, without soft slot history.
+        capability.url = url.pathname + url.search;
+        capability.headers = [...new Headers(payload.navigation.headers).entries()];
+        capability.navigationSequence = sequence;
+      }
+      response.headers.set("access-control-allow-origin", "*");
+      response.headers.set("cache-control", "no-store");
+      return virtualizeActionCookies(response);
+    }
     if (payload.action) {
       isActionRequest = true;
       const [{ getNextRequestArtifact }, { executeNextServerActionArtifact }] =

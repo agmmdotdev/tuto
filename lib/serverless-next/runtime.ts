@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import type { NextNavigationRequest } from "./navigation";
 import type { NextRequestArtifact } from "./artifact";
 import { matchNextRouteHandler } from "./route-manifest";
 import {
@@ -24,6 +25,7 @@ export type NextRouteHandlerRequest = NextRuntimeRequest & {
 export type NextExecuteRequest = NextRouteHandlerRequest & {
   actionEndpoint?: string;
   hydrate?: boolean;
+  navigation?: NextNavigationRequest;
   loading?: boolean;
   stream?: boolean;
 };
@@ -42,7 +44,7 @@ async function flightToHtml(
   const styles = styleElements(artifact, result.stylePaths);
   if (!styles) return html;
   if (html.includes("</head>")) {
-    return html.replace("</head>", `${styles}</head>`);
+    return html.replace("</head>", () => `${styles}</head>`);
   }
   return `${styles}${html}`;
 }
@@ -155,14 +157,123 @@ function hydrationBootstrap(
   const kernel = globalThis.__TUTO_NEXT_CLIENT_KERNEL__;
   const actionHeaders = new Headers(${JSON.stringify(config.headers)});
   globalThis.__TUTO_NEXT_URL__ = ${JSON.stringify(config.url)};
-  globalThis.__TUTO_NEXT_NAVIGATE__ = (navigation, path) => {
+  const endpoint = ${JSON.stringify(config.actionEndpoint)};
+  let navigationSequence = 0;
+  let pendingNavigation;
+  const historyEntries = [];
+  let historyIndex = -1;
+  const historyToken = Math.random().toString(36).slice(2);
+  const pathOf = (url) => url.pathname + url.search + url.hash;
+  function snapshot() {
+    return {
+      path: globalThis.__TUTO_NEXT_URL__,
+      state: globalThis.__TUTO_NEXT_ROUTER_STATE__,
+      scroll: [window.scrollX, window.scrollY],
+    };
+  }
+  function rememberInitialEntry() {
+    if (historyIndex >= 0) return;
+    historyEntries.push(snapshot());
+    historyIndex = 0;
+    try { history.scrollRestoration = "manual"; history.replaceState({ tuto: historyToken, index: 0 }, ""); } catch {}
+  }
+  async function navigate(navigation, path, options = {}, restoreIndex) {
+    if (!endpoint) {
+      window.parent?.postMessage({ kind: "navigate", navigation, path, source: "tuto-serverless-nextjs-runtime-preview-log" }, "*");
+      return;
+    }
+    rememberInitialEntry();
+    if (navigation === "back" || navigation === "forward") {
+      const index = historyIndex + (navigation === "back" ? -1 : 1);
+      if (index < 0 || index >= historyEntries.length) return;
+      // The sandboxed document owns state-only history entries; its capability URL stays private.
+      history.go(index - historyIndex);
+      return;
+    }
+    const previous = new URL(globalThis.__TUTO_NEXT_URL__, "http://next.local");
+    const target = new URL(path || pathOf(previous), previous);
+    if (target.origin !== "http://next.local") throw new Error("Preview navigation must stay inside the workspace.");
+    const token = ++navigationSequence;
+    pendingNavigation?.abort();
+    pendingNavigation = new AbortController();
+    historyEntries[historyIndex] = snapshot();
+    const restoring = navigation === "restore";
+    const restored = restoring ? historyEntries[restoreIndex] : undefined;
+    const hashOnly = navigation !== "refresh" && previous.pathname === target.pathname && previous.search === target.search;
+    let payload;
+    let status = 200;
+    if (!hashOnly || navigation === "refresh" || restoring) {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "content-type": "text/plain;charset=UTF-8" },
+        body: JSON.stringify({ navigation: {
+          kind: navigation,
+          sequence: token,
+          revision: ${JSON.stringify(config.revision)},
+          url: pathOf(target),
+          state: restored?.state || globalThis.__TUTO_NEXT_ROUTER_STATE__,
+          headers: Object.fromEntries(actionHeaders.entries()),
+        } }),
+        signal: pendingNavigation.signal,
+        redirect: "manual",
+      });
+      if (token !== navigationSequence) return;
+      applyVirtualCookies(response);
+      const location = response.headers.get("location");
+      if (location) return navigate("replace", location, options);
+      if (!(response.headers.get("content-type") || "").startsWith("text/x-component") || !response.body) {
+        throw new Error((await response.text()) || "The navigation returned a non-Flight response.");
+      }
+      status = response.status;
+      payload = await kernel.rscClient.createFromReadableStream(response.body, { callServer: globalThis.__TUTO_NEXT_CALL_SERVER__ });
+      if (token !== navigationSequence) return;
+      for (const style of payload.styles || []) {
+        let element = [...document.querySelectorAll("style[data-tuto-next-style]")].find((element) => element.dataset.tutoNextStyle === style.path);
+        if (!element) {
+          element = document.createElement("style");
+          element.dataset.tutoNextStyle = style.path;
+          document.head.append(element);
+        }
+        element.textContent = style.css;
+      }
+    }
+    kernel.router.setUrl(pathOf(target));
+    if (payload) {
+      globalThis.__TUTO_NEXT_ROUTER_STATE__ = payload.state;
+      kernel.modules["react-dom"].flushSync(() => root.render(payload.root));
+    }
+    if (restoring) historyIndex = restoreIndex;
+    else if (navigation === "push") {
+      historyEntries.splice(historyIndex + 1);
+      historyEntries.push(snapshot());
+      historyIndex++;
+      history.pushState({ tuto: historyToken, index: historyIndex }, "");
+    } else historyEntries[historyIndex] = snapshot();
+    if (navigation === "replace") history.replaceState({ tuto: historyToken, index: historyIndex }, "");
+    if (restoring) window.scrollTo(...(restored?.scroll || [0, 0]));
+    else if (navigation !== "refresh" && options.scroll !== false) {
+      const anchor = target.hash && document.getElementById(decodeURIComponent(target.hash.slice(1)));
+      if (anchor) anchor.scrollIntoView();
+      else window.scrollTo(0, 0);
+    }
     window.parent?.postMessage({
-      kind: "navigate",
-      navigation,
-      path: path || globalThis.__TUTO_NEXT_URL__,
+      kind: "navigation-state", navigation, path: pathOf(target), status,
       source: "tuto-serverless-nextjs-runtime-preview-log",
     }, "*");
+  }
+  globalThis.__TUTO_NEXT_NAVIGATE__ = (navigation, path, options) => {
+    navigate(navigation, path, options).catch((error) => {
+      if (error.name !== "AbortError") console.error(error);
+    });
   };
+  window.addEventListener("popstate", (event) => {
+    if (event.state?.tuto !== historyToken) return;
+    const index = event.state.index;
+    if (!historyEntries[index]) return;
+    navigate("restore", historyEntries[index].path, {}, index).catch((error) => {
+      if (error.name !== "AbortError") console.error(error);
+    });
+  });
   document.addEventListener("click", (event) => {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     const anchor = event.target instanceof Element ? event.target.closest("a[href]") : null;
@@ -234,7 +345,7 @@ function hydrationBootstrap(
     const body = await kernel.rscClient.encodeReply(args);
     const response = await fetch(endpoint, {
       body: JSON.stringify({
-        action: { actionId, body: await serializeBody(body), headers: Object.fromEntries(actionHeaders.entries()), revision: ${JSON.stringify(config.revision)}, url: ${JSON.stringify(config.url)} },
+        action: { actionId, body: await serializeBody(body), headers: Object.fromEntries(actionHeaders.entries()), revision: ${JSON.stringify(config.revision)}, url: globalThis.__TUTO_NEXT_URL__ },
       }),
       headers: { "content-type": "text/plain;charset=UTF-8" },
       method: "POST",
@@ -264,7 +375,7 @@ function hydrationBootstrap(
     const payload = await kernel.rscClient.createFromReadableStream(response.body, {
       callServer: globalThis.__TUTO_NEXT_CALL_SERVER__,
     });
-    root.render(payload.root);
+    await navigate("refresh", globalThis.__TUTO_NEXT_URL__, { scroll: false });
     return payload.actionResult;
   };
   const model = await kernel.rscClient.createFromReadableStream(stream, {
@@ -313,8 +424,9 @@ async function hydratableDocument(
       url: config.url,
     }),
   )}</script>`;
+  // Callback replacements preserve literal $&/$` sequences in generated JavaScript.
   return html.includes("</body>")
-    ? html.replace("</body>", `${scripts}</body>`)
+    ? html.replace("</body>", () => `${scripts}</body>`)
     : `${html}${scripts}`;
 }
 
@@ -340,7 +452,7 @@ function transformHydratableHtmlStream(
       url: options.url,
     });
     if (!injectedStyles && next.includes("</head>")) {
-      next = next.replace("</head>", `${options.styles}</head>`);
+      next = next.replace("</head>", () => `${options.styles}</head>`);
       injectedStyles = true;
     }
     return next;
@@ -372,7 +484,7 @@ function transformHydratableHtmlStream(
         }
         const scripts = await options.scripts;
         value = value.includes("</body>")
-          ? value.replace("</body>", `${scripts}</body>`)
+          ? value.replace("</body>", () => `${scripts}</body>`)
           : `${value}${scripts}`;
         controller.enqueue(encoder.encode(value));
       },
@@ -1075,7 +1187,14 @@ export async function executeNextRequestArtifact(
         }));
     response.headers.set("x-tuto-next-runtime-kind", "route-handler");
   } else if (method === "GET" || method === "HEAD") {
-    response = options.loading
+    response = options.navigation
+      ? await (async () => {
+          const result = await getNextRscWorkerPool().navigate(artifact, url, headers, options.navigation!);
+          return new Response(result.flight.length ? Uint8Array.from(result.flight) : null, {
+            headers: flightResultHeaders(artifact, result, result.contentType), status: result.status,
+          });
+        })()
+      : options.loading
       ? await renderHydratableNextLoadingArtifact(artifact, {
           actionEndpoint: options.actionEndpoint,
           headers,

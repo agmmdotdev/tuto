@@ -41,8 +41,8 @@ const nextTypeLibraries = [
     filePath: "types/next-navigation.d.ts",
     content: `declare module "next/navigation" {
   export interface AppRouterInstance {
-    push(href: string): void;
-    replace(href: string): void;
+    push(href: string, options?: { scroll?: boolean }): void;
+    replace(href: string, options?: { scroll?: boolean }): void;
     back(): void;
     forward(): void;
     refresh(): void;
@@ -50,7 +50,10 @@ const nextTypeLibraries = [
   }
   export function useRouter(): AppRouterInstance;
   export function usePathname(): string;
-  export function useSearchParams(): URLSearchParams;
+  export function useSearchParams(): Omit<URLSearchParams, "append" | "delete" | "set" | "sort">;
+  export function useParams<T extends Record<string, string | string[]> = Record<string, string | string[]>>(): T;
+  export function useSelectedLayoutSegment(parallelRouteKey?: string): string | null;
+  export function useSelectedLayoutSegments(parallelRouteKey?: string): string[];
   export function notFound(): never;
   export function redirect(path: string): never;
   export function permanentRedirect(path: string): never;
@@ -99,6 +102,7 @@ export function ServerlessNextjsRuntimeWorkbench({
         previewTitle: "Hydrated Next RSC preview",
         showPreviewAsStatic: false,
         virtualNavigation: true,
+        persistentNavigation: true,
         streamingPreview: true,
         defaultCompiler: "esbuild",
         compilerOptions: [{ value: "esbuild", label: "Next SWC" }],
