@@ -1,8 +1,8 @@
 {
-  "bytes": 222266,
+  "bytes": 221265,
   "file": "client-kernel.generated.js",
-  "id": "67a49b4458a31f44d2ae",
-  "next": "16.2.6",
+  "id": "a312a6de22c1f83987fd",
+  "next": "16.3.6",
   "react": "19.2.6",
   "reactDom": "19.2.6"
 }

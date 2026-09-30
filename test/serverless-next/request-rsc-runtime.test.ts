@@ -1892,7 +1892,9 @@ describe("request-compiled Next RSC runtime", () => {
     expect(streamedModalFailure.status).toBe(200);
     const streamedModalFailureHtml = await streamedModalFailure.text();
     expect(streamedModalFailureHtml).toContain("modal-loading");
-    expect(streamedModalFailureHtml).toContain("modal page exploded");
+    // Production Flight redacts uncaught error messages; the browser suite
+    // verifies that the error still resolves into the owning slot boundary.
+    expect(streamedModalFailureHtml).not.toContain("modal page exploded");
     expect(streamedModalFailureHtml).not.toContain(
       "modal-error:<!-- -->modal page exploded",
     );

@@ -179,6 +179,9 @@ export class NextRscWorkerPool {
       {
         env: {
           ...process.env,
+          // The compiler and shared browser kernel always target production.
+          // Development Flight rows cannot be decoded by that browser client.
+          NODE_ENV: "production",
           NODE_PATH: [
             process.env.NODE_PATH,
             resolve(process.cwd(), "node_modules", "next", "dist", "compiled"),

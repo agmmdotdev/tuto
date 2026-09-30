@@ -284,6 +284,8 @@ test("dispatches a Server Action and applies its refreshed Flight tree", async (
         Buffer.from(JSON.stringify(setCookies)).toString("base64"),
       );
     }
+    // Mirror the request endpoint's CORS exposure for the virtual cookie jar.
+    headers.set("access-control-expose-headers", "x-tuto-next-virtual-set-cookie");
     await route.fulfill({
       body: Buffer.from(await response.arrayBuffer()),
       headers: Object.fromEntries(headers.entries()),
@@ -341,8 +343,11 @@ test("hydrates streamed parallel-route error and not-found boundaries locally", 
         url: `/${outcome}`,
       })
     ).text();
-    expect(document).toContain("modal-loading");
-    expect(document).not.toContain(
+    // Client bundle source also contains the boundary labels; inspect the SSR
+    // shell rather than matching strings inside its hydration scripts.
+    const shell = document.split("<script", 1)[0];
+    expect(shell).toContain("modal-loading");
+    expect(shell).not.toContain(
       outcome === "error" ? "modal-error:" : "modal-not-found",
     );
     await page.setContent(document, { waitUntil: "load" });
@@ -363,7 +368,7 @@ test("hydrates streamed parallel-route error and not-found boundaries locally", 
   await render("error");
   await expect(page.locator("main")).toHaveText("primary:error");
   await expect(page.locator("[data-modal-error]")).toHaveText(
-    "modal-error:browser modal exploded",
+    /^modal-error:Minified React error #441;/,
   );
 
   await render("missing");

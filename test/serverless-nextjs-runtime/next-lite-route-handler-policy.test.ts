@@ -69,11 +69,11 @@ describe("route-handler-policy / collectRouteHandlerMethods", () => {
   });
 
   it("ignores non-function exports", () => {
-    const module: RouteHandlerModule = {
+    const routeModule: RouteHandlerModule = {
       GET: "not a function",
       POST: () => new Response(),
     };
-    expect(collectRouteHandlerMethods(module)).toEqual(["POST"]);
+    expect(collectRouteHandlerMethods(routeModule)).toEqual(["POST"]);
   });
 });
 

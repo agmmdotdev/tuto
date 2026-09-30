@@ -15,6 +15,9 @@ const eslintConfig = defineConfig([
     ".tmp/**",
     ".sessions/**",
     ".vite-dependency-cache/**",
+    ".yarn/**",
+    "dist/**",
+    "**/*.generated.*",
   ]),
 ]);
 
