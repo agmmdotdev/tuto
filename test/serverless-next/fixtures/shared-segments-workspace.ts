@@ -4,6 +4,7 @@ export function sharedSegmentsWorkspace(){
  const root=files.find(file=>file.path==="app/layout.tsx")!;
  root.content='import {probe} from "./shared-probe";\n'+root.content.replace('<Counter name="root" />','<output data-shared-root>{probe("root")}</output><Counter name="root" />');
  const additions:Record<string,string>={
+  "app/shared-mount.tsx":`"use client";import {useEffect} from "react";export default function Mount(){useEffect(()=>{globalThis.__sharedLayoutMounts=(globalThis.__sharedLayoutMounts??0)+1;},[]);return null;}`,
   "app/shared-probe.ts":`const calls={};export function probe(name){return calls[name]=(calls[name]??0)+1;}`,
   "app/shell-links.tsx":`"use client";import Link from "next/link";import {useState} from "react";import {change} from "./actions";
 export default function Links(){const [href,setHref]=useState("/dashboard/shared/one");const [status,setStatus]=useState("idle");return <>
@@ -11,8 +12,8 @@ export default function Links(){const [href,setHref]=useState("/dashboard/shared
 <Link data-shell-link="auto" href={href}>shared shell</Link>
 <button data-shell-action onClick={async()=>setStatus(await change())}>change identity</button><output data-shell-action-status>{status}</output>
 </>;}`,
-  "app/dashboard/shared/layout.tsx":`import {cookies} from "next/headers";import Counter from "../../counter";import {probe} from "../../shared-probe";
-export default async function Layout({children,params}){const jar=await cookies();return <section><output data-shared-param>{(await params).id??"none"}</output><output data-shared-layout>{probe("layout")}:{jar.get("identity")?.value??"anonymous"}</output><Counter name="shared-layout" />{children}</section>;}`,
+  "app/dashboard/shared/layout.tsx":`import {cookies} from "next/headers";import Counter from "../../counter";import Mount from "../../shared-mount";import {probe} from "../../shared-probe";
+export default async function Layout({children,params}){const jar=await cookies();return <section><Mount /><output data-shared-param>{(await params).id??"none"}</output><output data-shared-layout>{probe("layout")}:{jar.get("identity")?.value??"anonymous"}</output><Counter name="shared-layout" />{children}</section>;}`,
   "app/dashboard/shared/loading.tsx":`import {probe} from "../../shared-probe";export default function Loading(){return <p data-shared-loading>loading:{probe("loading")}</p>;}`,
  };
  for(const name of ["one","two"]){

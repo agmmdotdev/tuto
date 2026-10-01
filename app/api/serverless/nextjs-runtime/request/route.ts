@@ -442,7 +442,8 @@ export async function POST(request: Request) {
           ? nextPrefetchTickets.put({artifact, owner, key:cacheKey, epoch, body, kind,
             headers:[...response.headers.entries()], status:response.status}) : null;
         return ticket ? Response.json({ticket, kind, ttlMs:nextPrefetchTickets.ttlMs,
-          ...(kind === "shell" ? {segmentGrant:nextPrefetchTickets.issueSegments(artifact,owner,navigation.headers ?? {},sharedKeys)} : {}),
+          ...(kind === "shell" ? {segmentGrant:nextPrefetchTickets.issueSegments(artifact,owner,navigation.headers ?? {},sharedKeys),
+            shellFlight:Buffer.from(body).toString("base64")} : {}),
         }, {
           headers:{"access-control-allow-origin":"*", "cache-control":"no-store"},
         }) : new Response(null, {status:204, headers:{"access-control-allow-origin":"*", "cache-control":"no-store"}});

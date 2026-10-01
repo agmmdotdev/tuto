@@ -251,11 +251,39 @@ function hydrationBootstrap(
           return;
         }
         const result = await response.json();
-        if (controller.signal.aborted || epoch !== prefetchEpoch || prefetchEntries.get(key) !== entry) return;
+        if (controller.signal.aborted || epoch !== prefetchEpoch || prefetchEntries.get(key) !== entry) {
+          if (prefetchEntries.get(key) === entry) prefetchEntries.delete(key);
+          return;
+        }
+        const receivedAt = Date.now(), expiresAt = receivedAt + result.ttlMs;
+        let templates;
+        if (result.kind === "shell" && result.segmentGrant && typeof result.shellFlight === "string" && result.shellFlight.length <= 1398104) {
+          let timedOut = false, timer, abort;
+          try {
+            const stopped = new Promise((_, reject) => {
+              abort = () => reject(new DOMException("Prefetch decoding cancelled.","AbortError"));
+              controller.signal.addEventListener("abort",abort,{once:true});
+              timer = setTimeout(() => {timedOut=true;reject(new Error("Prefetch decoding timed out."));},2000);
+            });
+            const decode = (async () => {
+              const bytes = Uint8Array.from(atob(result.shellFlight),character => character.charCodeAt(0));
+              const stream = new ReadableStream({start(output){output.enqueue(bytes);output.close();}});
+              const shell = await kernel.rscClient.createFromReadableStream(stream,{callServer:globalThis.__TUTO_NEXT_CALL_SERVER__});
+              return kernel.router.collectSegments(shell.root,result.segmentGrant.keys,() => timedOut || controller.signal.aborted);
+            })();
+            templates = await Promise.race([decode,stopped]);
+          } catch { /* Speculative decoding is optional; normal ticket validation/rendering remains available. */ }
+          finally {clearTimeout(timer);controller.signal.removeEventListener("abort",abort);}
+        }
+        if (controller.signal.aborted || epoch !== prefetchEpoch || prefetchEntries.get(key) !== entry || expiresAt <= Date.now()) {
+          if (prefetchEntries.get(key) === entry) prefetchEntries.delete(key);
+          return;
+        }
         if (result.segmentGrant) {
           const grant = result.segmentGrant;
-          segmentGrants.set(grant.token,{keys:grant.keys,expiresAt:Date.now()+grant.ttlMs});
+          segmentGrants.set(grant.token,{keys:grant.keys,expiresAt:Math.min(expiresAt,receivedAt+grant.ttlMs)});
           while (segmentGrants.size > 8) segmentGrants.delete(segmentGrants.keys().next().value);
+          if (templates) {kernel.router.storeSegments(templates);kernel.router.pinSegments(requestId);}
         }
         entry.ticket = result.ticket;
         entry.kind = result.kind || "full";
@@ -264,7 +292,7 @@ function hydrationBootstrap(
           prefetchEntries.delete(key);
           kernel.router.releaseSegments(entry.requestId);
           for (const callback of entry.callbacks) {try {callback();} catch(error) {console.error(error);}}
-        }, result.ttlMs);
+        }, Math.max(0,expiresAt-Date.now()));
       } catch (error) {
         if (prefetchEntries.get(key) === entry) prefetchEntries.delete(key);
         if (error.name !== "AbortError") console.error(error);

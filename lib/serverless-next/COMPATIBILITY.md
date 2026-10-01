@@ -20,13 +20,13 @@ Verified on 2026-10-01 in the Tuto cloud environment with Node 24.19.0,
 Yarn 4.13.0, and Linux x64:
 
 - Immutable dependency installation and browser-kernel generation passed.
-  The kernel is 228,569 bytes and targets Next 16.3.6 / React 19.2.6.
-- `yarn test:serverless-next`: 86 tests passed, including SecureExec isolation,
+  The kernel is 229,744 bytes and targets Next 16.3.6 / React 19.2.6 (artifact version 20).
+- `yarn test:serverless-next`: 89 tests passed, including SecureExec isolation,
   streaming, cache invalidation, Cache Components, and App Router topology.
 - `yarn test:serverless-nextjs-runtime --maxWorkers=1`: 111 tests passed. The
   parallel run under concurrent browser/build load hit the existing Next Lite
   template's five-second timeout; the serial rerun passed without source changes.
-- The fifty-three Next browser checkpoints passed in installed Chromium 151 with
+- The sixty Next browser checkpoints passed in installed Chromium 151 with
   both child-process and SecureExec execution. They cover hydration,
   persistent navigation, independent slot history, refresh/state retention, native iframe reloads, Server Actions, virtual cookies, forms, and streamed slot-local
   error/not-found boundaries, recursive slots, and ancestor error propagation.
@@ -37,12 +37,18 @@ Yarn 4.13.0, and Linux x64:
   errors/redirects/notFound, and a partially streamed modal background. Four
   equivalent cases also pass against stock Next 16.3.6; a fifth specifically
   checks Tuto transport cancellation before handing the shell to React.
-  Six shared-segment browser cases cover sibling layout/loading reuse with
+  Thirteen shared-segment browser cases cover sibling layout/loading reuse with
   fresh primary/nested slot pages, retained layout state, refresh, action-cookie
-  invalidation, superseded navigation, receipt expiry and parameterized revisits. Three corresponding
-  stock Next16.3.6 production cases pass; controlled cancellation/expiry remain
+  invalidation, superseded navigation, receipt expiry and parameterized revisits.
+  They also cover pre-display sibling reuse without client mounts, pre-display
+  refresh/action-cookie invalidation, failed decoding, late cancellation, retry
+  after Link cancellation, and pre-display expiry. Five corresponding
+  stock Next16.3.6 production cases pass; eight transport/policy cases remain
   Tuto-only. Five runtime/receipt cases cover owner/workspace/header isolation,
   forged hints, epoch/expiry/capacity, fresh leaves, and discarded/replaced children.
+  Three decoder unit cases cover lazy Flight traversal without component invocation,
+  granted keys, atomic failure/cancellation, graph/resolution bounds, insertion
+  gating, bounded eviction and retained request snapshots.
   Eight viewport cases cover automatic warming, off-screen cancellation/re-entry,
   intent priority, navigation/history ordering, refresh/cookie-context replay,
   explicit caller ownership after unmount, and per-entry capacity eviction.
@@ -641,8 +647,12 @@ module counter. These comparisons do not establish identical cache strategies.
 ### Validated shared layout/loading templates
 
 A completed, error-free automatic shell can issue an opaque segment receipt.
-The browser stores templates only after their provisional model mounts, and
-advertises only templates it still holds. The API overwrites raw renderer hints
+Its prefetch response includes the already validated shell Flight bytes (at most
+one MiB before base64 encoding). The browser decodes the shell during prefetch
+and collects only granted, cacheable layout/loading templates without invoking
+or mounting client components. Flight decoding can evaluate client modules and
+resolve lazy references; module-level side effects are not deferred until display.
+It advertises only templates it still holds. The API overwrites raw renderer hints
 and resolves receipts against the exact artifact object, revision/generation,
 document owner, normalized complete headers (including cookies/auth), mutation
 epoch and thirty-second expiry. Forged keys and another owner/workspace/context
@@ -683,9 +693,19 @@ request, templates with no live local receipt are pruned. An expired template
 cannot be reauthorized by a newly issued receipt with the same context/key.
 Active response snapshots remain available until their own completion.
 
-Reuse starts after a validated shell has actually been displayed; this is not
-prefetch-time decoding of every layout in advance. Only shell-derived templates
-enter the reusable map: unticketed dynamic page output does not populate it.
+Reuse can start before the first shell display: warming one sibling allows the
+next sibling to reuse its decoded parent templates. Dynamic descendants do not
+execute during automatic shell decoding. Collection is staged and published only
+while the entry is current, uncanceled and unexpired. Traversal is bounded to
+4096 distinct objects and 4096 lazy resolutions with a two-second deadline;
+failure falls back to normal ticket validation and rendering. Cancellation or
+expiry removes an unfinished entry so the destination can be warmed again.
+Only shell-derived templates enter the reusable map: unticketed dynamic page
+output and explicit full prefetches do not populate it. Navigation still validates
+the server ticket before provisional display and decodes its returned shell;
+the prefetch decode never owns visible UI, URL/history, cookies or styles. The
+shell bytes are consequently transferred again at validation, a deliberate
+bounded transport cost rather than a zero-round-trip navigation claim.
 A missed/expired/evicted receipt renders layouts normally. Process changes miss
 receipts safely, with no distributed segment cache. Data mutations outside the
 known action/refresh epoch still require refresh or expiry. Reused server layout
@@ -817,9 +837,9 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next bounded framework slice is decoding validated shell templates during
-prefetch, so sibling Links can reuse them before the first provisional display.
-Keep receipt/context validation, template bounds and fresh leaf execution; do not
-extend this into PPR continuation without separate architecture and evidence.
+The next bounded framework slice is avoiding duplicate shell transfer/decoding
+through a validated acknowledgment and retained decoded shell model. Keep
+receipt/context validation, template bounds, cancellation and fresh leaf execution;
+PPR continuation requires separate architecture and evidence.
 Deployment validation and sandbox security review remain separate operational
 work.
