@@ -160,6 +160,7 @@ async function readPayload(request: Request) {
       prefetchTicket?: string;
       prefetchMode?: "auto" | "full";
       prefetchShell?: boolean;
+      prefetchShellAck?: boolean;
       segmentRefs?: unknown;
       headers?: Record<string, string>;
     };
@@ -455,6 +456,13 @@ export async function POST(request: Request) {
       // Validate the shell before display. This provisional response must not
       // advance the reload capability, apply cookies or replace fresh page work.
       if (navigation.prefetchShell === true) {
+        if (cached?.kind === "shell" && navigation.prefetchShellAck === true) {
+          return new Response(null, {status:204, headers:{
+            "access-control-allow-origin":"*", "cache-control":"no-store",
+            "x-tuto-next-prefetch":"shell-ack",
+            "access-control-expose-headers":"x-tuto-next-prefetch",
+          }});
+        }
         return cached?.kind === "shell"
           ? new Response(Uint8Array.from(cached.body), {status:cached.status, headers:{
               ...Object.fromEntries(cached.headers), "access-control-allow-origin":"*", "cache-control":"no-store",
