@@ -20,13 +20,13 @@ Verified on 2026-10-01 in the Tuto cloud environment with Node 24.19.0,
 Yarn 4.13.0, and Linux x64:
 
 - Immutable dependency installation and browser-kernel generation passed.
-  The kernel is 227,537 bytes and targets Next 16.3.6 / React 19.2.6.
-- `yarn test:serverless-next`: 81 tests passed, including SecureExec isolation,
+  The kernel is 228,569 bytes and targets Next 16.3.6 / React 19.2.6.
+- `yarn test:serverless-next`: 86 tests passed, including SecureExec isolation,
   streaming, cache invalidation, Cache Components, and App Router topology.
 - `yarn test:serverless-nextjs-runtime --maxWorkers=1`: 111 tests passed. The
   parallel run under concurrent browser/build load hit the existing Next Lite
   template's five-second timeout; the serial rerun passed without source changes.
-- The forty-seven Next browser checkpoints passed in installed Chromium 151 with
+- The fifty-three Next browser checkpoints passed in installed Chromium 151 with
   both child-process and SecureExec execution. They cover hydration,
   persistent navigation, independent slot history, refresh/state retention, native iframe reloads, Server Actions, virtual cookies, forms, and streamed slot-local
   error/not-found boundaries, recursive slots, and ancestor error propagation.
@@ -37,6 +37,12 @@ Yarn 4.13.0, and Linux x64:
   errors/redirects/notFound, and a partially streamed modal background. Four
   equivalent cases also pass against stock Next 16.3.6; a fifth specifically
   checks Tuto transport cancellation before handing the shell to React.
+  Six shared-segment browser cases cover sibling layout/loading reuse with
+  fresh primary/nested slot pages, retained layout state, refresh, action-cookie
+  invalidation, superseded navigation, receipt expiry and parameterized revisits. Three corresponding
+  stock Next16.3.6 production cases pass; controlled cancellation/expiry remain
+  Tuto-only. Five runtime/receipt cases cover owner/workspace/header isolation,
+  forged hints, epoch/expiry/capacity, fresh leaves, and discarded/replaced children.
   Eight viewport cases cover automatic warming, off-screen cancellation/re-entry,
   intent priority, navigation/history ordering, refresh/cookie-context replay,
   explicit caller ownership after unmount, and per-entry capacity eviction.
@@ -76,6 +82,8 @@ Yarn 4.13.0, and Linux x64:
   preserves the root counter and restores history with SecureExec.
   The viewport smoke also warms without hover, consumes a ticket, and retains
   root state and history through the compiled SecureExec production API.
+  A shared-segment production smoke also checks sibling reuse, fresh leaf output
+  and action-cookie invalidation with retained root state.
   A further compiled SecureExec smoke test validates a loading-shell ticket,
   streams fresh page/Suspense content and applies an action-cookie refresh while
   retaining the root counter.
@@ -133,6 +141,7 @@ this upgrade. The nested dashboard differential below uses Next 16.3.6.
 | Preview navigation                       | `next/link`, `useRouter`, raw links, replace/refresh and native back/forward apply Flight to the current document with per-entry slot state   |
 | Link viewport and intent prefetch        | Shared observer queues visible local page tickets; hover/touch has priority; off-screen/unmounted Links cancel owned pending work; `prefetch={false}` disables warming and navigation takes priority |
 | Loading-shell prefetch                   | Default/auto Link intent stops eligible branches at their first loading boundary; validated provisional UI precedes a separate fresh streamed navigation |
+| Shared layout/loading templates         | Validated shell receipts reuse held templates across sibling destinations; fresh slot/page Flight, context checks, expiry and invalidation remain |
 | React `cache`                            | Repeated calls share one value during a render and recompute for the next RSC request                                         |
 | `unstable_cache`                         | Next's own wrapper executes inside its work/request AsyncLocalStorage contexts over a Tuto adapter                            |
 | Cache Components                         | Next SWC rewrites `"use cache"` functions and async Server Components through its real cache wrapper                          |
@@ -511,7 +520,8 @@ Tickets are process-local. Another instance safely misses a ticket; this is not
 a distributed router cache or an out-of-band invalidation subscription. Mutations
 outside this document's action/refresh flow and this process's API epoch need a
 refresh or expire at the bounded lifetime. There is no PPR/static-vs-dynamic
-analysis, per-segment reuse, or Next five-minute static cache.
+analysis, generalized segment caching, or Next five-minute static cache.
+Validated loading-shell layout/loading template reuse is described below.
 
 Link mouse-enter and touch-start run the user's handler, then warm local page
 destinations using this same cache. `false` disables both; `true` uses the
@@ -580,7 +590,8 @@ during its outer shell prefetch.
 
 Full and automatic strategy keys are distinct. A completed full ticket can
 satisfy either intent; a later full intent can upgrade a completed shell.
-An intent while speculation is busy still drops rather than queues an upgrade.
+Link intent queues behind the active bounded scheduler; standalone manual calls
+while speculation is busy can retry later.
 Shell tickets retain the same revision, document-owner, complete-header,
 selected-slot, epoch, size and expiry checks. They cannot satisfy a full-page
 navigation. Refresh/actions invalidate both strategies.
@@ -590,8 +601,9 @@ request. A hit sends complete shell Flight. Its RouterRoot is provisional:
 display does not own the global router state, virtual URL, history, cookies or
 reload capability. A second request, without a ticket and with the original
 slot selection, executes fresh streamed page work through the existing transport.
-This is deliberately two roundtrips. It does not splice cached Flight bytes,
-reuse server layouts by segment, or implement a PPR continuation. The shell's
+This is deliberately two roundtrips. It does not splice cached Flight bytes or
+implement a PPR continuation. Validated shared templates can now omit repeated
+layout/loading rendering, as described below. The shell's
 loading UI may appear while the virtual URL still identifies the previous entry;
 normal navigation owns that entry when fresh Flight commits.
 
@@ -625,6 +637,69 @@ strategy and did not fire the unused-entry callbacks on refresh/action; Tuto's
 explicit full ticket invalidation does. Tuto's artifact-local mutation counter
 is checked only in Tuto: stock action/RSC bundles do not share that fixture's
 module counter. These comparisons do not establish identical cache strategies.
+
+### Validated shared layout/loading templates
+
+A completed, error-free automatic shell can issue an opaque segment receipt.
+The browser stores templates only after their provisional model mounts, and
+advertises only templates it still holds. The API overwrites raw renderer hints
+and resolves receipts against the exact artifact object, revision/generation,
+document owner, normalized complete headers (including cookies/auth), mutation
+epoch and thirty-second expiry. Forged keys and another owner/workspace/context
+miss safely. Proxy workspaces are excluded. Receipt metadata is capped at eight
+receipts per document, sixteen keys per receipt, and 128 receipts per process.
+Parameterized revisits select the held template matching the requested key; an
+active component cannot keep another parameter selection's template by accident.
+Keys over 4096 characters or layouts with over 64 rendered holes are ineligible.
+
+Keys identify module path, concrete params and declared owned slot names.
+Params are conservatively complete for each selected branch, so changing a
+child's dynamic params may miss an otherwise shared ancestor. Current slot
+selections are **not** captured as the template's future children: each navigation
+rebuilds/matches its primary and recursive owned-slot branches and passes them
+through scoped holes. LayoutScope/router metadata is fresh even when the
+surrounding server layout output is reused. Only holes actually rendered by the
+Layout are authorized, so discarded children do not execute or gain receipts.
+Explicit child replacement through cloneElement is preserved too. Unticketed
+initial/fresh layouts carry their children in the normal template and retain
+normal render behavior; generalized child-type introspection is not a parity claim.
+
+A valid held template makes the worker omit that layout/loading component from
+Flight. The browser composes its retained template with fresh child/slot Flight.
+It keeps root/layout client state, nested ownership and streamed error/notFound,
+redirect/action and history behavior. The sibling fixture asserts identical
+layout/loading diagnostic output across navigation, while the next page executes
+with fresh data. The API test also asserts omitted shared output and emitted
+fresh page output. Diagnostic module counters measure render calls for these
+fixtures; they are not recommended application side effects or a broad benchmark.
+
+The document holds at most sixteen reusable templates. Requests pin their
+advertised templates until completion, or a prefetched ticket's expiry/eviction,
+so another response cannot evict a referenced model before Flight resolves.
+Existing Activity entries independently retain their mounted client models.
+Refresh/actions/virtual cookie changes clear local reusable templates and receipts;
+server-side epoch changes make other documents' receipts miss. Before another
+request, templates with no live local receipt are pruned. An expired template
+cannot be reauthorized by a newly issued receipt with the same context/key.
+Active response snapshots remain available until their own completion.
+
+Reuse starts after a validated shell has actually been displayed; this is not
+prefetch-time decoding of every layout in advance. Only shell-derived templates
+enter the reusable map: unticketed dynamic page output does not populate it.
+A missed/expired/evicted receipt renders layouts normally. Process changes miss
+receipts safely, with no distributed segment cache. Data mutations outside the
+known action/refresh epoch still require refresh or expiry. Reused server layout
+output deliberately stays fixed within that lifetime, matching the shared-layout
+retention goal; render-time authorization must not rely on an always-rerendered
+layout. Fresh page/actions still execute their own request-context checks.
+
+This increment leaves dynamic descendants fresh and makes no static/session/data
+classification. It is not Next's complete segment cache, PPR continuation,
+per-segment staleTimes/tag subscriptions or full bfcache/Cache Components reuse.
+The pinned [Next prefetch guide](https://raw.githubusercontent.com/vercel/next.js/v16.3.6/docs/01-app/02-guides/prefetching.mdx)
+is the reference for shared parent layouts and fresh sibling leaves. Stock cases
+compare visible layout/loading stability, refresh and action cookies; Tuto's
+transport receipts and bounded policy are explicitly separate.
 
 Named slots can nest recursively, including repeated names under different
 owners, route groups, dynamic/catch-all parameters, and slots inside an
@@ -712,7 +787,7 @@ restarting Next.js.
 
 ## Deliberately not supported yet
 
-- Per-segment/PPR continuation caching and full `bfcacheId`/Cache Components router caching
+- Generalized segment/PPR continuation caching and full `bfcacheId`/Cache Components router caching
 - Incremental Server Action Flight responses and streamed proxy terminal responses
 - External proxy rewrites and streaming proxy IPC
 - Next's webpack/Turbopack/PostCSS plugin pipeline, Sass, Tailwind directives, and CSS `url()` asset graph rewriting
@@ -742,9 +817,9 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next bounded framework slice is per-segment reuse for shared loading/layout
-shells between sibling destinations, with explicit revision/request/slot context
-keys and invalidation. Measure render savings before extending to PPR continuation;
-whole-destination ticket reuse alone does not establish full Next router-cache parity.
+The next bounded framework slice is decoding validated shell templates during
+prefetch, so sibling Links can reuse them before the first provisional display.
+Keep receipt/context validation, template bounds and fresh leaf execution; do not
+extend this into PPR continuation without separate architecture and evidence.
 Deployment validation and sandbox security review remain separate operational
 work.

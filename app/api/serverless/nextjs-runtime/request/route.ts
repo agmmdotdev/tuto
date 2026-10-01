@@ -160,6 +160,7 @@ async function readPayload(request: Request) {
       prefetchTicket?: string;
       prefetchMode?: "auto" | "full";
       prefetchShell?: boolean;
+      segmentRefs?: unknown;
       headers?: Record<string, string>;
     };
     files?: WorkspaceFile[];
@@ -371,6 +372,14 @@ export async function POST(request: Request) {
       const owner = navigation.prefetchOwner;
       const prefetchMode = navigation.prefetchMode ?? "full";
       if (!["auto", "full"].includes(prefetchMode)) throw new Error("Invalid preview prefetch mode.");
+      // Never forward caller-supplied internal renderer hints.
+      delete navigation.segmentContext;
+      delete navigation.reuseSegments;
+      if (!artifact.router.proxy && typeof owner === "string" && owner.length <= 128) {
+        navigation.segmentContext = nextPrefetchTickets.segmentContext(artifact,owner,navigation.headers ?? {});
+        navigation.reuseSegments = navigation.kind === "refresh" ? [] : nextPrefetchTickets.resolveSegments(
+          artifact,owner,navigation.headers ?? {},navigation.segmentRefs);
+      }
       const cacheKey = nextPrefetchKey(artifact.revision, navigation.url, navigation.headers ?? {}, navigation.state, prefetchMode);
       if (navigation.prefetch) {
         if (typeof owner !== "string" || owner.length > 128 || !["push", "replace"].includes(navigation.kind)) {
@@ -386,12 +395,14 @@ export async function POST(request: Request) {
         const epoch = nextPrefetchTickets.epoch(artifact);
         let response: Response | undefined;
         let kind: "shell" | "full" = "full";
+        let sharedKeys:Array<{key:string;slots:string[]}> = [];
         if (prefetchMode === "auto") {
           const {getNextRscWorkerPool} = await import("@/lib/serverless-next/rsc-worker-pool");
           const shell = await getNextRscWorkerPool().renderPrefetchShell(artifact, url.pathname + url.search,
             [...new Headers(navigation.headers).entries()], navigation);
           if (shell.status !== 204) {
             kind = "shell";
+            sharedKeys = shell.sharedKeys ?? [];
             response = new Response(Uint8Array.from(shell.flight), {status:shell.status,
               headers:{"content-type":shell.contentType}});
           }
@@ -430,11 +441,13 @@ export async function POST(request: Request) {
           !/(?:^|\n)[0-9a-f]+:E\{/.test(text)
           ? nextPrefetchTickets.put({artifact, owner, key:cacheKey, epoch, body, kind,
             headers:[...response.headers.entries()], status:response.status}) : null;
-        return ticket ? Response.json({ticket, kind, ttlMs:nextPrefetchTickets.ttlMs}, {
+        return ticket ? Response.json({ticket, kind, ttlMs:nextPrefetchTickets.ttlMs,
+          ...(kind === "shell" ? {segmentGrant:nextPrefetchTickets.issueSegments(artifact,owner,navigation.headers ?? {},sharedKeys)} : {}),
+        }, {
           headers:{"access-control-allow-origin":"*", "cache-control":"no-store"},
         }) : new Response(null, {status:204, headers:{"access-control-allow-origin":"*", "cache-control":"no-store"}});
       }
-      if (navigation.kind === "refresh") nextPrefetchTickets.invalidate(artifact);
+      if (navigation.kind === "refresh") {nextPrefetchTickets.invalidate(artifact);delete navigation.segmentContext;}
       const cached = typeof navigation.prefetchTicket === "string" && typeof owner === "string" &&
         ["push", "replace"].includes(navigation.kind)
         ? nextPrefetchTickets.take(navigation.prefetchTicket, artifact, owner, cacheKey) : null;

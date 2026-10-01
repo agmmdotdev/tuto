@@ -169,6 +169,21 @@ function hydrationBootstrap(
   const prefetchEntries = new Map();
   let prefetchEpoch = 0;
   let prefetchSequence = 0;
+  const segmentGrants = new Map();
+  globalThis.__TUTO_NEXT_SEGMENT_ACCEPT__ = key => [...segmentGrants.values()].some(grant =>
+    grant.expiresAt > Date.now() && grant.keys.includes(key));
+  function segmentRefs(id) {
+    for (const [token, grant] of segmentGrants) if (grant.expiresAt <= Date.now()) segmentGrants.delete(token);
+    kernel.router.pruneSegments([...segmentGrants.values()].flatMap(grant => grant.keys));
+    const keys = kernel.router.pinSegments(id);
+    const refs = [];
+    for (const [token, grant] of segmentGrants) {
+      const selected = grant.keys.filter(key => keys.includes(key));
+      if (selected.length) refs.push({token,keys:selected});
+    }
+    return refs;
+  }
+  function invalidateSegments() {segmentGrants.clear();kernel.router.clearSegments();}
   let prefetchPending;
   let prefetchScheduler;
   let actionRequests = 0;
@@ -181,6 +196,7 @@ function hydrationBootstrap(
     prefetchEntries.clear();
     for (const entry of entries) {
       clearTimeout(entry.timer);
+      kernel.router.releaseSegments(entry.requestId);
       for (const callback of entry.callbacks) { try { callback(); } catch (error) { console.error(error); } }
     }
   }
@@ -210,10 +226,13 @@ function hydrationBootstrap(
       const [oldKey, oldEntry] = prefetchEntries.entries().next().value;
       prefetchEntries.delete(oldKey);
       clearTimeout(oldEntry.timer);
+      kernel.router.releaseSegments(oldEntry.requestId);
       for (const callback of oldEntry.callbacks) {try {callback();} catch(error) {console.error(error);}}
     }
     const epoch = prefetchEpoch;
-    entry = {callbacks:new Set(typeof options.onInvalidate === "function" ? [options.onInvalidate] : []), controller, mode, manual:!options._signal};
+    const requestId = "prefetch:" + ++prefetchSequence;
+    const refs = segmentRefs(requestId);
+    entry = {callbacks:new Set(typeof options.onInvalidate === "function" ? [options.onInvalidate] : []), controller, mode, requestId, manual:!options._signal};
     prefetchEntries.set(key, entry);
     const ownedEntry = entry;
     const cancel = () => { if (!ownedEntry.manual) controller.abort(); };
@@ -222,7 +241,7 @@ function hydrationBootstrap(
       try {
         const response = await fetch(endpoint, {
           method:"POST", headers:{"content-type":"text/plain;charset=UTF-8"}, signal:controller.signal,
-          body:JSON.stringify({navigation:{kind:"push", id:"prefetch:" + ++prefetchSequence,
+          body:JSON.stringify({navigation:{kind:"push", id:requestId, segmentRefs:refs,
             prefetch:true, prefetchMode:mode, prefetchOwner, revision:${JSON.stringify(config.revision)},
             url:target.pathname + target.search, state:globalThis.__TUTO_NEXT_ROUTER_STATE__,
             headers:Object.fromEntries(actionHeaders.entries())}}),
@@ -233,17 +252,24 @@ function hydrationBootstrap(
         }
         const result = await response.json();
         if (controller.signal.aborted || epoch !== prefetchEpoch || prefetchEntries.get(key) !== entry) return;
+        if (result.segmentGrant) {
+          const grant = result.segmentGrant;
+          segmentGrants.set(grant.token,{keys:grant.keys,expiresAt:Date.now()+grant.ttlMs});
+          while (segmentGrants.size > 8) segmentGrants.delete(segmentGrants.keys().next().value);
+        }
         entry.ticket = result.ticket;
         entry.kind = result.kind || "full";
         entry.timer = setTimeout(() => {
           if (prefetchEntries.get(key) !== entry) return;
           prefetchEntries.delete(key);
+          kernel.router.releaseSegments(entry.requestId);
           for (const callback of entry.callbacks) {try {callback();} catch(error) {console.error(error);}}
         }, result.ttlMs);
       } catch (error) {
         if (prefetchEntries.get(key) === entry) prefetchEntries.delete(key);
         if (error.name !== "AbortError") console.error(error);
       } finally {
+        if (!entry.ticket) kernel.router.releaseSegments(requestId);
         options._signal?.removeEventListener("abort", cancel);
         if (prefetchPending === controller) prefetchPending = undefined;
         prefetchScheduler?.resume();
@@ -317,7 +343,7 @@ function hydrationBootstrap(
       window.parent?.postMessage({ kind: "navigate", navigation, path, source: "tuto-serverless-nextjs-runtime-preview-log" }, "*");
       return;
     }
-    if (navigation === "refresh") invalidatePrefetch();
+    if (navigation === "refresh") {invalidateSegments();invalidatePrefetch();}
     rememberInitialEntry();
     if (navigation === "back" || navigation === "forward") {
       const index = historyIndex + (navigation === "back" ? -1 : 1);
@@ -341,6 +367,8 @@ function hydrationBootstrap(
     prefetchScheduler.pause();
     prefetchPending?.abort();
     let shellDisplayed = false;
+    let consumedPrefetch;
+    const refs = segmentRefs(String(token));
     try {
     historyEntries[historyIndex] = snapshot();
     const restoring = navigation === "restore";
@@ -353,10 +381,10 @@ function hydrationBootstrap(
       const prefetched = !restoring && navigation !== "refresh" ? prefetchEntries.get(cacheKey) : undefined;
       // Never let speculative work delay an actual navigation.
       const ticket = prefetched?.ticket;
-      if (prefetched) {prefetchEntries.delete(cacheKey); clearTimeout(prefetched.timer);}
+      if (prefetched) {consumedPrefetch=prefetched;prefetchEntries.delete(cacheKey); clearTimeout(prefetched.timer);}
       prefetchPending?.abort();
       const navigationRequest = {
-          kind: navigation, id: String(token), sequence: token, prefetchOwner,
+          kind: navigation, id: String(token), sequence: token, prefetchOwner, segmentRefs:refs,
           revision: ${JSON.stringify(config.revision)}, url: pathOf(target),
           state: restored?.state || globalThis.__TUTO_NEXT_ROUTER_STATE__, headers:Object.fromEntries(actionHeaders.entries()),
       };
@@ -389,6 +417,7 @@ function hydrationBootstrap(
         }
         // Shell validation never owns URL/history/cookies. The fresh request
         // uses the original slot state and retains normal streamed control flow.
+        navigationRequest.segmentRefs = segmentRefs(String(token));
         response = await fetch(endpoint, {...requestOptions, body:JSON.stringify({navigation:navigationRequest})});
         if (token !== navigationSequence) return;
       }
@@ -434,6 +463,8 @@ function hydrationBootstrap(
       }
       throw error;
     } finally {
+      kernel.router.releaseSegments(String(token));
+      if (consumedPrefetch) kernel.router.releaseSegments(consumedPrefetch.requestId);
       if (token === navigationSequence) { navigationActive = false; prefetchScheduler.resume(); }
     }
   }
@@ -485,6 +516,7 @@ function hydrationBootstrap(
   function applyVirtualCookies(response) {
     const encoded = response.headers.get("x-tuto-next-virtual-set-cookie");
     if (!encoded) return;
+    invalidateSegments();
     invalidatePrefetch();
     const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
     const setCookies = JSON.parse(new TextDecoder().decode(bytes));
@@ -521,6 +553,7 @@ function hydrationBootstrap(
     if (!endpoint) throw new Error("This preview has no Server Action endpoint.");
     actionRequests++;
     try {
+    invalidateSegments();
     invalidatePrefetch();
     const body = await kernel.rscClient.encodeReply(args);
     const response = await fetch(endpoint, {

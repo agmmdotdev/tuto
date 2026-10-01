@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { NextRequestArtifact } from "./artifact";
 import type { NextRouterState } from "./navigation";
 
@@ -30,6 +30,7 @@ type Entry = {
 
 export class NextPrefetchTickets {
   private entries = new Map<string, Entry>();
+  private segments = new Map<string, {artifact:NextRequestArtifact;owner:string;context:string;keys:string[];slots:Map<string,string[]>;expiresAt:number}>();
   private epochs = new WeakMap<NextRequestArtifact, number>();
   readonly ttlMs = 30_000;
   readonly maxEntryBytes = 1024 * 1024;
@@ -38,6 +39,36 @@ export class NextPrefetchTickets {
   invalidate(artifact: NextRequestArtifact) {
     this.epochs.set(artifact, this.epoch(artifact) + 1);
     for (const [ticket, entry] of this.entries) if (entry.artifact === artifact) this.entries.delete(ticket);
+    for (const [token, entry] of this.segments) if (entry.artifact === artifact) this.segments.delete(token);
+  }
+  segmentContext(artifact:NextRequestArtifact, owner:string, headers:Record<string,string>) {
+    return createHash("sha256").update(nextPrefetchKey(artifact.revision, "/", headers))
+      .update(JSON.stringify([artifact.generation,owner,this.epoch(artifact)])).digest("hex");
+  }
+  // Only the API's completed, bounded, error-free shell renderer issues receipts.
+  issueSegments(artifact:NextRequestArtifact, owner:string, headers:Record<string,string>, segments:Array<{key:string;slots:string[]}>) {
+    const context=this.segmentContext(artifact,owner,headers);
+    const selected=[...new Set(segments.filter(item=>item.slots.length<=64).map(item=>item.key))].filter(key=>key.startsWith(context+":")&&key.length<=4096).slice(0,16);
+    const slots=new Map(segments.filter(item=>selected.includes(item.key)).map(item=>[item.key,item.slots]));
+    if (!selected.length) return undefined;
+    for (const [token,entry] of this.segments) if(entry.expiresAt<=this.now())this.segments.delete(token);
+    const owned=[...this.segments].filter(([,entry])=>entry.artifact===artifact&&entry.owner===owner);
+    while(owned.length>=8)this.segments.delete(owned.shift()![0]);
+    while(this.segments.size>=128)this.segments.delete(this.segments.keys().next().value!);
+    const token=randomBytes(24).toString("base64url");
+    this.segments.set(token,{artifact,owner,context,keys:selected,slots,expiresAt:this.now()+this.ttlMs});
+    return {token,keys:selected,ttlMs:this.ttlMs};
+  }
+  resolveSegments(artifact:NextRequestArtifact, owner:string, headers:Record<string,string>, refs:unknown) {
+    if(!Array.isArray(refs)||refs.length>8)return [];
+    const context=this.segmentContext(artifact,owner,headers),keys=new Map<string,string[]>();
+    for(const ref of refs){
+      if(!ref||typeof ref.token!=="string"||!Array.isArray(ref.keys)||ref.keys.length>16)continue;
+      const entry=this.segments.get(ref.token);
+      if(!entry||entry.artifact!==artifact||entry.owner!==owner||entry.context!==context||entry.expiresAt<=this.now())continue;
+      for(const key of ref.keys)if(typeof key==="string"&&entry.keys.includes(key)&&keys.size<16)keys.set(key,entry.slots.get(key) ?? []);
+    }
+    return [...keys].map(([key,slots])=>({key,slots}));
   }
   put(entry: Omit<Entry, "expiresAt">) {
     if (entry.epoch !== this.epoch(entry.artifact) || entry.body.byteLength > this.maxEntryBytes) return null;
