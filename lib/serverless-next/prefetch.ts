@@ -3,7 +3,7 @@ import type { NextRequestArtifact } from "./artifact";
 import type { NextRouterState } from "./navigation";
 
 // Standalone so the hydration transport can embed exactly the same key logic.
-export function nextPrefetchKey(revision: string, url: string, headers: Record<string, string>, state?: NextRouterState) {
+export function nextPrefetchKey(revision: string, url: string, headers: Record<string, string>, state?: NextRouterState, mode: "full" | "auto" = "full") {
   function canonical(value: unknown): unknown {
     if (Array.isArray(value)) return value.map(canonical);
     if (value && typeof value === "object") return Object.fromEntries(Object.entries(value)
@@ -13,7 +13,7 @@ export function nextPrefetchKey(revision: string, url: string, headers: Record<s
   }
   const target = new URL(url, "http://next.local");
   return JSON.stringify(canonical([revision, target.pathname + target.search,
-    Object.fromEntries(new Headers(headers).entries()), state ?? null]));
+    Object.fromEntries(new Headers(headers).entries()), state ?? null, mode]));
 }
 
 type Entry = {
@@ -25,6 +25,7 @@ type Entry = {
   body: Uint8Array;
   headers: Array<[string, string]>;
   status: number;
+  kind?: "full" | "shell";
 };
 
 export class NextPrefetchTickets {

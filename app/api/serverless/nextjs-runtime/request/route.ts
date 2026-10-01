@@ -158,6 +158,8 @@ async function readPayload(request: Request) {
       prefetch?: boolean;
       prefetchOwner?: string;
       prefetchTicket?: string;
+      prefetchMode?: "auto" | "full";
+      prefetchShell?: boolean;
       headers?: Record<string, string>;
     };
     files?: WorkspaceFile[];
@@ -367,7 +369,9 @@ export async function POST(request: Request) {
       if (url.origin !== "http://next.local") throw new Error("Preview navigation must stay inside the workspace.");
       const navigation = payload.navigation;
       const owner = navigation.prefetchOwner;
-      const cacheKey = nextPrefetchKey(artifact.revision, navigation.url, navigation.headers ?? {}, navigation.state);
+      const prefetchMode = navigation.prefetchMode ?? "full";
+      if (!["auto", "full"].includes(prefetchMode)) throw new Error("Invalid preview prefetch mode.");
+      const cacheKey = nextPrefetchKey(artifact.revision, navigation.url, navigation.headers ?? {}, navigation.state, prefetchMode);
       if (navigation.prefetch) {
         if (typeof owner !== "string" || owner.length > 128 || !["push", "replace"].includes(navigation.kind)) {
           throw new Error("Invalid preview prefetch request.");
@@ -380,7 +384,19 @@ export async function POST(request: Request) {
         }
         request.signal.throwIfAborted();
         const epoch = nextPrefetchTickets.epoch(artifact);
-        const response = await executeNextRequestArtifact(artifact, {
+        let response: Response | undefined;
+        let kind: "shell" | "full" = "full";
+        if (prefetchMode === "auto") {
+          const {getNextRscWorkerPool} = await import("@/lib/serverless-next/rsc-worker-pool");
+          const shell = await getNextRscWorkerPool().renderPrefetchShell(artifact, url.pathname + url.search,
+            [...new Headers(navigation.headers).entries()], navigation);
+          if (shell.status !== 204) {
+            kind = "shell";
+            response = new Response(Uint8Array.from(shell.flight), {status:shell.status,
+              headers:{"content-type":shell.contentType}});
+          }
+        }
+        response ??= await executeNextRequestArtifact(artifact, {
           headers:navigation.headers, navigation, stream:true, url:url.pathname + url.search,
         });
         let body = new Uint8Array();
@@ -412,9 +428,9 @@ export async function POST(request: Request) {
           response.headers.get("content-type")?.startsWith("text/x-component") &&
           !response.headers.has("set-cookie") && !response.headers.has("location") &&
           !/(?:^|\n)[0-9a-f]+:E\{/.test(text)
-          ? nextPrefetchTickets.put({artifact, owner, key:cacheKey, epoch, body,
+          ? nextPrefetchTickets.put({artifact, owner, key:cacheKey, epoch, body, kind,
             headers:[...response.headers.entries()], status:response.status}) : null;
-        return ticket ? Response.json({ticket, ttlMs:nextPrefetchTickets.ttlMs}, {
+        return ticket ? Response.json({ticket, kind, ttlMs:nextPrefetchTickets.ttlMs}, {
           headers:{"access-control-allow-origin":"*", "cache-control":"no-store"},
         }) : new Response(null, {status:204, headers:{"access-control-allow-origin":"*", "cache-control":"no-store"}});
       }
@@ -422,14 +438,25 @@ export async function POST(request: Request) {
       const cached = typeof navigation.prefetchTicket === "string" && typeof owner === "string" &&
         ["push", "replace"].includes(navigation.kind)
         ? nextPrefetchTickets.take(navigation.prefetchTicket, artifact, owner, cacheKey) : null;
+      // Validate the shell before display. This provisional response must not
+      // advance the reload capability, apply cookies or replace fresh page work.
+      if (navigation.prefetchShell === true) {
+        return cached?.kind === "shell"
+          ? new Response(Uint8Array.from(cached.body), {status:cached.status, headers:{
+              ...Object.fromEntries(cached.headers), "access-control-allow-origin":"*", "cache-control":"no-store",
+              "x-tuto-next-prefetch":"shell-hit",
+              "access-control-expose-headers":"x-tuto-next-prefetch",
+            }})
+          : new Response(null, {status:204, headers:{"access-control-allow-origin":"*", "cache-control":"no-store", "x-tuto-next-prefetch":"miss", "access-control-expose-headers":"x-tuto-next-prefetch"}});
+      }
       let response: Response;
       try {
-        response = cached ? new Response(Uint8Array.from(cached.body), {headers:cached.headers, status:cached.status})
+        response = cached && cached.kind !== "shell" ? new Response(Uint8Array.from(cached.body), {headers:cached.headers, status:cached.status})
           : await executeNextRequestArtifact(artifact, {
             headers:navigation.headers, navigation, stream:true, url:url.pathname + url.search,
           });
       } finally { if (navigation.kind === "refresh") nextPrefetchTickets.invalidate(artifact); }
-      response.headers.set("x-tuto-next-prefetch", cached ? "hit" : "miss");
+      response.headers.set("x-tuto-next-prefetch", cached && cached.kind !== "shell" ? "hit" : "miss");
       const token = new URL(request.url).searchParams.get("preview");
       const capability = resolvePreviewCapability(token);
       const sequence = payload.navigation.sequence;
