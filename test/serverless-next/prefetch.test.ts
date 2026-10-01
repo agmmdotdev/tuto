@@ -92,6 +92,40 @@ test("auto shells stop at the first boundary, omit deferred page evaluation and 
  expect(nextPrefetchKey("rev","/target",{},undefined,"auto")).not.toBe(nextPrefetchKey("rev","/target",{},undefined,"full"));
 });
 
+test("a shell acknowledgment is bodyless, single-use and does not replace fresh descendant execution",async()=>{
+ const {sharedSegmentsWorkspace}=await import("./fixtures/shared-segments-workspace");
+ const artifact=await compileNextRequestWorkspace(sharedSegmentsWorkspace(),{workspaceKey:"shell-ack",serverReferenceHashSalt:salt});
+ const args={url:"/dashboard/shared/one",prefetchMode:"auto"};
+ const {ticket,shellFlight}=await(await post(artifact,args)).json();expect(Buffer.from(shellFlight,"base64").toString()).toContain("data-shared-loading");
+ const ack=await post(artifact,{...args,prefetch:false,prefetchShell:true,prefetchShellAck:true,prefetchTicket:ticket});
+ expect(ack.status).toBe(204);expect(ack.headers.get("x-tuto-next-prefetch")).toBe("shell-ack");expect(ack.body).toBeNull();
+ expect(ack.headers.get("set-cookie")).toBeNull();expect(ack.headers.get("location")).toBeNull();expect(ack.headers.get("content-type")).toBeNull();
+ const repeated=await post(artifact,{...args,prefetch:false,prefetchShell:true,prefetchShellAck:true,prefetchTicket:ticket});expect(repeated.headers.get("x-tuto-next-prefetch")).toBe("miss");
+ const fresh=await post(artifact,{...args,prefetch:false});expect(await fresh.text()).toContain('["one:",1,":","anonymous"]');
+});
+
+test("acknowledgments enforce owner, artifact, URL, headers, mode and slot context",async()=>{
+ const {sharedSegmentsWorkspace}=await import("./fixtures/shared-segments-workspace");
+ const artifact=await compileNextRequestWorkspace(sharedSegmentsWorkspace(),{workspaceKey:"shell-ack-context",serverReferenceHashSalt:salt});
+ const other=await compileNextRequestWorkspace(sharedSegmentsWorkspace(),{workspaceKey:"shell-ack-other",serverReferenceHashSalt:salt});
+ const args={url:"/dashboard/shared/one",prefetchMode:"auto",headers:{cookie:"identity=one",authorization:"Bearer one"}};
+ const {ticket}=await(await post(artifact,args)).json();const validation={...args,prefetch:false,prefetchShell:true,prefetchShellAck:true,prefetchTicket:ticket};
+ for(const change of [{prefetchOwner:"other"},{revision:other.revision},{url:"/dashboard/shared/two"},{headers:{cookie:"identity=two",authorization:"Bearer one"}},{headers:{cookie:"identity=one",authorization:"Bearer two"}},{prefetchMode:"full"},{state:{version:1,revision:artifact.revision,url:"/dashboard",primary:{page:"app/dashboard/page.tsx",url:"/dashboard"},slots:{}}}]) {
+  const miss=await post(artifact,{...validation,...change});expect(miss.status).toBe(204);expect(miss.headers.get("x-tuto-next-prefetch")).toBe("miss");expect(miss.body).toBeNull();
+ }
+ const hit=await post(artifact,validation);expect(hit.headers.get("x-tuto-next-prefetch")).toBe("shell-ack");
+});
+
+test("refresh invalidates shell acknowledgments and full tickets cannot acknowledge a shell",async()=>{
+ const {sharedSegmentsWorkspace}=await import("./fixtures/shared-segments-workspace");
+ const artifact=await compileNextRequestWorkspace(sharedSegmentsWorkspace(),{workspaceKey:"shell-ack-refresh",serverReferenceHashSalt:salt});
+ const args={url:"/dashboard/shared/one",prefetchMode:"auto"};const {ticket}=await(await post(artifact,args)).json();
+ const refresh=await post(artifact,{prefetch:false,kind:"refresh",url:"/dashboard"});await refresh.text();
+ const stale=await post(artifact,{...args,prefetch:false,prefetchShell:true,prefetchShellAck:true,prefetchTicket:ticket});expect(stale.headers.get("x-tuto-next-prefetch")).toBe("miss");
+ const full=await(await post(artifact,{url:args.url,prefetchMode:"full"})).json();
+ const invalid=await post(artifact,{url:args.url,prefetchMode:"full",prefetch:false,prefetchShell:true,prefetchShellAck:true,prefetchTicket:full.ticket});expect(invalid.status).toBe(204);expect(invalid.headers.get("x-tuto-next-prefetch")).toBe("miss");expect(invalid.body).toBeNull();
+});
+
 test("shell tickets cannot replace fresh page execution and explicit full mode remains full",async()=>{
  const {shellPrefetchWorkspace}=await import("./fixtures/shell-prefetch-workspace");
  const artifact=await compileNextRequestWorkspace(shellPrefetchWorkspace(),{workspaceKey:"shell-fresh",serverReferenceHashSalt:salt});

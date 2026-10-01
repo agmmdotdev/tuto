@@ -8,8 +8,8 @@ import {sharedSegmentsWorkspace} from "../serverless-next/fixtures/shared-segmen
 const stock=process.env.TUTO_NEXT_SEGMENTS_STOCK_URL;
 const servers:Server[]=[];
 test.afterEach(async()=>{for(const server of servers.splice(0)){server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}});
-async function open(page:Page,delayFresh=0,failFresh=false,shortLifetime=false,invalidShell=false){
- const stats={cancelled:0,chunks:0,events:[] as Array<{url:string;prefetch:boolean;shell:boolean;mode?:string;kind?:string;hit?:string|null;done?:boolean;segments?:number}>};
+async function open(page:Page,delayFresh=0,failFresh=false,shortLifetime=false,invalidShell=false,validation:{ackDelay?:number;actionDelay?:number;missAck?:boolean;freshGate?:Promise<void>}={}){
+ const stats={cancelled:0,chunks:0,events:[] as Array<{url:string;prefetch:boolean;shell:boolean;ack:boolean;bytes:number;mode?:string;kind?:string;hit?:string|null;done?:boolean;segments?:number}>};
  if(stock){await page.goto(stock+"/dashboard");await expect(page.locator('[data-counter="home"]')).toBeVisible();return stats;}
  await page.evaluate(()=>Object.defineProperty(globalThis,"IntersectionObserver",{value:undefined,configurable:true}));
  const artifact=await compileNextRequestWorkspace(sharedSegmentsWorkspace(),{workspaceKey:test.info().title,serverReferenceHashSalt:"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="});
@@ -17,16 +17,21 @@ async function open(page:Page,delayFresh=0,failFresh=false,shortLifetime=false,i
   const controller=new AbortController();outgoing.on("close",()=>{if(!outgoing.writableFinished){stats.cancelled++;controller.abort();}});
   const chunks=[];for await(const chunk of request)chunks.push(Buffer.from(chunk));const body=Buffer.concat(chunks).toString();const input=body?JSON.parse(body):{};
   const navigation=input.navigation;
-  const event=navigation?{url:navigation.url,prefetch:navigation.prefetch===true,shell:navigation.prefetchShell===true,mode:navigation.prefetchMode,segments:(navigation.segmentRefs??[]).reduce((sum:number,ref:{keys:string[]})=>sum+ref.keys.length,0),kind:undefined as string|undefined,hit:null as string|null,done:false}:undefined;
+  const event=navigation?{url:navigation.url,prefetch:navigation.prefetch===true,shell:navigation.prefetchShell===true,ack:navigation.prefetchShellAck===true,bytes:0,mode:navigation.prefetchMode,segments:(navigation.segmentRefs??[]).reduce((sum:number,ref:{keys:string[]})=>sum+ref.keys.length,0),kind:undefined as string|undefined,hit:null as string|null,done:false}:undefined;
   if(event)stats.events.push(event);
   const fresh=event&&!event.prefetch&&!event.shell;
+  if(fresh&&validation.freshGate)await validation.freshGate;
   if(fresh&&delayFresh)await new Promise(resolve=>setTimeout(resolve,delayFresh));controller.signal.throwIfAborted();
+  if(event?.ack&&validation.missAck){const {nextPrefetchTickets}=await import("../../lib/serverless-next/prefetch");nextPrefetchTickets.invalidate(artifact);}
   let response=fresh&&failFresh?new Response("controlled navigation failure",{status:500,headers:{"access-control-allow-origin":"*"}}):request.method==="OPTIONS"?OPTIONS():await POST(new Request("http://tuto.local/request",{method:"POST",body:navigation?JSON.stringify(input):body,headers:{"content-type":"text/plain"},signal:controller.signal}));
   if(event?.prefetch&&shortLifetime&&response.status===200){const result=await response.json();response=Response.json({...result,ttlMs:1000,segmentGrant:{...result.segmentGrant,ttlMs:1000}},{headers:response.headers});}
   if(event?.prefetch&&invalidShell&&response.status===200){const result=await response.json();response=Response.json({...result,shellFlight:Buffer.from("invalid Flight").toString("base64")},{headers:response.headers});}
   if(event){event.hit=response.headers.get("x-tuto-next-prefetch");if(event.prefetch&&response.status===200)event.kind=(await response.clone().json()).kind;}
+  if(event?.ack&&validation.ackDelay)await new Promise(resolve=>setTimeout(resolve,validation.ackDelay));
+  if(input.action&&validation.actionDelay)await new Promise(resolve=>setTimeout(resolve,validation.actionDelay));
+  controller.signal.throwIfAborted();
   outgoing.writeHead(response.status,Object.fromEntries(response.headers));
-  if(response.body){const reader=response.body.getReader();for(;;){const chunk=await reader.read();if(chunk.done)break;if(fresh)stats.chunks++;if(!outgoing.write(chunk.value))await once(outgoing,"drain");}}
+  if(response.body){const reader=response.body.getReader();for(;;){const chunk=await reader.read();if(chunk.done)break;if(fresh)stats.chunks++;if(event)event.bytes+=chunk.value.byteLength;if(!outgoing.write(chunk.value))await once(outgoing,"drain");}}
   outgoing.end();if(event)event.done=true;
  })().catch(error=>{if(!outgoing.destroyed)outgoing.destroy(error as Error);});});
  servers.push(server);server.listen(0,"127.0.0.1");await once(server,"listening");const port=(server.address() as {port:number}).port;
@@ -58,6 +63,7 @@ test("warming sibling shells reuses templates before first display without mount
  await expect(page.locator('[data-shared-layout]')).toHaveText(stock?/^\d+:anonymous$/:"1:anonymous");await expect(page.locator('[data-counter="root"]')).toHaveText("root:1");
  await expect(page.locator('[data-counter="team-two"]')).toBeVisible();await expect(page.locator('[data-counter="detail-two"]')).toBeVisible();
  expect(await page.evaluate(()=>(globalThis as typeof globalThis&{__sharedLayoutMounts?:number}).__sharedLayoutMounts)).toBe(1);
+ if(!stock){const ack=stats.events.find(event=>event.shell);expect(ack).toMatchObject({ack:true,hit:"shell-ack",bytes:0});expect(stats.events.filter(event=>event.shell)).toHaveLength(1);}
 });
 test("refresh invalidates templates decoded before their first display",async({page})=>{
  test.skip(Boolean(stock),"Asserts Tuto receipt invalidation before first provisional display.");
@@ -71,6 +77,39 @@ test("failed speculative decoding falls back to validated shell display and fres
  const stats=await open(page,300,false,false,true);await warm(page,stats,"/dashboard/shared/one");await warm(page,stats,"/dashboard/shared/two");
  expect(stats.events.filter(event=>event.prefetch).at(-1)?.segments).toBe(0);await go(page,"two");
  await expect(page.locator('[data-shared-layout]')).toHaveText("2:anonymous");await expect(page.locator('[data-counter="detail-two"]')).toBeVisible();
+ expect(stats.events.find(event=>event.shell)).toMatchObject({ack:false,hit:"shell-hit"});expect(stats.events.find(event=>event.shell)?.bytes).toBeGreaterThan(0);
+});
+for(const expired of [false,true])test(expired?"a delayed acknowledgment cannot display an expired retained shell":"an invalidated ticket cannot display its retained shell",async({page})=>{
+ test.skip(Boolean(stock),"Controls Tuto acknowledgment validation and receipt expiry.");
+ let release!:()=>void;const freshGate=new Promise<void>(resolve=>{release=resolve;});
+ const stats=await open(page,0,false,expired,false,{freshGate,missAck:!expired,ackDelay:expired?1200:0});await page.locator('[data-counter="root"]').click();
+ try {
+ await warm(page,stats,"/dashboard/shared/one");const root=await page.locator('[data-shared-root]').textContent();await page.locator('[data-shell-link="auto"]').click();
+ await expect.poll(()=>stats.events.some(event=>event.ack&&event.done)).toBe(true);
+ await expect(page.locator('[data-shared-layout]')).toHaveCount(0);await expect(page.locator('[data-shared-root]')).toHaveText(root!);
+ release();
+ await expect(page.locator('[data-shared-page]:visible')).toHaveText("one:1:anonymous");await expect(page.locator('[data-shared-layout]')).toHaveText("2:anonymous");
+ expect(stats.events.find(event=>event.ack)).toMatchObject({hit:expired?"shell-ack":"miss",bytes:0});await expect(page.locator('[data-counter="root"]')).toHaveText("root:1");
+ } finally {release();}
+});
+test("action invalidation while acknowledgment is pending prevents stale shell display",async({page})=>{
+ test.skip(Boolean(stock),"Controls a validated acknowledgment and delayed action response.");
+ let release!:()=>void;const freshGate=new Promise<void>(resolve=>{release=resolve;});
+ const stats=await open(page,0,false,false,false,{freshGate,ackDelay:600,actionDelay:1000});await page.locator('[data-counter="root"]').click();const root=await page.locator('[data-shared-root]').textContent();
+ try {
+ await warm(page,stats,"/dashboard/shared/one");await page.locator('[data-shell-link="auto"]').click();await expect.poll(()=>stats.events.some(event=>event.ack&&event.hit==="shell-ack")).toBe(true);
+ await page.locator('[data-shell-action]').click();await expect.poll(()=>stats.events.some(event=>event.ack&&event.done)).toBe(true);
+ await expect(page.locator('[data-shared-layout]')).toHaveCount(0);await expect(page.locator('[data-counter="home"]')).toBeVisible();
+ await expect(page.locator('[data-shell-action-status]')).toHaveText("changed");release();await expect(page.locator('[data-shared-root]')).not.toHaveText(root!);await expect(page.locator('[data-path]')).toHaveText("/dashboard?");
+ await warm(page,stats,"/dashboard/shared/two");await go(page,"two");await expect(page.locator('[data-shared-page]:visible')).toHaveText("two:1:signed-in");await expect(page.locator('[data-counter="root"]')).toHaveText("root:1");
+ } finally {release();}
+});
+test("a superseded acknowledgment cannot display a retained shell or add canceled history",async({page})=>{
+ test.skip(Boolean(stock),"Controls Tuto acknowledgment response timing.");
+ const stats=await open(page,0,false,false,false,{ackDelay:1000});await page.locator('[data-counter="root"]').click();
+ await warm(page,stats,"/dashboard/shared/one");await page.locator('[data-shell-link="auto"]').click();await expect.poll(()=>stats.events.some(event=>event.ack&&event.hit==="shell-ack")).toBe(true);
+ await page.locator('[data-go="settings"]').click();await expect(page.locator('[data-counter="settings"]')).toBeVisible();await page.waitForTimeout(1100);await expect(page.locator('[data-shared-layout]')).toHaveCount(0);
+ await page.locator('[data-back]').click();await expect(page.locator('[data-counter="home"]')).toBeVisible();await expect(page.locator('[data-counter="root"]')).toHaveText("root:1");expect(stats.cancelled).toBeGreaterThan(0);
 });
 test("navigation cancels pending decoding and its late completion cannot restore stale templates",async({page})=>{
  test.skip(Boolean(stock),"Controls Tuto's speculative decode completion.");

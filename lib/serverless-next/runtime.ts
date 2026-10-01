@@ -256,8 +256,8 @@ function hydrationBootstrap(
           return;
         }
         const receivedAt = Date.now(), expiresAt = receivedAt + result.ttlMs;
-        let templates;
-        if (result.kind === "shell" && result.segmentGrant && typeof result.shellFlight === "string" && result.shellFlight.length <= 1398104) {
+        let decoded;
+        if (result.kind === "shell" && typeof result.shellFlight === "string" && result.shellFlight.length <= 1398104) {
           let timedOut = false, timer, abort;
           try {
             const stopped = new Promise((_, reject) => {
@@ -269,9 +269,10 @@ function hydrationBootstrap(
               const bytes = Uint8Array.from(atob(result.shellFlight),character => character.charCodeAt(0));
               const stream = new ReadableStream({start(output){output.enqueue(bytes);output.close();}});
               const shell = await kernel.rscClient.createFromReadableStream(stream,{callServer:globalThis.__TUTO_NEXT_CALL_SERVER__});
-              return kernel.router.collectSegments(shell.root,result.segmentGrant.keys,() => timedOut || controller.signal.aborted);
+              const templates = await kernel.router.collectSegments(shell.root,result.segmentGrant?.keys ?? [],() => timedOut || controller.signal.aborted);
+              return {shell,templates};
             })();
-            templates = await Promise.race([decode,stopped]);
+            decoded = await Promise.race([decode,stopped]);
           } catch { /* Speculative decoding is optional; normal ticket validation/rendering remains available. */ }
           finally {clearTimeout(timer);controller.signal.removeEventListener("abort",abort);}
         }
@@ -283,8 +284,11 @@ function hydrationBootstrap(
           const grant = result.segmentGrant;
           segmentGrants.set(grant.token,{keys:grant.keys,expiresAt:Math.min(expiresAt,receivedAt+grant.ttlMs)});
           while (segmentGrants.size > 8) segmentGrants.delete(segmentGrants.keys().next().value);
-          if (templates) {kernel.router.storeSegments(templates);kernel.router.pinSegments(requestId);}
+          if (decoded) {kernel.router.storeSegments(decoded.templates);kernel.router.pinSegments(requestId);}
         }
+        entry.shell = decoded?.shell;
+        entry.epoch = epoch;
+        entry.expiresAt = expiresAt;
         entry.ticket = result.ticket;
         entry.kind = result.kind || "full";
         entry.timer = setTimeout(() => {
@@ -422,7 +426,8 @@ function hydrationBootstrap(
         body: JSON.stringify({ navigation: {
           ...navigationRequest,
           ...(ticket ? {prefetchTicket:ticket, prefetchMode:prefetched.mode,
-            ...(prefetched.kind === "shell" ? {prefetchShell:true} : {})} : {}),
+            ...(prefetched.kind === "shell" ? {prefetchShell:true,
+              ...(prefetched.shell && prefetched.expiresAt > Date.now() ? {prefetchShellAck:true} : {})} : {})} : {}),
         } }),
         signal: controller.signal,
         redirect: "manual",
@@ -435,8 +440,13 @@ function hydrationBootstrap(
         for (const callback of callbacks) {try {callback();} catch (error) {console.error(error);}}
       }
       if (ticket && prefetched.kind === "shell") {
-        if (response.headers.get("x-tuto-next-prefetch") === "shell-hit" && response.body) {
-          const shell = await kernel.rscClient.createFromReadableStream(response.body, {callServer:globalThis.__TUTO_NEXT_CALL_SERVER__});
+        const hit = response.headers.get("x-tuto-next-prefetch");
+        const current = prefetched.epoch === prefetchEpoch && prefetched.expiresAt > Date.now() &&
+          cacheKey === currentPrefetchKey(target,prefetched.mode);
+        const shell = current && hit === "shell-ack" && response.status === 204 ? prefetched.shell :
+          current && hit === "shell-hit" && response.body ?
+            await kernel.rscClient.createFromReadableStream(response.body, {callServer:globalThis.__TUTO_NEXT_CALL_SERVER__}) : undefined;
+        if (shell) {
           if (token !== navigationSequence) return;
           applyNavigationStyles(shell);
           shellDisplayed = true;
@@ -446,6 +456,7 @@ function hydrationBootstrap(
         // Shell validation never owns URL/history/cookies. The fresh request
         // uses the original slot state and retains normal streamed control flow.
         navigationRequest.segmentRefs = segmentRefs(String(token));
+        navigationRequest.headers = Object.fromEntries(actionHeaders.entries());
         response = await fetch(endpoint, {...requestOptions, body:JSON.stringify({navigation:navigationRequest})});
         if (token !== navigationSequence) return;
       }

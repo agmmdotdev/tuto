@@ -63,7 +63,7 @@ test("default intent displays a validated loading shell then streams fresh desce
   await warm(page,stats);await page.locator('[data-shell-link="auto"]').click();
   await expect(page.locator('[data-counter="shell"]')).toHaveText("shell:1");
  }
- if(!stock){expect(stats.events.some(event=>event.shell&&event.hit==="shell-hit")).toBe(true);expect(stats.chunks).toBeGreaterThan(1);}
+ if(!stock){expect(stats.events.some(event=>event.shell&&["shell-hit","shell-ack"].includes(event.hit??""))).toBe(true);expect(stats.chunks).toBeGreaterThan(1);}
 });
 test("explicit true upgrades an automatic shell to full Flight without serving it as a shell",async({page})=>{
  test.skip(Boolean(stock),"Tests Tuto's distinct bounded ticket strategies and upgrade selection.");
@@ -105,7 +105,7 @@ test("prefetched intercepted loading preserves its background, refresh and nativ
  await page.locator('[data-refresh]').click();await expect(page.locator('[data-counter="modal"]')).toHaveText("modal:1");
  await page.locator('[data-back]').click();await expect(page.locator('[data-counter="home"]')).toHaveText("home:1");
  await page.locator('[data-forward]').click();await expect(page.locator('[data-counter="modal"]')).toHaveText(stock?"modal:0":"modal:1");
- if(!stock)expect(stats.events.some(event=>event.shell&&event.hit==="shell-hit")).toBe(true);
+ if(!stock)expect(stats.events.some(event=>event.shell&&["shell-hit","shell-ack"].includes(event.hit??""))).toBe(true);
 });
 
 test("shell navigation keeps streamed error, notFound and redirect control flow local",async({page})=>{
@@ -116,7 +116,7 @@ test("shell navigation keeps streamed error, notFound and redirect control flow 
   await expect(page.locator('[data-counter="root"]')).toHaveText("root:1");
  }
  await expect(page.locator('[data-path]')).toHaveText("/dashboard/settings?redirected=yes");
- if(!stock)expect(stats.events.filter(event=>event.shell&&event.hit==="shell-hit")).toHaveLength(3);
+ if(!stock)expect(stats.events.filter(event=>event.shell&&["shell-hit","shell-ack"].includes(event.hit??""))).toHaveLength(3);
 });
 
 test("prefetched primary and nested slot loading stream independently without remounting shared slot layouts",async({page})=>{
@@ -131,5 +131,5 @@ test("prefetched primary and nested slot loading stream independently without re
  await expect(page.locator('[data-counter="team-slow"]')).toBeVisible();await expect(page.locator('[data-counter="detail-slow"]')).toBeVisible();
  await expect(page.locator('[data-counter="team-layout"]')).toHaveText("team-layout:1");
  await expect(page.locator('[data-counter="analytics-home"]')).toHaveText("analytics-home:1");
- if(!stock)expect(stats.events.some(event=>event.shell&&event.hit==="shell-hit")).toBe(true);
+ if(!stock)expect(stats.events.some(event=>event.shell&&["shell-hit","shell-ack"].includes(event.hit??""))).toBe(true);
 });

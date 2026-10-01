@@ -20,13 +20,13 @@ Verified on 2026-10-01 in the Tuto cloud environment with Node 24.19.0,
 Yarn 4.13.0, and Linux x64:
 
 - Immutable dependency installation and browser-kernel generation passed.
-  The kernel is 229,744 bytes and targets Next 16.3.6 / React 19.2.6 (artifact version 20).
-- `yarn test:serverless-next`: 89 tests passed, including SecureExec isolation,
+  The kernel is 229,744 bytes and targets Next 16.3.6 / React 19.2.6 (artifact version 21).
+- `yarn test:serverless-next`: 92 tests passed, including SecureExec isolation,
   streaming, cache invalidation, Cache Components, and App Router topology.
 - `yarn test:serverless-nextjs-runtime --maxWorkers=1`: 111 tests passed. The
   parallel run under concurrent browser/build load hit the existing Next Lite
   template's five-second timeout; the serial rerun passed without source changes.
-- The sixty Next browser checkpoints passed in installed Chromium 151 with
+- The sixty-four Next browser checkpoints passed in installed Chromium 151 with
   both child-process and SecureExec execution. They cover hydration,
   persistent navigation, independent slot history, refresh/state retention, native iframe reloads, Server Actions, virtual cookies, forms, and streamed slot-local
   error/not-found boundaries, recursive slots, and ancestor error propagation.
@@ -37,18 +37,24 @@ Yarn 4.13.0, and Linux x64:
   errors/redirects/notFound, and a partially streamed modal background. Four
   equivalent cases also pass against stock Next 16.3.6; a fifth specifically
   checks Tuto transport cancellation before handing the shell to React.
-  Thirteen shared-segment browser cases cover sibling layout/loading reuse with
+  Seventeen shared-segment browser cases cover sibling layout/loading reuse with
   fresh primary/nested slot pages, retained layout state, refresh, action-cookie
   invalidation, superseded navigation, receipt expiry and parameterized revisits.
   They also cover pre-display sibling reuse without client mounts, pre-display
   refresh/action-cookie invalidation, failed decoding, late cancellation, retry
-  after Link cancellation, and pre-display expiry. Five corresponding
-  stock Next16.3.6 production cases pass; eight transport/policy cases remain
+  after Link cancellation, and pre-display expiry. Four acknowledgment races
+  cover server invalidation, expiry during validation, action invalidation while
+  acknowledgment is pending, and superseding navigation/history. The normal
+  retained-model path asserts a zero-byte acknowledgment; failed decoding retains
+  the Flight-transfer fallback. Five corresponding
+  stock Next16.3.6 production cases pass; twelve transport/policy cases remain
   Tuto-only. Five runtime/receipt cases cover owner/workspace/header isolation,
   forged hints, epoch/expiry/capacity, fresh leaves, and discarded/replaced children.
   Three decoder unit cases cover lazy Flight traversal without component invocation,
   granted keys, atomic failure/cancellation, graph/resolution bounds, insertion
   gating, bounded eviction and retained request snapshots.
+  Three acknowledgment API cases verify bodyless/single-use consumption, fresh
+  descendant execution, complete context checks, refresh invalidation and full-ticket rejection.
   Eight viewport cases cover automatic warming, off-screen cancellation/re-entry,
   intent priority, navigation/history ordering, refresh/cookie-context replay,
   explicit caller ownership after unmount, and per-entry capacity eviction.
@@ -89,7 +95,9 @@ Yarn 4.13.0, and Linux x64:
   The viewport smoke also warms without hover, consumes a ticket, and retains
   root state and history through the compiled SecureExec production API.
   A shared-segment production smoke also checks sibling reuse, fresh leaf output
-  and action-cookie invalidation with retained root state.
+  and action-cookie invalidation with retained root state. Its retained-model
+  navigation receives a 204 `shell-ack`; a browser Fetch clone confirms zero
+  response-body bytes before fresh streamed content replaces the shell.
   A further compiled SecureExec smoke test validates a loading-shell ticket,
   streams fresh page/Suspense content and applies an action-cookie refresh while
   retaining the root counter.
@@ -701,11 +709,26 @@ while the entry is current, uncanceled and unexpired. Traversal is bounded to
 failure falls back to normal ticket validation and rendering. Cancellation or
 expiry removes an unfinished entry so the destination can be warmed again.
 Only shell-derived templates enter the reusable map: unticketed dynamic page
-output and explicit full prefetches do not populate it. Navigation still validates
-the server ticket before provisional display and decodes its returned shell;
-the prefetch decode never owns visible UI, URL/history, cookies or styles. The
-shell bytes are consequently transferred again at validation, a deliberate
-bounded transport cost rather than a zero-round-trip navigation claim.
+output and explicit full prefetches do not populate it. A successful bounded
+decode also retains the complete shell model with its ticket, within the existing
+eight-entry document limit and thirty-second expiry. Expiry/eviction/invalidation
+releases the entry; an in-flight navigation owns its consumed model and pinned
+templates until completion. The prefetch decode never owns visible UI,
+URL/history, cookies or styles.
+
+Navigation requests a bodyless acknowledgment when it holds an unexpired decoded
+shell. The server consumes the same single-use ticket after validating exact
+artifact object/epoch, owner, URL/search, complete headers, mode and slot state.
+Only an explicit successful 204 `shell-ack` can authorize retained-model display.
+The browser rechecks local invalidation epoch, expiry and the complete prefetch
+key after the acknowledgment arrives; cancellation/sequence checks prevent late
+responses from committing. The acknowledgment carries no Flight, cookies,
+redirect or preview capability changes. It saves duplicate shell transfer and
+decoding but still requires a validation round trip followed by a separate fresh
+streamed navigation request. Failed speculative decoding uses the existing
+validated shell-Flight response instead. Misses skip provisional display and
+request fresh Flight; root/layout client state and history remain intact. Fresh
+requests re-read current virtual headers after validation.
 A missed/expired/evicted receipt renders layouts normally. Process changes miss
 receipts safely, with no distributed segment cache. Data mutations outside the
 known action/refresh epoch still require refresh or expiry. Reused server layout
@@ -837,9 +860,10 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next bounded framework slice is avoiding duplicate shell transfer/decoding
-through a validated acknowledgment and retained decoded shell model. Keep
-receipt/context validation, template bounds, cancellation and fresh leaf execution;
-PPR continuation requires separate architecture and evidence.
+The next bounded framework slice is combining shell validation with the fresh
+streamed navigation response to remove the remaining extra request. Preserve
+validated retained-model display, cancellation/history ordering, cookies/control
+flow and fresh leaf execution; PPR continuation requires separate architecture
+and evidence.
 Deployment validation and sandbox security review remain separate operational
 work.
