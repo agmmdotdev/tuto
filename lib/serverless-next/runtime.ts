@@ -366,7 +366,11 @@ function hydrationBootstrap(
       });
     });
     if (!provisional) controller.rendered = true;
-    kernel.react.startTransition(() => root.render(payload.root));
+    // Existing Activity entries can contain a previously published loading
+    // model. Update this root normally so a suspended transition cannot keep
+    // that model selected after fresh Flight resolves. Route-local Suspense
+    // boundaries still reveal chunks while the same root/layout fibers persist.
+    root.render(payload.root);
     await committed;
   }
   let currentRootModel;
@@ -413,6 +417,7 @@ function hydrationBootstrap(
       const prefetched = !restoring && navigation !== "refresh" ? prefetchEntries.get(cacheKey) : undefined;
       // Never let speculative work delay an actual navigation.
       const ticket = prefetched?.ticket;
+      const combinedShell = Boolean(ticket && prefetched.kind === "shell" && prefetched.shell && prefetched.expiresAt > Date.now());
       if (prefetched) {consumedPrefetch=prefetched;prefetchEntries.delete(cacheKey); clearTimeout(prefetched.timer);}
       prefetchPending?.abort();
       const navigationRequest = {
@@ -427,19 +432,32 @@ function hydrationBootstrap(
           ...navigationRequest,
           ...(ticket ? {prefetchTicket:ticket, prefetchMode:prefetched.mode,
             ...(prefetched.kind === "shell" ? {prefetchShell:true,
-              ...(prefetched.shell && prefetched.expiresAt > Date.now() ? {prefetchShellAck:true} : {})} : {})} : {}),
+              ...(combinedShell ? {prefetchShellAck:true,prefetchShellStream:true} : {})} : {})} : {}),
         } }),
         signal: controller.signal,
         redirect: "manual",
       };
       let response = await fetch(endpoint, requestOptions);
       if (token !== navigationSequence) return;
-      if (ticket && response.headers.get("x-tuto-next-prefetch") === "miss") {
+      if (ticket && ["miss","shell-stream-miss"].includes(response.headers.get("x-tuto-next-prefetch"))) {
         const callbacks = [...prefetched.callbacks];
         prefetched.callbacks.clear();
         for (const callback of callbacks) {try {callback();} catch (error) {console.error(error);}}
       }
-      if (ticket && prefetched.kind === "shell") {
+      if (combinedShell) {
+        // Fresh cookies invalidate a retained shell before it can be displayed.
+        applyVirtualCookies(response);
+        const current = prefetched.epoch === prefetchEpoch && prefetched.expiresAt > Date.now() &&
+          cacheKey === currentPrefetchKey(target,prefetched.mode);
+        if (response.headers.get("x-tuto-next-prefetch") === "shell-stream-hit" && current &&
+            !response.headers.has("location") && response.headers.get("content-type")?.startsWith("text/x-component") && response.body) {
+          applyNavigationStyles(prefetched.shell);
+          shellDisplayed = true;
+          await commitNavigationModel(prefetched.shell, controller, token, true);
+          if (token !== navigationSequence) return;
+        }
+      }
+      if (ticket && prefetched.kind === "shell" && !combinedShell) {
         const hit = response.headers.get("x-tuto-next-prefetch");
         const current = prefetched.epoch === prefetchEpoch && prefetched.expiresAt > Date.now() &&
           cacheKey === currentPrefetchKey(target,prefetched.mode);
@@ -460,7 +478,7 @@ function hydrationBootstrap(
         response = await fetch(endpoint, {...requestOptions, body:JSON.stringify({navigation:navigationRequest})});
         if (token !== navigationSequence) return;
       }
-      applyVirtualCookies(response);
+      if (!combinedShell) applyVirtualCookies(response);
       const location = response.headers.get("location");
       if (location) return navigate("replace", location, options);
       if (!(response.headers.get("content-type") || "").startsWith("text/x-component") || !response.body) {
@@ -591,6 +609,10 @@ function hydrationBootstrap(
     const endpoint = ${JSON.stringify(config.actionEndpoint)};
     if (!endpoint) throw new Error("This preview has no Server Action endpoint.");
     actionRequests++;
+    // An action invalidates the pending destination. Release transport that
+    // React has not consumed so it cannot hold the worker while the action waits.
+    pendingNavigation?.invalidate?.();
+    if (!pendingNavigation?.rendered) pendingNavigation?.abort();
     try {
     invalidateSegments();
     invalidatePrefetch();

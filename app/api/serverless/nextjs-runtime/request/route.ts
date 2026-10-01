@@ -161,6 +161,7 @@ async function readPayload(request: Request) {
       prefetchMode?: "auto" | "full";
       prefetchShell?: boolean;
       prefetchShellAck?: boolean;
+      prefetchShellStream?: boolean;
       segmentRefs?: unknown;
       headers?: Record<string, string>;
     };
@@ -175,6 +176,44 @@ async function readPayload(request: Request) {
     workspaceKey?: string;
     streamPreview?: boolean;
   };
+}
+
+// A pipeThrough abort may wait for its pending write when the browser has not
+// started consuming the body. Cancel the worker reader directly so a retained
+// shell, delayed headers or canceled navigation cannot hold its stream lease.
+function navigationResponseStream(body: ReadableStream<Uint8Array>, signal: AbortSignal) {
+  const reader = body.getReader();
+  let closed = false;
+  let cleanup: (() => void) | undefined;
+  const cancel = () => { void reader.cancel(signal.reason).catch(() => {}); };
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      const abort = () => {
+        if (closed) return;
+        closed = true;
+        signal.removeEventListener("abort", abort);
+        cancel();
+        controller.error(signal.reason);
+      };
+      signal.addEventListener("abort", abort, {once:true});
+      if (signal.aborted) abort();
+      cleanup = () => signal.removeEventListener("abort", abort);
+    },
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (closed) return;
+        if (chunk.done) { closed = true; cleanup?.(); controller.close(); }
+        else controller.enqueue(chunk.value);
+      } catch (error) {
+        if (closed) return;
+        closed = true; cleanup?.(); controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      closed = true; cleanup?.(); await reader.cancel(reason);
+    },
+  });
 }
 
 function virtualizeActionCookies(response: Response) {
@@ -453,9 +492,11 @@ export async function POST(request: Request) {
       const cached = typeof navigation.prefetchTicket === "string" && typeof owner === "string" &&
         ["push", "replace"].includes(navigation.kind)
         ? nextPrefetchTickets.take(navigation.prefetchTicket, artifact, owner, cacheKey) : null;
-      // Validate the shell before display. This provisional response must not
-      // advance the reload capability, apply cookies or replace fresh page work.
-      if (navigation.prefetchShell === true) {
+      const combinedShell = navigation.prefetchShell === true && navigation.prefetchShellAck === true && navigation.prefetchShellStream === true;
+      // The legacy validation-only response never advances reload capability or
+      // applies cookies. Combined requests validate here, then execute fresh
+      // navigation normally and acknowledge reuse in its response headers.
+      if (navigation.prefetchShell === true && !combinedShell) {
         if (cached?.kind === "shell" && navigation.prefetchShellAck === true) {
           return new Response(null, {status:204, headers:{
             "access-control-allow-origin":"*", "cache-control":"no-store",
@@ -473,12 +514,14 @@ export async function POST(request: Request) {
       }
       let response: Response;
       try {
-        response = cached && cached.kind !== "shell" ? new Response(Uint8Array.from(cached.body), {headers:cached.headers, status:cached.status})
+        response = !combinedShell && cached && cached.kind !== "shell" ? new Response(Uint8Array.from(cached.body), {headers:cached.headers, status:cached.status})
           : await executeNextRequestArtifact(artifact, {
             headers:navigation.headers, navigation, stream:true, url:url.pathname + url.search,
           });
       } finally { if (navigation.kind === "refresh") nextPrefetchTickets.invalidate(artifact); }
-      response.headers.set("x-tuto-next-prefetch", cached && cached.kind !== "shell" ? "hit" : "miss");
+      response.headers.set("x-tuto-next-prefetch", combinedShell
+        ? cached?.kind === "shell" && cached.epoch === nextPrefetchTickets.epoch(artifact) ? "shell-stream-hit" : "shell-stream-miss"
+        : cached && cached.kind !== "shell" ? "hit" : "miss");
       const token = new URL(request.url).searchParams.get("preview");
       const capability = resolvePreviewCapability(token);
       const sequence = payload.navigation.sequence;
@@ -493,7 +536,7 @@ export async function POST(request: Request) {
       }
       response.headers.set("access-control-allow-origin", "*");
       response.headers.set("cache-control", "no-store");
-      const streamed = response.body ? new Response(response.body.pipeThrough(new TransformStream(), {signal:request.signal}), {
+      const streamed = response.body ? new Response(navigationResponseStream(response.body,request.signal), {
         headers:response.headers, status:response.status, statusText:response.statusText,
       }) : response;
       return virtualizeActionCookies(streamed);

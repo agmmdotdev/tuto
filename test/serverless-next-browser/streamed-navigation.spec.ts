@@ -121,7 +121,7 @@ test("handles errors, notFound and redirects after streamed headers without remo
   if (process.env.TUTO_NEXT_STREAM_STOCK_URL) {
     await page.locator('[data-go="stream-error"]').click();
   } else await push("/dashboard/stream-error");
-  await expect(page.locator("[data-error-loading]")).toBeVisible();
+  await expect(page.locator("[data-error-loading]:visible")).toBeVisible();
   await expect(page.locator("[data-stream-error]")).toBeVisible();
   if (process.env.TUTO_NEXT_STREAM_STOCK_URL) await page.locator('[data-go="stream-missing"]').click();
   else await push("/dashboard/stream-missing");
