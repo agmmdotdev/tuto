@@ -20,11 +20,13 @@ Verified on 2026-10-01 in the Tuto cloud environment with Node 24.19.0,
 Yarn 4.13.0, and Linux x64:
 
 - Immutable dependency installation and browser-kernel generation passed.
-  The kernel is 224,524 bytes and targets Next 16.3.6 / React 19.2.6.
-- `yarn test:serverless-next`: 69 tests passed, including SecureExec isolation,
+  The kernel is 224,625 bytes and targets Next 16.3.6 / React 19.2.6.
+- `yarn test:serverless-next`: 72 tests passed, including SecureExec isolation,
   streaming, cache invalidation, Cache Components, and App Router topology.
-- `yarn test:serverless-nextjs-runtime`: 111 tests passed.
-- The thirty-one Next browser checkpoints passed in installed Chromium 151 with
+- `yarn test:serverless-nextjs-runtime --maxWorkers=1`: 111 tests passed. The
+  parallel run under concurrent browser/build load hit the existing Next Lite
+  template's five-second timeout; the serial rerun passed without source changes.
+- The thirty-nine Next browser checkpoints passed in installed Chromium 151 with
   both child-process and SecureExec execution. They cover hydration,
   persistent navigation, independent slot history, refresh/state retention, native iframe reloads, Server Actions, virtual cookies, forms, and streamed slot-local
   error/not-found boundaries, recursive slots, and ancestor error propagation.
@@ -41,6 +43,10 @@ Yarn 4.13.0, and Linux x64:
   production server. Its test fixture uses a dynamic root and a Suspense-wrapped
   control panel to satisfy production prerender requirements; unrelated
   download/new-window links disable stock viewport prefetch in that comparison.
+  Eight loading-shell cases cover fresh descendants, full-prefetch upgrade,
+  cancellation/history, failed transport recovery, cookies/actions, interceptions,
+  streamed control flow and primary/nested slot boundaries. Five corresponding
+  production stock cases pass with the history-state differences documented below.
   Firefox was not run because its download hosts
   are denied by the environment's network policy.
 - `yarn lint`, `yarn typecheck:tsgo`, and
@@ -61,6 +67,9 @@ Yarn 4.13.0, and Linux x64:
   Fluid Compute canaries.
   A compiled production Link smoke test also consumes a hover-prefetched ticket,
   preserves the root counter and restores history with SecureExec.
+  A further compiled SecureExec smoke test validates a loading-shell ticket,
+  streams fresh page/Suspense content and applies an action-cookie refresh while
+  retaining the root counter.
 
 The explicitly labeled Next 16.2.6 boundary differential and performance
 measurements below remain historical evidence; they were not remeasured for
@@ -114,6 +123,7 @@ this upgrade. The nested dashboard differential below uses Next 16.3.6.
 | Redirect and not-found control flow      | Next's redirect/not-found errors preserve 307/308/303/404 semantics and select eligible nested not-found boundaries           |
 | Preview navigation                       | `next/link`, `useRouter`, raw links, replace/refresh and native back/forward apply Flight to the current document with per-entry slot state   |
 | Link intent prefetch                     | Hover/touch warms eligible local page tickets; `prefetch={false}` disables both; repeated intent deduplicates and navigation takes priority |
+| Loading-shell prefetch                   | Default/auto Link intent stops eligible branches at their first loading boundary; validated provisional UI precedes a separate fresh streamed navigation |
 | React `cache`                            | Repeated calls share one value during a render and recompute for the next RSC request                                         |
 | `unstable_cache`                         | Next's own wrapper executes inside its work/request AsyncLocalStorage contexts over a Tuto adapter                            |
 | Cache Components                         | Next SWC rewrites `"use cache"` functions and async Server Components through its real cache wrapper                          |
@@ -448,14 +458,14 @@ Streamed redirects preserve Next's control-flow digest and push/replace kind;
 custom error/not-found boundaries receive late failures after headers are sent.
 Such responses retain HTTP 200. Without a loading boundary, the transition keeps
 the previous view until the changed tree can commit. Prefetch uses the bounded
-manual ticket path described below. PPR, `bfcacheId`, native host-address-bar URLs and full unknown-route/global
+full/shell ticket paths described below. PPR, `bfcacheId`, native host-address-bar URLs and full unknown-route/global
 fallback state preservation are not established by this checkpoint. Server
 Actions use the current virtual URL and schedule an additional state-aware
 refresh after receiving their result. They do not await its React commit inside
 the action promise, which would deadlock a pending `useActionState` transition.
 Action Flight itself remains buffered.
 
-Manual `router.prefetch(href, {onInvalidate})` and eligible Link intent opt into a full page Flight
+Manual `router.prefetch(href, {onInvalidate})` and explicit `prefetch={true}` Link intent opt into a full page Flight
 render. It does not render or hydrate that tree in the document, change history,
 apply response cookies, or update the reload capability. A completed eligible
 render receives an opaque single-use ticket. The navigation endpoint consumes
@@ -492,11 +502,13 @@ Tickets are process-local. Another instance safely misses a ticket; this is not
 a distributed router cache or an out-of-band invalidation subscription. Mutations
 outside this document's action/refresh flow and this process's API epoch need a
 refresh or expire at the bounded lifetime. There is no viewport prefetch,
-partial/PPR shell cache, per-segment reuse, or Next five-minute static cache.
+PPR/static-vs-dynamic analysis, per-segment reuse, or Next five-minute static cache.
 
 Link mouse-enter and touch-start run the user's handler, then warm local page
-destinations using this same cache. `false` disables both; `true`, `"auto"`,
-`null` and the default currently share the conservative full-ticket path.
+destinations using this same cache. `false` disables both; `true` uses the
+full-ticket path. `"auto"`, `null` and the default select a loading shell when
+the selected route tree has an eligible boundary. Routes without one retain
+the existing full-ticket behavior; there is no static/dynamic classification.
 External, download, new-window and same-path/query hash-only links do not warm.
 Ordinary click, modifier keys, forwarded refs, prevented clicks, replace and
 scroll options retain their behavior. The raw-anchor fallback is installed
@@ -516,6 +528,56 @@ impure render counter explicitly opts out of prefetch, as render side effects
 can otherwise run during speculation. This follows the render-purity constraint
 in the pinned [Next Link implementation](https://raw.githubusercontent.com/vercel/next.js/v16.3.6/packages/next/src/client/app-dir/link.tsx)
 and prefetch guide; it does not establish stock viewport/PPR cache equivalence.
+
+### Loading-shell ticket limits
+
+The shell renderer follows the legacy, non-PPR first-loading-boundary cutoff
+in pinned Next's
+[component-tree builder](https://raw.githubusercontent.com/vercel/next.js/v16.3.6/packages/next/src/server/app-render/create-component-tree.tsx).
+Each selected primary/slot branch stops at its first eligible loading boundary;
+branches without one defer their leaf. Layouts below a cutoff and their owned
+descendant slots do not execute. Metadata is deferred to fresh navigation.
+Layouts/loading components above the cutoff still execute and must be pure.
+A module-evaluation guard regression proves the nested page is not imported
+during its outer shell prefetch.
+
+Full and automatic strategy keys are distinct. A completed full ticket can
+satisfy either intent; a later full intent can upgrade a completed shell.
+An intent while speculation is busy still drops rather than queues an upgrade.
+Shell tickets retain the same revision, document-owner, complete-header,
+selected-slot, epoch, size and expiry checks. They cannot satisfy a full-page
+navigation. Refresh/actions invalidate both strategies.
+
+Navigation first consumes/validates the shell ticket through one endpoint
+request. A hit sends complete shell Flight. Its RouterRoot is provisional:
+display does not own the global router state, virtual URL, history, cookies or
+reload capability. A second request, without a ticket and with the original
+slot selection, executes fresh streamed page work through the existing transport.
+This is deliberately two roundtrips. It does not splice cached Flight bytes,
+reuse server layouts by segment, or implement a PPR continuation. The shell's
+loading UI may appear while the virtual URL still identifies the previous entry;
+normal navigation owns that entry when fresh Flight commits.
+
+Existing cached client branches and unaffected slots are preserved during
+provisional display; a visited target can stay visible with its old client state
+until fresh Flight updates it. New targets show the prefetched loading UI.
+Cancellation before handing fresh Flight to React aborts transport and adds no
+canceled history entry. A fresh transport failure restores the committed model
+and releases the prefetch guard. Once React owns fresh unresolved references,
+the existing bounded drain policy applies. Fresh Flight retains its normal
+error/notFound/redirect and response-cookie behavior.
+
+Eight real-HTTP browser cases pass with both execution backends. Fresh execution
+uses a controlled next-request header probe because SecureExec's existing timing
+mitigation freezes its wall clock; absolute timestamp comparisons use child
+execution and stock Next only. Five stock production cases compare first-load
+loading/freshness, cookies, modal background/refresh/history, streamed control
+flow and parallel loading. Stock remounts the dynamic page/modal counters on
+back/forward in this fixture (zero); Tuto retains its bounded Activity entries
+(one). Layout/sibling state remains preserved. The stock fixture uses a dynamic
+root and Suspense-wrapped controls and moves the unit-only module guard into its
+page function to permit compilation. These are recorded behavioral differences,
+not full App Router or Cache Components/bfcache parity.
 
 Seven Tuto browser cases exercise deduplication, refresh, action/cookie changes,
 expiry/subscriber callbacks, slot-context changes, intercepted reloads and a
@@ -613,7 +675,7 @@ restarting Next.js.
 
 ## Deliberately not supported yet
 
-- Viewport Link prefetch scheduling, partial/PPR caching and full `bfcacheId`/Cache Components router caching
+- Viewport Link prefetch scheduling, per-segment/PPR continuation caching and full `bfcacheId`/Cache Components router caching
 - Incremental Server Action Flight responses and streamed proxy terminal responses
 - External proxy rewrites and streaming proxy IPC
 - Next's webpack/Turbopack/PostCSS plugin pipeline, Sass, Tailwind directives, and CSS `url()` asset graph rewriting
@@ -643,9 +705,10 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next bounded framework slice is a loading-shell prefetch path: distinguish
-default/`"auto"` intent from `prefetch={true}`, cache only eligible partial shells,
-and stream fresh dynamic descendants on navigation. Establish cancellation and
-context/invalidation tests before adopting stock Next's viewport scheduler.
+The next bounded framework slice is a conservative viewport prefetch scheduler:
+visible eligible Links enter a small queue, intent outranks viewport work,
+off-screen/unmounted links cancel pending work, and navigation remains first.
+Keep strategy/context invalidation and renderer bounds before attempting
+per-segment reuse or PPR continuation.
 Deployment validation and sandbox security review remain separate operational
 work.

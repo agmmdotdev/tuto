@@ -181,16 +181,19 @@ function hydrationBootstrap(
       for (const callback of entry.callbacks) { try { callback(); } catch (error) { console.error(error); } }
     }
   }
-  function currentPrefetchKey(target) {
+  function currentPrefetchKey(target, mode = "full") {
     return prefetchKey(${JSON.stringify(config.revision)}, target.pathname + target.search,
-      Object.fromEntries(actionHeaders.entries()), globalThis.__TUTO_NEXT_ROUTER_STATE__);
+      Object.fromEntries(actionHeaders.entries()), globalThis.__TUTO_NEXT_ROUTER_STATE__, mode);
   }
   globalThis.__TUTO_NEXT_PREFETCH__ = async (href, options = {}) => {
     if (!endpoint || navigationActive) return;
     const target = new URL(String(href), new URL(globalThis.__TUTO_NEXT_URL__, "http://next.local"));
     if (target.origin !== "http://next.local") return;
-    const key = currentPrefetchKey(target);
-    let entry = prefetchEntries.get(key);
+    const mode = options._prefetchMode === "auto" ? "auto" : "full";
+    const key = currentPrefetchKey(target, mode);
+    const full = prefetchEntries.get(currentPrefetchKey(target, "full"));
+    const automatic = prefetchEntries.get(currentPrefetchKey(target, "auto"));
+    let entry = full?.ticket ? full : automatic?.kind === "full" && automatic?.ticket ? automatic : prefetchEntries.get(key);
     if (entry) {
       if (typeof options.onInvalidate === "function") entry.callbacks.add(options.onInvalidate);
       return entry.promise;
@@ -201,14 +204,14 @@ function hydrationBootstrap(
     const controller = new AbortController();
     prefetchPending = controller;
     const epoch = prefetchEpoch;
-    entry = {callbacks:new Set(typeof options.onInvalidate === "function" ? [options.onInvalidate] : []), controller};
+    entry = {callbacks:new Set(typeof options.onInvalidate === "function" ? [options.onInvalidate] : []), controller, mode};
     prefetchEntries.set(key, entry);
     entry.promise = (async () => {
       try {
         const response = await fetch(endpoint, {
           method:"POST", headers:{"content-type":"text/plain;charset=UTF-8"}, signal:controller.signal,
           body:JSON.stringify({navigation:{kind:"push", id:"prefetch:" + ++prefetchSequence,
-            prefetch:true, prefetchOwner, revision:${JSON.stringify(config.revision)},
+            prefetch:true, prefetchMode:mode, prefetchOwner, revision:${JSON.stringify(config.revision)},
             url:target.pathname + target.search, state:globalThis.__TUTO_NEXT_ROUTER_STATE__,
             headers:Object.fromEntries(actionHeaders.entries())}}),
         });
@@ -219,6 +222,7 @@ function hydrationBootstrap(
         const result = await response.json();
         if (epoch !== prefetchEpoch || prefetchEntries.get(key) !== entry) return;
         entry.ticket = result.ticket;
+        entry.kind = result.kind || "full";
         entry.timer = setTimeout(() => {
           if (prefetchEntries.get(key) !== entry) return;
           prefetchEntries.delete(key);
@@ -248,6 +252,36 @@ function hydrationBootstrap(
     historyIndex = 0;
     try { history.scrollRestoration = "manual"; history.replaceState({ tuto: historyToken, index: 0 }, ""); } catch {}
   }
+  function applyNavigationStyles(payload) {
+    for (const style of payload.styles || []) {
+      let element = [...document.querySelectorAll("style[data-tuto-next-style]")].find(element => element.dataset.tutoNextStyle === style.path);
+      if (!element) { element = document.createElement("style"); element.dataset.tutoNextStyle = style.path; document.head.append(element); }
+      element.textContent = style.css;
+    }
+  }
+  async function commitNavigationModel(payload, controller, token, provisional = false) {
+    const committed = new Promise((resolve, reject) => {
+      const id = payload.state?.navigationId || String(token);
+      const onAbort = () => {
+        navigationCommits.delete(id);
+        controller.signal.removeEventListener("abort", onAbort);
+        delete controller.invalidate;
+        reject(new DOMException("Navigation cancelled", "AbortError"));
+      };
+      controller.invalidate = onAbort;
+      controller.signal.addEventListener("abort", onAbort, {once:true});
+      navigationCommits.set(id, () => {
+        controller.signal.removeEventListener("abort", onAbort);
+        navigationCommits.delete(id);
+        delete controller.invalidate;
+        resolve();
+      });
+    });
+    if (!provisional) controller.rendered = true;
+    kernel.react.startTransition(() => root.render(payload.root));
+    await committed;
+  }
+  let currentRootModel;
   async function navigate(navigation, path, options = {}, restoreIndex) {
     if (!endpoint) {
       window.parent?.postMessage({ kind: "navigate", navigation, path, source: "tuto-serverless-nextjs-runtime-preview-log" }, "*");
@@ -275,6 +309,7 @@ function hydrationBootstrap(
     pendingNavigation = controller;
     navigationActive = true;
     prefetchPending?.abort();
+    let shellDisplayed = false;
     try {
     historyEntries[historyIndex] = snapshot();
     const restoring = navigation === "restore";
@@ -283,34 +318,48 @@ function hydrationBootstrap(
     let payload;
     let status = 200;
     if (!hashOnly || navigation === "refresh" || restoring) {
-      const cacheKey = currentPrefetchKey(target);
+      const cacheKey = prefetchEntries.get(currentPrefetchKey(target))?.ticket ? currentPrefetchKey(target) : currentPrefetchKey(target, "auto");
       const prefetched = !restoring && navigation !== "refresh" ? prefetchEntries.get(cacheKey) : undefined;
       // Never let speculative work delay an actual navigation.
       const ticket = prefetched?.ticket;
       if (prefetched) {prefetchEntries.delete(cacheKey); clearTimeout(prefetched.timer);}
       prefetchPending?.abort();
-      const response = await fetch(endpoint, {
+      const navigationRequest = {
+          kind: navigation, id: String(token), sequence: token, prefetchOwner,
+          revision: ${JSON.stringify(config.revision)}, url: pathOf(target),
+          state: restored?.state || globalThis.__TUTO_NEXT_ROUTER_STATE__, headers:Object.fromEntries(actionHeaders.entries()),
+      };
+      const requestOptions = {
         method: "POST",
         headers: { "content-type": "text/plain;charset=UTF-8" },
         body: JSON.stringify({ navigation: {
-          kind: navigation,
-          id: String(token),
-          sequence: token,
-          prefetchOwner,
-          ...(ticket ? {prefetchTicket:ticket} : {}),
-          revision: ${JSON.stringify(config.revision)},
-          url: pathOf(target),
-          state: restored?.state || globalThis.__TUTO_NEXT_ROUTER_STATE__,
-          headers: Object.fromEntries(actionHeaders.entries()),
+          ...navigationRequest,
+          ...(ticket ? {prefetchTicket:ticket, prefetchMode:prefetched.mode,
+            ...(prefetched.kind === "shell" ? {prefetchShell:true} : {})} : {}),
         } }),
         signal: controller.signal,
         redirect: "manual",
-      });
+      };
+      let response = await fetch(endpoint, requestOptions);
       if (token !== navigationSequence) return;
       if (ticket && response.headers.get("x-tuto-next-prefetch") === "miss") {
         const callbacks = [...prefetched.callbacks];
         prefetched.callbacks.clear();
         for (const callback of callbacks) {try {callback();} catch (error) {console.error(error);}}
+      }
+      if (ticket && prefetched.kind === "shell") {
+        if (response.headers.get("x-tuto-next-prefetch") === "shell-hit" && response.body) {
+          const shell = await kernel.rscClient.createFromReadableStream(response.body, {callServer:globalThis.__TUTO_NEXT_CALL_SERVER__});
+          if (token !== navigationSequence) return;
+          applyNavigationStyles(shell);
+          shellDisplayed = true;
+          await commitNavigationModel(shell, controller, token, true);
+          if (token !== navigationSequence) return;
+        }
+        // Shell validation never owns URL/history/cookies. The fresh request
+        // uses the original slot state and retains normal streamed control flow.
+        response = await fetch(endpoint, {...requestOptions, body:JSON.stringify({navigation:navigationRequest})});
+        if (token !== navigationSequence) return;
       }
       applyVirtualCookies(response);
       const location = response.headers.get("location");
@@ -321,38 +370,12 @@ function hydrationBootstrap(
       status = response.status;
       payload = await kernel.rscClient.createFromReadableStream(response.body, { callServer: globalThis.__TUTO_NEXT_CALL_SERVER__ });
       if (token !== navigationSequence) return;
-      for (const style of payload.styles || []) {
-        let element = [...document.querySelectorAll("style[data-tuto-next-style]")].find((element) => element.dataset.tutoNextStyle === style.path);
-        if (!element) {
-          element = document.createElement("style");
-          element.dataset.tutoNextStyle = style.path;
-          document.head.append(element);
-        }
-        element.textContent = style.css;
-      }
+      applyNavigationStyles(payload);
     }
     if (payload) {
-      const committed = new Promise((resolve, reject) => {
-        const id = payload.state?.navigationId || String(token);
-        const onAbort = () => {
-          navigationCommits.delete(id);
-          controller.signal.removeEventListener("abort", onAbort);
-          delete controller.invalidate;
-          reject(new DOMException("Navigation cancelled", "AbortError"));
-        };
-        controller.invalidate = onAbort;
-        controller.signal.addEventListener("abort", onAbort, {once:true});
-        navigationCommits.set(id, () => {
-          controller.signal.removeEventListener("abort", onAbort);
-          navigationCommits.delete(id);
-          delete controller.invalidate;
-          resolve();
-        });
-      });
-      controller.rendered = true;
-      kernel.react.startTransition(() => root.render(payload.root));
-      await committed;
+      await commitNavigationModel(payload, controller, token);
       if (token !== navigationSequence) return;
+      currentRootModel = payload.root;
     }
     kernel.router.setUrl(pathOf(target));
     invalidatePrefetch();
@@ -374,6 +397,11 @@ function hydrationBootstrap(
       kind: "navigation-state", navigation, path: pathOf(target), status,
       source: "tuto-serverless-nextjs-runtime-preview-log",
     }, "*");
+    } catch (error) {
+      if (shellDisplayed && token === navigationSequence && !controller.rendered) {
+        kernel.react.startTransition(() => root.render(currentRootModel));
+      }
+      throw error;
     } finally { if (token === navigationSequence) navigationActive = false; }
   }
   globalThis.__TUTO_NEXT_NAVIGATE__ = (navigation, path, options) => {
@@ -502,6 +530,7 @@ function hydrationBootstrap(
     callServer: globalThis.__TUTO_NEXT_CALL_SERVER__,
   });
   const formState = ${JSON.stringify(config.formState)};
+  currentRootModel = model;
   root = kernel.reactDomClient.hydrateRoot(
     document,
     model,

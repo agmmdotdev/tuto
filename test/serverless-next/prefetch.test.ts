@@ -77,3 +77,41 @@ test("aborting speculative Flight does not issue a ticket or block the next requ
  const next=await post(artifact,{prefetch:false,url:"/dashboard"});
  expect(next.status).toBe(200);expect(await next.text()).toContain("home");
 });
+
+test("auto shells stop at the first boundary, omit deferred page evaluation and validate single-use context",async()=>{
+ const {shellPrefetchWorkspace}=await import("./fixtures/shell-prefetch-workspace");
+ const artifact=await compileNextRequestWorkspace(shellPrefetchWorkspace(),{workspaceKey:"shell-cutoff",serverReferenceHashSalt:salt});
+ const args={url:"/dashboard/shell/nested",prefetchMode:"auto",headers:{cookie:"identity=one"}};
+ const warmed=await post(artifact,args);expect(warmed.status).toBe(200);const {ticket,kind}=await warmed.json();expect(kind).toBe("shell");
+ const wrong=await post(artifact,{...args,prefetch:false,prefetchShell:true,prefetchTicket:ticket,headers:{cookie:"identity=two"}});
+ expect(wrong.status).toBe(204);
+ const hit=await post(artifact,{...args,prefetch:false,prefetchShell:true,prefetchTicket:ticket});
+ expect(hit.headers.get("x-tuto-next-prefetch")).toBe("shell-hit");
+ const flight=await hit.text();expect(flight).toContain("shell loading");expect(flight).not.toContain("inner loading");expect(flight).not.toContain("unreachable");
+ const repeated=await post(artifact,{...args,prefetch:false,prefetchShell:true,prefetchTicket:ticket});expect(repeated.status).toBe(204);
+ expect(nextPrefetchKey("rev","/target",{},undefined,"auto")).not.toBe(nextPrefetchKey("rev","/target",{},undefined,"full"));
+});
+
+test("shell tickets cannot replace fresh page execution and explicit full mode remains full",async()=>{
+ const {shellPrefetchWorkspace}=await import("./fixtures/shell-prefetch-workspace");
+ const artifact=await compileNextRequestWorkspace(shellPrefetchWorkspace(),{workspaceKey:"shell-fresh",serverReferenceHashSalt:salt});
+ const args={url:"/dashboard/shell",prefetchMode:"auto"};
+ const {ticket}=await(await post(artifact,args)).json();
+ const navigation=await post(artifact,{...args,prefetch:false,prefetchTicket:ticket});
+ expect(navigation.headers.get("x-tuto-next-prefetch")).toBe("miss");expect(await navigation.text()).toContain("fresh details");
+ const full=await post(artifact,{url:"/dashboard/shell",prefetchMode:"full"});
+ const result=await full.json();expect(result.kind).toBe("full");
+ const hit=await post(artifact,{url:"/dashboard/shell",prefetchMode:"full",prefetch:false,prefetchTicket:result.ticket});
+ expect(hit.headers.get("x-tuto-next-prefetch")).toBe("hit");expect(await hit.text()).toContain("fresh details");
+});
+
+test("action invalidation prevents an unused loading shell from being displayed",async()=>{
+ const {shellPrefetchWorkspace}=await import("./fixtures/shell-prefetch-workspace");
+ const artifact=await compileNextRequestWorkspace(shellPrefetchWorkspace(),{workspaceKey:"shell-action",serverReferenceHashSalt:salt});
+ const {ticket}=await(await post(artifact,{url:"/dashboard/shell",prefetchMode:"auto"})).json();
+ const actionId=Object.entries(artifact.actionManifest).find(([,reference])=>reference.exportName==="change")![0];
+ const action=await POST(new Request("http://tuto.local/request",{method:"POST",headers:{"content-type":"text/plain"},body:JSON.stringify({action:{revision:artifact.revision,url:"/dashboard",actionId,body:{kind:"string",value:"[]"}}})}));
+ expect(action.status).toBe(200);await action.text();
+ const stale=await post(artifact,{url:"/dashboard/shell",prefetchMode:"auto",prefetch:false,prefetchShell:true,prefetchTicket:ticket});
+ expect(stale.status).toBe(204);expect(stale.headers.get("x-tuto-next-prefetch")).toBe("miss");
+});

@@ -432,6 +432,14 @@ export class NextRscWorkerPool {
     );
   }
 
+  async renderPrefetchShell(artifact: NextRequestArtifact, url: string, headers: Array<[string, string]>, navigation: NextNavigationRequest) {
+    if (!this.installed.has(artifact.generation)) {
+      await this.send({ artifact, type: "install" });
+      this.installed.add(artifact.generation);
+    }
+    return this.result(await this.send({ generation: artifact.generation, headers, navigation, type: "prefetch-shell", url }));
+  }
+
   async invokeAction(
     artifact: NextRequestArtifact,
     input: {
