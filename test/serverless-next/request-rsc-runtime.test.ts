@@ -709,6 +709,13 @@ async function findElementProp(value: unknown, prop: string): Promise<unknown> {
       if (found !== undefined) return found;
     }
   }
+  // Layout segments transport child/parallel branches in named slots.
+  if (props?.slots && typeof props.slots === "object") {
+    for (const child of Object.values(props.slots)) {
+      const found = await findElementProp(child, prop);
+      if (found !== undefined) return found;
+    }
+  }
   if (Array.isArray(value)) {
     for (const child of value) {
       const found = await findElementProp(child, prop);
@@ -1784,7 +1791,7 @@ describe("request-compiled Next RSC runtime", () => {
       workspaceKey: "next-app-router-topology",
     });
 
-    expect(artifact.version).toBe(18);
+    expect(artifact.version).toBe(19);
     expect(artifact.router.routes.map((route) => route.pattern)).toEqual([
       "/dashboard/settings",
       "/photo/[id]",

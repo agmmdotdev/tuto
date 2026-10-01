@@ -15,6 +15,9 @@ export type NextRouterState = {
 
 export type NextNavigationRequest = {
   id?: string;
+  // Internal renderer hints: the HTTP API overwrites these after receipt validation.
+  segmentContext?: string;
+  reuseSegments?: Array<{key:string;slots:string[]}>;
   kind: "push" | "replace" | "refresh" | "restore";
   state?: NextRouterState;
 };

@@ -36,6 +36,7 @@ type WorkerReply = {
   streamDone?: boolean;
   streamFinal?: unknown;
   streamId?: string;
+  sharedKeys?: Array<{key:string;slots:string[]}>;
   stylePaths?: string[];
   type?: undefined;
   url?: string;
@@ -77,6 +78,7 @@ export type NextFlightWorkerResult = {
   headers: Array<[string, string]>;
   routePattern: string | null;
   status: number;
+  sharedKeys?: Array<{key:string;slots:string[]}>;
   stylePaths: string[];
 };
 
@@ -321,6 +323,7 @@ export class NextRscWorkerPool {
       contentType: reply.contentType ?? "text/x-component; charset=utf-8",
       flight: Buffer.from(reply.bodyBase64, "base64"),
       formState: reply.formState,
+      sharedKeys: reply.sharedKeys,
       headers: reply.headers ?? [],
       routePattern: reply.routePattern ?? null,
       status: reply.status ?? 200,
