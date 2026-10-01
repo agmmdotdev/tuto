@@ -11,6 +11,7 @@ import type {
 } from "secure-exec";
 import {
   getNextCacheAdapter,
+  revalidateNextCacheTags,
   type NextCacheGetInput,
   type NextCacheLock,
   type NextCacheLockInput,
@@ -444,7 +445,7 @@ function cacheOperation(
     return adapter.releaseLock(input as NextCacheLock);
   }
   if (operation === "revalidateTags") {
-    return adapter.revalidateTags(input as NextCacheRevalidateInput);
+    return revalidateNextCacheTags(input as NextCacheRevalidateInput);
   }
   throw new Error(`Unsupported cache operation ${JSON.stringify(operation)}.`);
 }

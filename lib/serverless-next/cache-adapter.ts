@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { nextCacheInvalidations } from "./cache-invalidations";
 
 export type NextCacheMetrics = {
   hits: number;
@@ -61,6 +62,15 @@ export interface NextCacheAdapter {
   releaseLock(input: NextCacheLock): Promise<void>;
   revalidateTags(input: NextCacheRevalidateInput): Promise<void>;
   set(input: NextCacheSetInput): Promise<void>;
+}
+
+// Both execution backends use this host-side revalidation bridge.
+// Keep Next's adapter/profile semantics; evict speculative render reuse around
+// the mutation rather than changing stale-while-revalidate into expiration.
+export async function revalidateNextCacheTags(input: NextCacheRevalidateInput) {
+  const finish = input.tags.length ? nextCacheInvalidations.begin(input.workspaceKey) : undefined;
+  try { await getNextCacheAdapter().revalidateTags(input); }
+  finally { finish?.(); }
 }
 
 type StoredEntry = NextCacheEntry & {

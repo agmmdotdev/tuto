@@ -21,12 +21,18 @@ Yarn 4.13.0, and Linux x64:
 
 - Immutable dependency installation and browser-kernel generation passed.
   The kernel is 229,744 bytes and targets Next 16.3.6 / React 19.2.6 (artifact version 22).
-- `yarn test:serverless-next`: 97 tests passed, including SecureExec isolation,
+- `yarn test:serverless-next --maxWorkers=1`: 106 tests passed, including SecureExec isolation,
   streaming, cache invalidation, Cache Components, and App Router topology.
+  Forcing the entire suite through `TUTO_NEXT_EXECUTION_MODE=secure-exec`
+  yields 105 passes and one failure: the Cache Components fixture's nested
+  `CachedCard` loses Next's WorkUnitStore. The same isolated test fails on the
+  clean merged PR #30 commit `dafe77ff4468120d04e821ccfe533f0b23b6a61d`;
+  this is a preexisting SecureExec async-context compatibility gap, not a passing
+  Cache Components checkpoint for that backend.
 - `yarn test:serverless-nextjs-runtime --maxWorkers=1`: 111 tests passed. The
   parallel run under concurrent browser/build load hit the existing Next Lite
   template's five-second timeout; the serial rerun passed without source changes.
-- The sixty-six Next browser checkpoints passed in installed Chromium 151 with
+- The seventy-one Next browser checkpoints passed in installed Chromium 151 with
   both child-process and SecureExec execution. They cover hydration,
   persistent navigation, independent slot history, refresh/state retention, native iframe reloads, Server Actions, virtual cookies, forms, and streamed slot-local
   error/not-found boundaries, recursive slots, and ancestor error propagation.
@@ -61,6 +67,12 @@ Yarn 4.13.0, and Linux x64:
   Five combined-navigation API cases verify incremental fresh descendants, omitted
   retained output, single-use/context/refresh misses, full-ticket rejection and
   preserved redirect/virtual-cookie headers and cancellation before body consumption.
+  Six Route Handler API cases cover tag expiration, literal/page/layout/dynamic
+  path invalidation, cross-document/workspace isolation, renewed shell receipts,
+  and preserved max-profile stale-while-revalidate behavior. Three unit cases
+  exercise mutation races, overlapping invalidations, bounded idle-version
+  eviction and partial adapter failure. Five browser cases reject invalidated
+  full Flight or shell/layout receipts while retaining the root counter.
   Eight viewport cases cover automatic warming, off-screen cancellation/re-entry,
   intent priority, navigation/history ordering, refresh/cookie-context replay,
   explicit caller ownership after unmount, and per-entry capacity eviction.
@@ -136,7 +148,7 @@ this upgrade. The nested dashboard differential below uses Next 16.3.6.
 | Route methods                            | Next's own method resolver supplies `HEAD`, `OPTIONS`, 405, and invalid-method behavior                                       |
 | Handler context                          | Promised dynamic `params`, URL/search params, request headers, cookies, and request bodies are verified                       |
 | Route response semantics                 | Status, status text, headers, multiple cookies, JSON, and Web `ReadableStream` bodies cross IPC                               |
-| Handler cache/invalidation               | `unstable_cache` and `revalidateTag(tag, { expire: 0 })` share the host-owned adapter                                         |
+| Handler cache/invalidation               | `unstable_cache` and tag/path revalidation share the host-owned adapter; mutations invalidate workspace-local prefetched Flight and shared layout receipts |
 | Next 16 `proxy.ts`                       | Root and `src/` proxy entries are compiled into the immutable artifact; legacy `middleware.ts` works                          |
 | Proxy adapter                            | Next's Web adapter constructs the real request/event and request/work AsyncLocalStorage contexts                              |
 | Proxy matchers                           | Next's matcher parser and route matcher apply path patterns plus `has` and `missing` predicates                               |
@@ -760,7 +772,8 @@ browser path uses combined validation and streaming. Neither fallback grants
 shared cache reuse across owners or changed contexts.
 A missed/expired/evicted receipt renders layouts normally. Process changes miss
 receipts safely, with no distributed segment cache. Data mutations outside the
-known action/refresh epoch still require refresh or expiry. Reused server layout
+host cache revalidation bridge and known action/refresh epochs still require
+refresh or expiry. Reused server layout
 output deliberately stays fixed within that lifetime, matching the shared-layout
 retention goal; render-time authorization must not rely on an always-rerendered
 layout. Fresh page/actions still execute their own request-context checks.
@@ -772,6 +785,54 @@ The pinned [Next prefetch guide](https://raw.githubusercontent.com/vercel/next.j
 is the reference for shared parent layouts and fresh sibling leaves. Stock cases
 compare visible layout/loading stability, refresh and action cookies; Tuto's
 transport receipts and bounded policy are explicitly separate.
+
+### Tag/path revalidation and speculative render reuse
+
+The child-process IPC bridge and SecureExec HTTP bridge route completed Next
+tag/path mutations through `revalidateNextCacheTags`. Next's own `revalidatePath`
+generates implicit tags; no separate guessed URL-to-tag mapping is introduced.
+Before entering the data adapter, and again on settlement (including partial
+failure), a workspace version changes. Artifact epochs observe that version:
+unused full Flight tickets, loading-shell tickets, and layout/loading receipts
+from any owner or hot revision of that workspace miss. Other workspaces keep
+their tickets. Invalidation versions keep 128 idle workspaces plus active
+mutations; idle eviction changes identity on the next lookup and therefore
+causes a conservative miss rather than resurrecting old receipts.
+
+New speculative tickets/receipts cannot be issued or consumed while mutations
+are pending. Overlapping mutations remain fenced until every operation settles,
+and a render started before or during a mutation cannot publish a reusable
+ticket afterward. Receipt keys change with the epoch, so a fresh grant cannot
+reauthorize old held layout models. A miss still returns normal fresh streamed
+navigation and invokes the existing browser invalidation subscriber once when
+that unused entry is consumed. Root/layout client fibers retain their state.
+Already-consumed navigation snapshots remain pinned until completion; this is
+not a retroactive cancellation of active renders or mounted history entries.
+
+Eviction is deliberately workspace-wide, even for a tag/path unrelated to a
+particular prefetched destination: shell models do not yet carry complete
+dependency metadata, including inherited models from sibling reuse. This does
+**not** flush the entire data cache. The adapter retains its normal selective
+tag/path expiration and stale profiles. `revalidateTag(tag, "max")` can therefore
+serve stale data on the first **fresh** render and refresh it in the background;
+`{expire:0}` blocks on a miss. Five stock Next 16.3.6 production cases compare
+these data-cache semantics on new document requests for tag, page, layout,
+dynamic page-pattern, and max-profile invalidations.
+
+These comparisons do not establish identical client Router Cache behavior.
+Tuto conservatively rejects server-validated tickets on their next use after
+an out-of-band Route Handler mutation. Documents receive no push notification or eager
+`onInvalidate` callback from an external mutation. Invalidations performed in
+another process, a coordinator directly, or a database without the local host
+bridge are not observed by this process-local fence. Cross-instance invalidation
+and dependency-selective speculative eviction remain separate work. Two compiled
+SecureExec production browser cases verify full/shell misses, fresh Flight and
+root state after invoking a real Route Handler through the control API.
+
+The pinned [revalidateTag reference](https://raw.githubusercontent.com/vercel/next.js/v16.3.6/docs/01-app/03-api-reference/04-functions/revalidateTag.mdx),
+[revalidatePath reference](https://raw.githubusercontent.com/vercel/next.js/v16.3.6/docs/01-app/03-api-reference/04-functions/revalidatePath.mdx),
+and [previous-model caching guide](https://raw.githubusercontent.com/vercel/next.js/v16.3.6/docs/01-app/02-guides/caching-without-cache-components.mdx)
+define the underlying Next data-cache behavior.
 
 Named slots can nest recursively, including repeated names under different
 owners, route groups, dynamic/catch-all parameters, and slots inside an
@@ -889,10 +950,10 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next bounded framework slice is combining shell validation with the fresh
-streamed navigation response to remove the remaining extra request. Preserve
-validated retained-model display, cancellation/history ordering, cookies/control
-flow and fresh leaf execution; PPR continuation requires separate architecture
-and evidence.
+The next compatibility repair is preserving Next's WorkUnitStore for nested
+Cache Components during SecureExec rendering. After that, dependency metadata
+for speculative Flight and inherited layout/loading models can allow selective
+tag/path eviction without invalidating unrelated destinations. PPR continuation
+and cross-instance invalidation require separate architecture and evidence.
 Deployment validation and sandbox security review remain separate operational
 work.

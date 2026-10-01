@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { NextRequestArtifact } from "./artifact";
 import type { NextRouterState } from "./navigation";
+import { nextCacheInvalidations } from "./cache-invalidations";
 
 // Standalone so the hydration transport can embed exactly the same key logic.
 export function nextPrefetchKey(revision: string, url: string, headers: Record<string, string>, state?: NextRouterState, mode: "full" | "auto" = "full") {
@@ -32,12 +33,25 @@ export class NextPrefetchTickets {
   private entries = new Map<string, Entry>();
   private segments = new Map<string, {artifact:NextRequestArtifact;owner:string;context:string;keys:string[];slots:Map<string,string[]>;expiresAt:number}>();
   private epochs = new WeakMap<NextRequestArtifact, number>();
+  private workspaceVersions = new WeakMap<NextRequestArtifact, string>();
   readonly ttlMs = 30_000;
   readonly maxEntryBytes = 1024 * 1024;
   constructor(private now: () => number = Date.now) {}
-  epoch(artifact: NextRequestArtifact) { return this.epochs.get(artifact) ?? 0; }
+  epoch(artifact: NextRequestArtifact) {
+    const version = nextCacheInvalidations.version(artifact.workspaceKey);
+    const previous = this.workspaceVersions.get(artifact);
+    this.workspaceVersions.set(artifact, version);
+    if (previous !== undefined && previous !== version) {
+      this.epochs.set(artifact, (this.epochs.get(artifact) ?? 0) + 1);
+      this.drop(artifact);
+    }
+    return this.epochs.get(artifact) ?? 0;
+  }
   invalidate(artifact: NextRequestArtifact) {
     this.epochs.set(artifact, this.epoch(artifact) + 1);
+    this.drop(artifact);
+  }
+  private drop(artifact: NextRequestArtifact) {
     for (const [ticket, entry] of this.entries) if (entry.artifact === artifact) this.entries.delete(ticket);
     for (const [token, entry] of this.segments) if (entry.artifact === artifact) this.segments.delete(token);
   }
@@ -47,6 +61,7 @@ export class NextPrefetchTickets {
   }
   // Only the API's completed, bounded, error-free shell renderer issues receipts.
   issueSegments(artifact:NextRequestArtifact, owner:string, headers:Record<string,string>, segments:Array<{key:string;slots:string[]}>) {
+    if (nextCacheInvalidations.pending(artifact.workspaceKey)) return undefined;
     const context=this.segmentContext(artifact,owner,headers);
     const selected=[...new Set(segments.filter(item=>item.slots.length<=64).map(item=>item.key))].filter(key=>key.startsWith(context+":")&&key.length<=4096).slice(0,16);
     const slots=new Map(segments.filter(item=>selected.includes(item.key)).map(item=>[item.key,item.slots]));
@@ -60,6 +75,7 @@ export class NextPrefetchTickets {
     return {token,keys:selected,ttlMs:this.ttlMs};
   }
   resolveSegments(artifact:NextRequestArtifact, owner:string, headers:Record<string,string>, refs:unknown) {
+    if (nextCacheInvalidations.pending(artifact.workspaceKey)) return [];
     if(!Array.isArray(refs)||refs.length>8)return [];
     const context=this.segmentContext(artifact,owner,headers),keys=new Map<string,string[]>();
     for(const ref of refs){
@@ -71,7 +87,7 @@ export class NextPrefetchTickets {
     return [...keys].map(([key,slots])=>({key,slots}));
   }
   put(entry: Omit<Entry, "expiresAt">) {
-    if (entry.epoch !== this.epoch(entry.artifact) || entry.body.byteLength > this.maxEntryBytes) return null;
+    if (entry.epoch !== this.epoch(entry.artifact) || nextCacheInvalidations.pending(entry.artifact.workspaceKey) || entry.body.byteLength > this.maxEntryBytes) return null;
     for (const [ticket, item] of this.entries) if (item.expiresAt <= this.now() ||
       (item.artifact === entry.artifact && item.owner === entry.owner && item.key === entry.key)) this.entries.delete(ticket);
     // Eight entries per document; at most sixteen MiB process-wide.
@@ -91,7 +107,7 @@ export class NextPrefetchTickets {
     const entry = this.entries.get(ticket);
     if (!entry || entry.artifact !== artifact || entry.owner !== owner || entry.key !== key) return null;
     this.entries.delete(ticket);
-    return entry.expiresAt > this.now() && entry.epoch === this.epoch(artifact) ? entry : null;
+    return entry.expiresAt > this.now() && entry.epoch === this.epoch(artifact) && !nextCacheInvalidations.pending(artifact.workspaceKey) ? entry : null;
   }
 }
 
