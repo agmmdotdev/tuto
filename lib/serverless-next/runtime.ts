@@ -161,6 +161,7 @@ function hydrationBootstrap(
   const endpoint = ${JSON.stringify(config.actionEndpoint)};
   let navigationSequence = 0;
   let pendingNavigation;
+  let navigationActive = false;
   const navigationCommits = new Map();
   globalThis.__TUTO_NEXT_NAVIGATION_COMMIT__ = (id) => navigationCommits.get(id)?.();
   const prefetchKey = ${nextPrefetchKey.toString()};
@@ -185,7 +186,7 @@ function hydrationBootstrap(
       Object.fromEntries(actionHeaders.entries()), globalThis.__TUTO_NEXT_ROUTER_STATE__);
   }
   globalThis.__TUTO_NEXT_PREFETCH__ = async (href, options = {}) => {
-    if (!endpoint) return;
+    if (!endpoint || navigationActive) return;
     const target = new URL(String(href), new URL(globalThis.__TUTO_NEXT_URL__, "http://next.local"));
     if (target.origin !== "http://next.local") return;
     const key = currentPrefetchKey(target);
@@ -211,7 +212,10 @@ function hydrationBootstrap(
             url:target.pathname + target.search, state:globalThis.__TUTO_NEXT_ROUTER_STATE__,
             headers:Object.fromEntries(actionHeaders.entries())}}),
         });
-        if (response.status !== 200 || epoch !== prefetchEpoch) {prefetchEntries.delete(key); return;}
+        if (response.status !== 200 || epoch !== prefetchEpoch) {
+          if (prefetchEntries.get(key) === entry) prefetchEntries.delete(key);
+          return;
+        }
         const result = await response.json();
         if (epoch !== prefetchEpoch || prefetchEntries.get(key) !== entry) return;
         entry.ticket = result.ticket;
@@ -269,6 +273,9 @@ function hydrationBootstrap(
     if (!pendingNavigation?.rendered) pendingNavigation?.abort();
     const controller = new AbortController();
     pendingNavigation = controller;
+    navigationActive = true;
+    prefetchPending?.abort();
+    try {
     historyEntries[historyIndex] = snapshot();
     const restoring = navigation === "restore";
     const restored = restoring ? historyEntries[restoreIndex] : undefined;
@@ -367,6 +374,7 @@ function hydrationBootstrap(
       kind: "navigation-state", navigation, path: pathOf(target), status,
       source: "tuto-serverless-nextjs-runtime-preview-log",
     }, "*");
+    } finally { if (token === navigationSequence) navigationActive = false; }
   }
   globalThis.__TUTO_NEXT_NAVIGATE__ = (navigation, path, options) => {
     navigate(navigation, path, options).catch((error) => {
@@ -381,15 +389,15 @@ function hydrationBootstrap(
       if (error.name !== "AbortError") console.error(error);
     });
   });
-  document.addEventListener("click", (event) => {
+  function handleAnchorClick(event) {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     const anchor = event.target instanceof Element ? event.target.closest("a[href]") : null;
-    if (!anchor || (anchor.target && anchor.target !== "_self")) return;
+    if (!anchor || anchor.hasAttribute("download") || (anchor.target && anchor.target !== "_self")) return;
     const target = new URL(anchor.getAttribute("href"), new URL(globalThis.__TUTO_NEXT_URL__, "http://next.local"));
     if (target.origin !== "http://next.local") return;
     event.preventDefault();
     globalThis.__TUTO_NEXT_NAVIGATE__("push", target.pathname + target.search + target.hash);
-  });
+  }
   let root;
   function bytesToBase64(bytes) {
     let binary = "";
@@ -499,6 +507,9 @@ function hydrationBootstrap(
     model,
     formState === undefined ? undefined : { formState },
   );
+  // React's delegated handlers must run first so Link/user preventDefault,
+  // replace and scroll options are not preempted by the plain-anchor fallback.
+  document.addEventListener("click", handleAnchorClick);
   globalThis.__TUTO_NEXT_ROOT__ = root;
   globalThis.__TUTO_NEXT_HYDRATED__ = ${JSON.stringify(config.generation)};
 })().catch((error) => {

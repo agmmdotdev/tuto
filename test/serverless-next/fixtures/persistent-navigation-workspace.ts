@@ -17,7 +17,7 @@ export default function Controls() {
     <Link data-go="settings" href="/dashboard/settings?tab=team">settings</Link>
     <Link data-go="team-only" href="/dashboard/team">team only</Link>
     <Link data-go="views" href="/dashboard/views">views</Link>
-    <Link data-go="broken" href="/dashboard/broken">broken</Link>
+    <Link data-go="broken" href="/dashboard/broken" prefetch={false}>broken</Link>
     <Link data-go="missing" href="/dashboard/missing">missing</Link>
     <Link data-go="photo" href="/photo/7">photo</Link>
     <Link data-go="slow" href="/dashboard/slow">slow</Link>
