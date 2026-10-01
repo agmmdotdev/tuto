@@ -8,6 +8,7 @@ import { compileNextProxyMatchers } from "./proxy-matchers";
 import { NextSecureExecWorkspacePool } from "./secure-exec-worker";
 import {
   getNextCacheAdapter,
+  revalidateNextCacheTags,
   type NextCacheGetInput,
   type NextCacheLock,
   type NextCacheLockInput,
@@ -155,7 +156,7 @@ export class NextRscWorkerPool {
               ? await adapter.acquireLock(message.input as NextCacheLockInput)
               : message.operation === "releaseLock"
                 ? await adapter.releaseLock(message.input as NextCacheLock)
-                : await adapter.revalidateTags(
+                : await revalidateNextCacheTags(
                     message.input as NextCacheRevalidateInput,
                   );
       child.send({
