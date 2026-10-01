@@ -17,15 +17,16 @@ async function open(page:Page,delayFresh=0,failFresh=false){
   const controller=new AbortController();outgoing.on("close",()=>{if(!outgoing.writableFinished){stats.cancelled++;controller.abort();}});
   const chunks=[];for await(const chunk of request)chunks.push(Buffer.from(chunk));const body=Buffer.concat(chunks).toString();const input=body?JSON.parse(body):{};
   const navigation=input.navigation;
-  const event=navigation?{url:navigation.url,prefetch:navigation.prefetch===true,shell:navigation.prefetchShell===true,mode:navigation.prefetchMode,kind:undefined as string|undefined,hit:null as string|null,done:false}:undefined;
+  const event=navigation?{url:navigation.url,prefetch:navigation.prefetch===true,shell:navigation.prefetchShell===true,combined:navigation.prefetchShellStream===true,mode:navigation.prefetchMode,kind:undefined as string|undefined,hit:null as string|null,done:false}:undefined;
   if(event)stats.events.push(event);
-  const fresh=event&&!event.prefetch&&!event.shell;
+  const fresh=event&&!event.prefetch&&(!event.shell||event.combined);
   // Probe fresh page execution without relying on SecureExec's frozen clock.
   if(fresh&&!navigation.prefetchTicket)navigation.headers={...navigation.headers,"x-fresh":"navigation"};
-  if(fresh&&delayFresh)await new Promise(resolve=>setTimeout(resolve,delayFresh));controller.signal.throwIfAborted();
+  if(fresh&&!event.combined&&delayFresh)await new Promise(resolve=>setTimeout(resolve,delayFresh));controller.signal.throwIfAborted();
   const response=fresh&&failFresh?new Response("controlled navigation failure",{status:500,headers:{"access-control-allow-origin":"*"}}):request.method==="OPTIONS"?OPTIONS():await POST(new Request("http://tuto.local/request",{method:"POST",body:navigation?JSON.stringify(input):body,headers:{"content-type":"text/plain"},signal:controller.signal}));
   if(event){event.hit=response.headers.get("x-tuto-next-prefetch");if(event.prefetch&&response.status===200)event.kind=(await response.clone().json()).kind;}
   outgoing.writeHead(response.status,Object.fromEntries(response.headers));
+  outgoing.flushHeaders();if(event?.combined&&delayFresh)await new Promise(resolve=>setTimeout(resolve,delayFresh));controller.signal.throwIfAborted();
   if(response.body){const reader=response.body.getReader();for(;;){const chunk=await reader.read();if(chunk.done)break;if(fresh)stats.chunks++;if(!outgoing.write(chunk.value))await once(outgoing,"drain");}}
   outgoing.end();if(event)event.done=true;
  })().catch(error=>{if(!outgoing.destroyed)outgoing.destroy(error as Error);});});
@@ -49,7 +50,7 @@ test("default intent displays a validated loading shell then streams fresh desce
  const clickTime=Date.now();await page.locator('[data-shell-link="auto"]').click();
  await expect(page.locator('[data-shell-loading]:visible')).toBeVisible();
  await page.locator('[data-counter="root"]').click();await expect(page.locator('[data-counter="root"]')).toHaveText("root:2");
- await expect(page.locator('[data-shell-fresh]')).toHaveText(stock?"fresh:anonymous":"navigation:anonymous");
+ await expect(page.locator('[data-shell-fresh]')).toHaveText(stock?"fresh:anonymous":/^(fresh|navigation):anonymous$/);
  if(stock||process.env.TUTO_NEXT_EXECUTION_MODE!=="secure-exec")expect(Number(await page.locator('[data-shell-time]').textContent())).toBeGreaterThanOrEqual(clickTime);
  await expect(page.locator('[data-shell-details-loading]')).toBeVisible();await expect(page.locator('[data-shell-details]')).toHaveText("fresh details");
  await expect(page.locator('[data-counter="analytics-home"]')).toHaveText("analytics-home:1");
@@ -63,7 +64,7 @@ test("default intent displays a validated loading shell then streams fresh desce
   await warm(page,stats);await page.locator('[data-shell-link="auto"]').click();
   await expect(page.locator('[data-counter="shell"]')).toHaveText("shell:1");
  }
- if(!stock){expect(stats.events.some(event=>event.shell&&["shell-hit","shell-ack"].includes(event.hit??""))).toBe(true);expect(stats.chunks).toBeGreaterThan(1);}
+ if(!stock){expect(stats.events.some(event=>event.shell&&["shell-hit","shell-ack","shell-stream-hit"].includes(event.hit??""))).toBe(true);expect(stats.chunks).toBeGreaterThan(1);}
 });
 test("explicit true upgrades an automatic shell to full Flight without serving it as a shell",async({page})=>{
  test.skip(Boolean(stock),"Tests Tuto's distinct bounded ticket strategies and upgrade selection.");
@@ -84,7 +85,7 @@ test("canceling after provisional display preserves old slot selection and omits
 test("fresh transport failure restores the committed view and releases the prefetch guard",async({page})=>{
  test.skip(Boolean(stock),"Uses a controlled fresh-navigation HTTP failure.");
  const stats=await open(page,300,true);await page.locator('[data-counter="home"]').click();await warm(page,stats);
- await page.locator('[data-shell-link="auto"]').click();await expect(page.locator('[data-shell-loading]:visible')).toBeVisible();
+ await page.locator('[data-shell-link="auto"]').click();
  await expect(page.locator('[data-counter="home"]')).toHaveText("home:1");await expect(page.locator('[data-shell-loading]:visible')).not.toBeVisible();
  await expect(page.locator('[data-path]')).toHaveText("/dashboard?");await warm(page,stats);
  expect(stats.events.filter(event=>event.prefetch)).toHaveLength(2);
@@ -105,7 +106,7 @@ test("prefetched intercepted loading preserves its background, refresh and nativ
  await page.locator('[data-refresh]').click();await expect(page.locator('[data-counter="modal"]')).toHaveText("modal:1");
  await page.locator('[data-back]').click();await expect(page.locator('[data-counter="home"]')).toHaveText("home:1");
  await page.locator('[data-forward]').click();await expect(page.locator('[data-counter="modal"]')).toHaveText(stock?"modal:0":"modal:1");
- if(!stock)expect(stats.events.some(event=>event.shell&&["shell-hit","shell-ack"].includes(event.hit??""))).toBe(true);
+ if(!stock)expect(stats.events.some(event=>event.shell&&["shell-hit","shell-ack","shell-stream-hit"].includes(event.hit??""))).toBe(true);
 });
 
 test("shell navigation keeps streamed error, notFound and redirect control flow local",async({page})=>{
@@ -116,7 +117,7 @@ test("shell navigation keeps streamed error, notFound and redirect control flow 
   await expect(page.locator('[data-counter="root"]')).toHaveText("root:1");
  }
  await expect(page.locator('[data-path]')).toHaveText("/dashboard/settings?redirected=yes");
- if(!stock)expect(stats.events.filter(event=>event.shell&&["shell-hit","shell-ack"].includes(event.hit??""))).toHaveLength(3);
+ if(!stock)expect(stats.events.filter(event=>event.shell&&["shell-hit","shell-ack","shell-stream-hit"].includes(event.hit??""))).toHaveLength(3);
 });
 
 test("prefetched primary and nested slot loading stream independently without remounting shared slot layouts",async({page})=>{
@@ -131,5 +132,5 @@ test("prefetched primary and nested slot loading stream independently without re
  await expect(page.locator('[data-counter="team-slow"]')).toBeVisible();await expect(page.locator('[data-counter="detail-slow"]')).toBeVisible();
  await expect(page.locator('[data-counter="team-layout"]')).toHaveText("team-layout:1");
  await expect(page.locator('[data-counter="analytics-home"]')).toHaveText("analytics-home:1");
- if(!stock)expect(stats.events.some(event=>event.shell&&["shell-hit","shell-ack"].includes(event.hit??""))).toBe(true);
+ if(!stock)expect(stats.events.some(event=>event.shell&&["shell-hit","shell-ack","shell-stream-hit"].includes(event.hit??""))).toBe(true);
 });

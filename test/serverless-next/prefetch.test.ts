@@ -10,8 +10,8 @@ import {prefetchWorkspace} from "./fixtures/prefetch-workspace";
 afterAll(async()=>{await closeNextRscWorkerPoolForTests();await closeNextSsrWorkerPoolForTests();});
 const salt="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
 async function compile(key:string, proxy=false){return compileNextRequestWorkspace([...prefetchWorkspace(),...(proxy?[{path:"proxy.ts",language:"ts" as const,content:`import {NextResponse} from "next/server"; let calls=0; export function proxy(){ const response=NextResponse.next();response.headers.set("x-proxy-calls",String(++calls));return response;}`}]:[])],{workspaceKey:key,serverReferenceHashSalt:salt});}
-async function post(artifact:NextRequestArtifact, extra:object={}) {
- return POST(new Request("http://tuto.local/request",{method:"POST",headers:{"content-type":"text/plain"},body:JSON.stringify({navigation:{revision:artifact.revision,url:"/dashboard/prefetched",kind:"push",id:"unit-prefetch",prefetch:true,prefetchOwner:"owner",...extra}})}));
+async function post(artifact:NextRequestArtifact, extra:object={}, signal?:AbortSignal) {
+ return POST(new Request("http://tuto.local/request",{method:"POST",signal,headers:{"content-type":"text/plain"},body:JSON.stringify({navigation:{revision:artifact.revision,url:"/dashboard/prefetched",kind:"push",id:"unit-prefetch",prefetch:true,prefetchOwner:"owner",...extra}})}));
 }
 test("reuses page Flight exactly once and never speculatively invokes handlers or proxies",async()=>{
  const artifact=await compile("prefetch-api");
@@ -124,6 +124,51 @@ test("refresh invalidates shell acknowledgments and full tickets cannot acknowle
  const stale=await post(artifact,{...args,prefetch:false,prefetchShell:true,prefetchShellAck:true,prefetchTicket:ticket});expect(stale.headers.get("x-tuto-next-prefetch")).toBe("miss");
  const full=await(await post(artifact,{url:args.url,prefetchMode:"full"})).json();
  const invalid=await post(artifact,{url:args.url,prefetchMode:"full",prefetch:false,prefetchShell:true,prefetchShellAck:true,prefetchTicket:full.ticket});expect(invalid.status).toBe(204);expect(invalid.headers.get("x-tuto-next-prefetch")).toBe("miss");expect(invalid.body).toBeNull();
+});
+
+test("combined validation streams fresh descendants in one response without retransmitting the retained shell",async()=>{
+ const {sharedSegmentsWorkspace}=await import("./fixtures/shared-segments-workspace");
+ const artifact=await compileNextRequestWorkspace(sharedSegmentsWorkspace(),{workspaceKey:"shell-combined",serverReferenceHashSalt:salt});
+ const args={url:"/dashboard/shared/one",prefetchMode:"auto"};const {ticket,segmentGrant}=await(await post(artifact,args)).json();
+ const request={...args,prefetch:false,prefetchShell:true,prefetchShellAck:true,prefetchShellStream:true,prefetchTicket:ticket,segmentRefs:[{token:segmentGrant.token,keys:segmentGrant.keys}]};
+ const response=await post(artifact,request);expect(response.status).toBe(200);expect(response.headers.get("x-tuto-next-prefetch")).toBe("shell-stream-hit");expect(response.headers.get("content-type")).toContain("text/x-component");
+ const reader=response.body!.getReader();const first=await reader.read();expect(first.done).toBe(false);const chunks=[first.value!];expect(new TextDecoder().decode(first.value)).not.toContain('["one:",1');
+ for(;;){const chunk=await reader.read();if(chunk.done)break;chunks.push(chunk.value);}
+ const flight=Buffer.concat(chunks).toString();expect(flight).toContain('["one:",1,":","anonymous"]');expect(flight).not.toContain("data-shared-root");expect(flight).not.toContain("data-shared-loading");
+ const repeated=await post(artifact,request);expect(repeated.headers.get("x-tuto-next-prefetch")).toBe("shell-stream-miss");expect(await repeated.text()).toContain('["one:",2,":","anonymous"]');
+});
+test("aborting combined navigation before reading its body releases the worker for the next request",async()=>{
+ const {sharedSegmentsWorkspace}=await import("./fixtures/shared-segments-workspace");
+ const artifact=await compileNextRequestWorkspace(sharedSegmentsWorkspace(),{workspaceKey:"shell-combined-abort",serverReferenceHashSalt:salt});
+ const args={url:"/dashboard/shared/one",prefetchMode:"auto"};const {ticket}=await(await post(artifact,args)).json();
+ const controller=new AbortController();
+ const response=await post(artifact,{...args,prefetch:false,prefetchShell:true,prefetchShellAck:true,prefetchShellStream:true,prefetchTicket:ticket},controller.signal);
+ controller.abort();await expect(response.body!.getReader().read()).rejects.toThrow();
+ const next=await post(artifact,{url:"/dashboard/settings",prefetch:false});expect(next.status).toBe(200);expect(await next.text()).toContain('settings');
+});
+test("combined context misses and refresh invalidation still return fresh Flight",async()=>{
+ const {sharedSegmentsWorkspace}=await import("./fixtures/shared-segments-workspace");
+ const artifact=await compileNextRequestWorkspace(sharedSegmentsWorkspace(),{workspaceKey:"shell-combined-context",serverReferenceHashSalt:salt});
+ const args={url:"/dashboard/shared/one",prefetchMode:"auto"};const {ticket}=await(await post(artifact,args)).json();
+ const request={...args,prefetch:false,prefetchShell:true,prefetchShellAck:true,prefetchShellStream:true,prefetchTicket:ticket};
+ const changed=await post(artifact,{...request,headers:{cookie:"identity=changed"}});expect(changed.headers.get("x-tuto-next-prefetch")).toBe("shell-stream-miss");expect(await changed.text()).toContain('"changed"');
+ const refresh=await post(artifact,{prefetch:false,kind:"refresh",url:"/dashboard"});await refresh.text();
+ const stale=await post(artifact,request);expect(stale.headers.get("x-tuto-next-prefetch")).toBe("shell-stream-miss");expect(stale.status).toBe(200);expect(await stale.text()).toContain("data-shared-root");
+});
+test("a full ticket cannot replace the fresh body of a combined shell navigation",async()=>{
+ const {sharedSegmentsWorkspace}=await import("./fixtures/shared-segments-workspace");
+ const artifact=await compileNextRequestWorkspace(sharedSegmentsWorkspace(),{workspaceKey:"shell-combined-full",serverReferenceHashSalt:salt});
+ const {ticket}=await(await post(artifact,{url:"/dashboard/shared/one",prefetchMode:"full"})).json();
+ const response=await post(artifact,{url:"/dashboard/shared/one",prefetchMode:"full",prefetch:false,prefetchShell:true,prefetchShellAck:true,prefetchShellStream:true,prefetchTicket:ticket});
+ expect(response.headers.get("x-tuto-next-prefetch")).toBe("shell-stream-miss");expect(await response.text()).toContain('["one:",2,":","anonymous"]');
+});
+test("combined misses preserve fresh redirect and virtual-cookie headers",async()=>{
+ const {sharedSegmentsWorkspace}=await import("./fixtures/shared-segments-workspace");
+ const artifact=await compileNextRequestWorkspace([...sharedSegmentsWorkspace(),{path:"app/api/redirect/route.ts",language:"ts",content:'export function GET(){return new Response(null,{status:307,headers:{location:"/dashboard","set-cookie":"identity=signed-in; Path=/"}});}' as string}],{workspaceKey:"shell-combined-redirect",serverReferenceHashSalt:salt});
+ const {ticket}=await(await post(artifact,{url:"/dashboard/shared/one",prefetchMode:"auto"})).json();
+ const response=await post(artifact,{url:"/api/redirect",prefetchMode:"auto",prefetch:false,prefetchShell:true,prefetchShellAck:true,prefetchShellStream:true,prefetchTicket:ticket});
+ expect(response.status).toBe(307);expect(response.headers.get("x-tuto-next-prefetch")).toBe("shell-stream-miss");expect(response.headers.get("location")).toBe("/dashboard");
+ expect(Buffer.from(response.headers.get("x-tuto-next-virtual-set-cookie")!,"base64").toString()).toContain("identity=signed-in");expect(response.headers.get("set-cookie")).toBeNull();
 });
 
 test("shell tickets cannot replace fresh page execution and explicit full mode remains full",async()=>{
