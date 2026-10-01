@@ -13,15 +13,15 @@ import { usePathname, useSearchParams, useRouter } from "next/navigation";
 export default function Controls() {
   const router = useRouter();
   return <nav><output data-path>{usePathname()}?{useSearchParams().toString()}</output>
-    <Link data-go="home" href="/dashboard">home</Link>
-    <Link data-go="settings" href="/dashboard/settings?tab=team">settings</Link>
-    <Link data-go="team-only" href="/dashboard/team">team only</Link>
-    <Link data-go="views" href="/dashboard/views">views</Link>
-    <Link data-go="broken" href="/dashboard/broken" prefetch={false}>broken</Link>
-    <Link data-go="missing" href="/dashboard/missing">missing</Link>
-    <Link data-go="photo" href="/photo/7">photo</Link>
-    <Link data-go="slow" href="/dashboard/slow">slow</Link>
-    <Link data-go="bottom" href="#bottom">bottom</Link>
+    <Link prefetch={false} data-go="home" href="/dashboard">home</Link>
+    <Link prefetch={false} data-go="settings" href="/dashboard/settings?tab=team">settings</Link>
+    <Link prefetch={false} data-go="team-only" href="/dashboard/team">team only</Link>
+    <Link prefetch={false} data-go="views" href="/dashboard/views">views</Link>
+    <Link prefetch={false} data-go="broken" href="/dashboard/broken">broken</Link>
+    <Link prefetch={false} data-go="missing" href="/dashboard/missing">missing</Link>
+    <Link prefetch={false} data-go="photo" href="/photo/7">photo</Link>
+    <Link prefetch={false} data-go="slow" href="/dashboard/slow">slow</Link>
+    <Link prefetch={false} data-go="bottom" href="#bottom">bottom</Link>
     <button data-refresh onClick={() => router.refresh()}>refresh</button>
     <button data-back onClick={() => router.back()}>back</button>
     <button data-forward onClick={() => router.forward()}>forward</button>

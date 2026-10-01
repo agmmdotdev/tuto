@@ -20,13 +20,13 @@ Verified on 2026-10-01 in the Tuto cloud environment with Node 24.19.0,
 Yarn 4.13.0, and Linux x64:
 
 - Immutable dependency installation and browser-kernel generation passed.
-  The kernel is 224,625 bytes and targets Next 16.3.6 / React 19.2.6.
-- `yarn test:serverless-next`: 72 tests passed, including SecureExec isolation,
+  The kernel is 227,537 bytes and targets Next 16.3.6 / React 19.2.6.
+- `yarn test:serverless-next`: 81 tests passed, including SecureExec isolation,
   streaming, cache invalidation, Cache Components, and App Router topology.
 - `yarn test:serverless-nextjs-runtime --maxWorkers=1`: 111 tests passed. The
   parallel run under concurrent browser/build load hit the existing Next Lite
   template's five-second timeout; the serial rerun passed without source changes.
-- The thirty-nine Next browser checkpoints passed in installed Chromium 151 with
+- The forty-seven Next browser checkpoints passed in installed Chromium 151 with
   both child-process and SecureExec execution. They cover hydration,
   persistent navigation, independent slot history, refresh/state retention, native iframe reloads, Server Actions, virtual cookies, forms, and streamed slot-local
   error/not-found boundaries, recursive slots, and ancestor error propagation.
@@ -37,6 +37,13 @@ Yarn 4.13.0, and Linux x64:
   errors/redirects/notFound, and a partially streamed modal background. Four
   equivalent cases also pass against stock Next 16.3.6; a fifth specifically
   checks Tuto transport cancellation before handing the shell to React.
+  Eight viewport cases cover automatic warming, off-screen cancellation/re-entry,
+  intent priority, navigation/history ordering, refresh/cookie-context replay,
+  explicit caller ownership after unmount, and per-entry capacity eviction.
+  Nine scheduler unit cases cover queue bounds, shared destination interests,
+  ordering, invalidation, disposal, and fallback without IntersectionObserver.
+  Two production stock Next 16.3.6 viewport/navigation comparisons pass; six
+  transport/cache policy cases remain Tuto-specific and are skipped for stock.
   Six Link-intent cases cover hover/touch, disabled links, event handlers and
   refs, local-target eligibility, changed props, refresh and navigation priority.
   Three equivalent visible-behavior cases pass against a stock Next 16.3.6
@@ -67,6 +74,8 @@ Yarn 4.13.0, and Linux x64:
   Fluid Compute canaries.
   A compiled production Link smoke test also consumes a hover-prefetched ticket,
   preserves the root counter and restores history with SecureExec.
+  The viewport smoke also warms without hover, consumes a ticket, and retains
+  root state and history through the compiled SecureExec production API.
   A further compiled SecureExec smoke test validates a loading-shell ticket,
   streams fresh page/Suspense content and applies an action-cookie refresh while
   retaining the root counter.
@@ -122,7 +131,7 @@ this upgrade. The nested dashboard differential below uses Next 16.3.6.
 | Action response cookies                  | Proxy/action cookies cross IPC and update a virtual preview jar without mutating Tuto host cookies                            |
 | Redirect and not-found control flow      | Next's redirect/not-found errors preserve 307/308/303/404 semantics and select eligible nested not-found boundaries           |
 | Preview navigation                       | `next/link`, `useRouter`, raw links, replace/refresh and native back/forward apply Flight to the current document with per-entry slot state   |
-| Link intent prefetch                     | Hover/touch warms eligible local page tickets; `prefetch={false}` disables both; repeated intent deduplicates and navigation takes priority |
+| Link viewport and intent prefetch        | Shared observer queues visible local page tickets; hover/touch has priority; off-screen/unmounted Links cancel owned pending work; `prefetch={false}` disables warming and navigation takes priority |
 | Loading-shell prefetch                   | Default/auto Link intent stops eligible branches at their first loading boundary; validated provisional UI precedes a separate fresh streamed navigation |
 | React `cache`                            | Repeated calls share one value during a render and recompute for the next RSC request                                         |
 | `unstable_cache`                         | Next's own wrapper executes inside its work/request AsyncLocalStorage contexts over a Tuto adapter                            |
@@ -501,8 +510,8 @@ for its render-purity and partial-prefetch semantics.
 Tickets are process-local. Another instance safely misses a ticket; this is not
 a distributed router cache or an out-of-band invalidation subscription. Mutations
 outside this document's action/refresh flow and this process's API epoch need a
-refresh or expire at the bounded lifetime. There is no viewport prefetch,
-PPR/static-vs-dynamic analysis, per-segment reuse, or Next five-minute static cache.
+refresh or expire at the bounded lifetime. There is no PPR/static-vs-dynamic
+analysis, per-segment reuse, or Next five-minute static cache.
 
 Link mouse-enter and touch-start run the user's handler, then warm local page
 destinations using this same cache. `false` disables both; `true` uses the
@@ -517,17 +526,45 @@ SSR and hydration use the same Link implementation and omit runtime-only props
 from the DOM. Link intent also runs in Tuto's learner preview; stock hover
 prefetch is production-only.
 
-One active speculative request is allowed. Different destinations encountered
-while it is busy are dropped and can retry on later intent. Completed entries
-deduplicate across Links. Refresh/route/context invalidation clears them; a
-later intent warms afresh. There is no observer, off-screen work, automatic
-invalidation replay, focus trigger, or scheduling queue. The six new real-HTTP
-browser cases include cancellation before a delayed prefetch response and
-new-intent suppression during navigation, plus Link replace/scroll behavior. The retry fixture's deliberately
-impure render counter explicitly opts out of prefetch, as render side effects
-can otherwise run during speculation. This follows the render-purity constraint
-in the pinned [Next Link implementation](https://raw.githubusercontent.com/vercel/next.js/v16.3.6/packages/next/src/client/app-dir/link.tsx)
-and prefetch guide; it does not establish stock viewport/PPR cache equivalence.
+### Viewport scheduling limits
+
+One IntersectionObserver per preview document registers eligible mounted Links.
+Actual viewport intersections use a conservative `0px` margin; pinned stock Next
+uses `200px` and enables viewport warming only in production. Tuto also enables
+it in learner previews. The scheduler allows one active speculative request and
+eight queued destination/context/strategy keys. Earlier Links in a visibility
+batch have priority. Hover/touch intent takes priority over queued viewport
+work and aborts an active viewport-owned request for a different destination.
+Navigation and pending Server Actions pause all Link speculation.
+
+A destination shared by several Links remains active while any source is
+visible. Leaving the viewport, disabling/retargeting a Link, hiding its Activity
+branch, or unmounting removes that source; owned pending work aborts when all
+sources leave. Completed tickets stay in the existing eight-entry, bounded-TTL
+cache. Capacity evicts one oldest entry and notifies only its subscribers;
+it does not invalidate/replay every visible destination. Queue overflow drops
+lowest-priority/oldest tasks until a later intent, re-entry or context change.
+An explicit `router.prefetch` caller joining a Link request owns that request,
+so Link cancellation alone cannot abort it; navigation/context invalidation can.
+
+Refresh, route/slot context changes, actions and virtual cookie changes clear
+old entries and reset visible attempts. Eligible visible Links replay after
+the newest navigation/action settles in the updated request context. Timed
+expiry waits for later intent or re-entry instead of creating background polling.
+Browsers without IntersectionObserver retain intent-only warming, with no
+automatic invalidation replay. There is no focus trigger or network-adaptive
+budget. Standalone manual prefetch remains immediate and can retry if another
+speculative request is active.
+
+The existing intent and shell transport cases explicitly disable the observer
+to verify that fallback independently; navigation-only fixture Links opt out
+of speculation. The new real-HTTP viewport cases exercise the actual observer
+and cancellation, including fresh cookie context and capacity callbacks.
+Stock comparisons prove visible warming, distant-link exclusion and retained
+layout/navigation behavior; they do not establish stock segment-cache/PPR
+scheduler equivalence. The pinned
+[Next Link scheduling implementation](https://raw.githubusercontent.com/vercel/next.js/v16.3.6/packages/next/src/client/components/links.ts)
+provides the observer, visibility, intent and invalidation reference.
 
 ### Loading-shell ticket limits
 
@@ -675,7 +712,7 @@ restarting Next.js.
 
 ## Deliberately not supported yet
 
-- Viewport Link prefetch scheduling, per-segment/PPR continuation caching and full `bfcacheId`/Cache Components router caching
+- Per-segment/PPR continuation caching and full `bfcacheId`/Cache Components router caching
 - Incremental Server Action Flight responses and streamed proxy terminal responses
 - External proxy rewrites and streaming proxy IPC
 - Next's webpack/Turbopack/PostCSS plugin pipeline, Sass, Tailwind directives, and CSS `url()` asset graph rewriting
@@ -705,10 +742,9 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next bounded framework slice is a conservative viewport prefetch scheduler:
-visible eligible Links enter a small queue, intent outranks viewport work,
-off-screen/unmounted links cancel pending work, and navigation remains first.
-Keep strategy/context invalidation and renderer bounds before attempting
-per-segment reuse or PPR continuation.
+The next bounded framework slice is per-segment reuse for shared loading/layout
+shells between sibling destinations, with explicit revision/request/slot context
+keys and invalidation. Measure render savings before extending to PPR continuation;
+whole-destination ticket reuse alone does not establish full Next router-cache parity.
 Deployment validation and sandbox security review remain separate operational
 work.

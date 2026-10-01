@@ -16,6 +16,7 @@ test.afterEach(async()=>{
 async function open(page:Page,delayPrefetch=0,delayNavigation=0){
  const stats={cancelled:0,events:[] as Array<{prefetch:boolean;url:string;hit?:string|null;done?:boolean}>};
  if(stock){await page.goto(stock+"/dashboard");await expect(page.locator('[data-counter="home"]')).toBeVisible();return stats;}
+ await page.evaluate(()=>Object.defineProperty(globalThis,"IntersectionObserver",{value:undefined,configurable:true}));
  const artifact=await compileNextRequestWorkspace(linkPrefetchWorkspace(),{
   workspaceKey:test.info().title,serverReferenceHashSalt:"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
  });
@@ -99,7 +100,13 @@ test("excludes external, download, new-window and hash-only intents",async({page
  const stats=await open(page);
  for(const name of ["external","target","download","hash"]){await link(page,name).hover();await link(page,name).dispatchEvent("touchstart");}
  // Check native download click eligibility without initiating a browser download.
- const prevented=await link(page,"download").evaluate(anchor=>!anchor.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true,button:0})));
+ const prevented=await link(page,"download").evaluate(anchor=>{
+  let intercepted=false;
+  const stop=(event:MouseEvent)=>{intercepted=event.defaultPrevented;event.preventDefault();};
+  window.addEventListener("click",stop,{once:true});
+  anchor.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true,button:0}));
+  return intercepted;
+ });
  expect(prevented).toBe(false);expect(stats.events).toHaveLength(0);
 });
 

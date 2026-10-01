@@ -11,6 +11,7 @@ test.afterEach(async()=>{for(const server of servers.splice(0)){server.closeAllC
 async function open(page:Page,delayFresh=0,failFresh=false){
  const stats={cancelled:0,chunks:0,events:[] as Array<{url:string;prefetch:boolean;shell:boolean;mode?:string;kind?:string;hit?:string|null;done?:boolean}>};
  if(stock){await page.goto(stock+"/dashboard");await expect(page.locator('[data-counter="home"]')).toBeVisible();return stats;}
+ await page.evaluate(()=>Object.defineProperty(globalThis,"IntersectionObserver",{value:undefined,configurable:true}));
  const artifact=await compileNextRequestWorkspace(shellPrefetchWorkspace(),{workspaceKey:test.info().title,serverReferenceHashSalt:"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="});
  const server=createServer((request,outgoing)=>{void(async()=>{
   const controller=new AbortController();outgoing.on("close",()=>{if(!outgoing.writableFinished){stats.cancelled++;controller.abort();}});
