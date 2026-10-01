@@ -71,7 +71,7 @@ function cacheKey(
 ) {
   return createHash("sha256")
     .update(
-      `${PINNED_NEXT_VERSION}\0rsc-cache-components-v3\0${target}\0${canonicalPath}\0${actionSalt}\0${source}`,
+      `${PINNED_NEXT_VERSION}\0rsc-cache-context-v4\0${target}\0${canonicalPath}\0${actionSalt}\0${source}`,
     )
     .digest("hex");
 }
@@ -167,13 +167,20 @@ function loaderOptions({
   });
 }
 
-async function lowerModulesToCommonJs(code: string, filename: string) {
+async function lowerModulesToCommonJs(
+  code: string,
+  filename: string,
+  target: "browser" | "server",
+) {
   const { swc } = nextInternals();
   const result = await swc.transform(code, {
     filename,
     jsc: {
       parser: { jsx: false, syntax: "ecmascript" },
-      target: "es2022",
+      externalHelpers: true,
+      // SecureExec has no native async-hooks propagation. Its runtime binds
+      // the generated server helper to an invocation snapshot for each await.
+      target: target === "server" ? "es2016" : "es2022",
     },
     module: { type: "commonjs" },
     sourceFileName: filename,
@@ -207,7 +214,7 @@ export async function transformNextModule({
   const isClientProxy = target === "server" && rsc.type === "client";
   const code = isClientProxy
     ? transformed.code
-    : await lowerModulesToCommonJs(transformed.code, canonicalPath);
+    : await lowerModulesToCommonJs(transformed.code, canonicalPath, target);
   const value: TransformCacheEntry = {
     code,
     metadata: {
@@ -220,7 +227,7 @@ export async function transformNextModule({
   return { ...value, cacheHit: false };
 }
 
-export const NEXT_COMPILER_FINGERPRINT = `next-swc:${PINNED_NEXT_VERSION}:rsc-cache-components-v3`;
+export const NEXT_COMPILER_FINGERPRINT = `next-swc:${PINNED_NEXT_VERSION}:rsc-cache-context-v4`;
 export const NEXT_COMPILER_VERSION = PINNED_NEXT_VERSION;
 
 export function canonicalNextWorkspacePath(

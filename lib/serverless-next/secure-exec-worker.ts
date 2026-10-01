@@ -558,6 +558,10 @@ export class NextSecureExecWorker {
       await readFile(path.join(sourceRoot, "secure-node-compat.cjs"), "utf8"),
     );
     await filesystem.writeFile(
+      `${runtimeRoot}/async-context-compat.cjs`,
+      await readFile(path.join(sourceRoot, "async-context-compat.cjs"), "utf8"),
+    );
+    await filesystem.writeFile(
       `${runtimeRoot}/stream-runtime.cjs`,
       await readFile(path.join(sourceRoot, "stream-runtime.cjs"), "utf8"),
     );
