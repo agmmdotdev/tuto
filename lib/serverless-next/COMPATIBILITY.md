@@ -20,14 +20,16 @@ Verified on 2026-09-30 in the Tuto cloud environment with Node 24.19.0,
 Yarn 4.13.0, and Linux x64:
 
 - Immutable dependency installation and browser-kernel generation passed.
-  The kernel is 224,049 bytes and targets Next 16.3.6 / React 19.2.6.
-- `yarn test:serverless-next`: 63 tests passed, including SecureExec isolation,
+  The kernel is 224,085 bytes and targets Next 16.3.6 / React 19.2.6.
+- `yarn test:serverless-next`: 69 tests passed, including SecureExec isolation,
   streaming, cache invalidation, Cache Components, and App Router topology.
 - `yarn test:serverless-nextjs-runtime`: 111 tests passed.
-- The eighteen Next browser checkpoints passed in installed Chromium 151 with
+- The twenty-five Next browser checkpoints passed in installed Chromium 151 with
   both child-process and SecureExec execution. They cover hydration,
   persistent navigation, independent slot history, refresh/state retention, native iframe reloads, Server Actions, virtual cookies, forms, and streamed slot-local
   error/not-found boundaries, recursive slots, and ancestor error propagation.
+  Seven additional manual-prefetch cases cover deduplication, invalidation,
+  expiry, request context, slot selection, and canonical reloads.
   New navigation cases use a real incremental HTTP response: primary and nested
   slot loading, successive Suspense chunks, cancellation/ordering, streamed
   errors/redirects/notFound, and a partially streamed modal background. Four
@@ -47,7 +49,10 @@ Yarn 4.13.0, and Linux x64:
 - A local `VERCEL=1`, SecureExec-enabled production server returned HTTP 200
   for the app, the request control API, and a streamed preview containing the
   Suspense shell, delayed Server Component content, and hydration script.
-  This remains a local smoke test, not a deployed Fluid Compute canary.
+  A further browser smoke test against the compiled production server consumed
+  a prefetch hit, invalidated it after an action/cookie change, and retained the
+  root counter with SecureExec. These remain local smoke tests, not deployed
+  Fluid Compute canaries.
 
 The explicitly labeled Next 16.2.6 boundary differential and performance
 measurements below remain historical evidence; they were not remeasured for
@@ -433,13 +438,60 @@ rendered background task or concurrent execution within a SecureExec workspace.
 Streamed redirects preserve Next's control-flow digest and push/replace kind;
 custom error/not-found boundaries receive late failures after headers are sent.
 Such responses retain HTTP 200. Without a loading boundary, the transition keeps
-the previous view until the changed tree can commit. Prefetch remains a no-op;
-PPR, `bfcacheId`, native host-address-bar URLs and full unknown-route/global
+the previous view until the changed tree can commit. Prefetch uses the bounded
+manual ticket path described below. PPR, `bfcacheId`, native host-address-bar URLs and full unknown-route/global
 fallback state preservation are not established by this checkpoint. Server
 Actions use the current virtual URL and schedule an additional state-aware
 refresh after receiving their result. They do not await its React commit inside
 the action promise, which would deadlock a pending `useActionState` transition.
 Action Flight itself remains buffered.
+
+Manual `router.prefetch(href, {onInvalidate})` now opts into a full page Flight
+render. It does not render or hydrate that tree in the document, change history,
+apply response cookies, or update the reload capability. A completed eligible
+render receives an opaque single-use ticket. The navigation endpoint consumes
+that ticket instead of rendering again, retaining the normal URL/sequence and
+capability handling. A server roundtrip is still required on cache hits.
+
+Keys include artifact identity/revision, document owner, pathname/query, all
+normalized request headers (including cookies/auth), and the independently
+selected primary/slot state. Transport IDs and URL hashes do not affect the key.
+A route/slot change clears unused document entries; a new document/generation
+starts with an empty cache. Refresh and actions clear client entries and bump
+server artifact epochs before and after execution. A speculative render that
+races an invalidation cannot publish its old epoch. Cookie changes clear entries.
+Expired, evicted, context-mismatched or invalidated tickets fall back to fresh
+streamed navigation. Subscribers are notified once on invalidation/expiry, and
+also if a ticket misses server-side. Callback rescheduling cannot mutate the
+entry set being invalidated.
+
+The conservative limits are 30 seconds, eight tickets per document, one active
+client prefetch, one MiB per Flight payload and sixteen MiB / 128 tickets per
+process. Real navigation cancels speculative work rather than waiting for it.
+Disconnect cancellation releases the worker stream. Handlers, public assets,
+unknown/slot-only destinations and all proxy workspaces skip prefetch; ordinary
+navigation still handles them. Failed/control-flow/cookie-setting responses are
+not cached. Explicit prefetch renders Server Components and their data reads;
+as in stock Next, these render functions must be pure. This path does not
+dispatch Server Actions or invoke route handlers/proxy middleware. See the pinned
+[Next prefetch guide](https://raw.githubusercontent.com/vercel/next.js/v16.3.6/docs/01-app/02-guides/prefetching.mdx)
+for its render-purity and partial-prefetch semantics.
+
+Tickets are process-local. Another instance safely misses a ticket; this is not
+a distributed router cache or an out-of-band invalidation subscription. Mutations
+outside this document's action/refresh flow and this process's API epoch need a
+refresh or expire at the bounded lifetime. There is no automatic Link prefetch,
+partial/PPR shell cache, per-segment reuse, or Next five-minute static cache.
+
+Seven Tuto browser cases exercise deduplication, refresh, action/cookie changes,
+expiry/subscriber callbacks, slot-context changes, intercepted reloads and a
+server-side miss after another document's action. Four stock Next 16.3.6 cases
+compare visible state/history, refreshed navigation, action cookie context and
+retained slots. The dynamic fixture's default stock prefetch uses its PPR/AUTO
+strategy and did not fire the unused-entry callbacks on refresh/action; Tuto's
+explicit full ticket invalidation does. Tuto's artifact-local mutation counter
+is checked only in Tuto: stock action/RSC bundles do not share that fixture's
+module counter. These comparisons do not establish identical cache strategies.
 
 Named slots can nest recursively, including repeated names under different
 owners, route groups, dynamic/catch-all parameters, and slots inside an
@@ -527,7 +579,7 @@ restarting Next.js.
 
 ## Deliberately not supported yet
 
-- Prefetch, PPR and full `bfcacheId`/Cache Components router caching
+- Automatic Link prefetch scheduling, PPR and full `bfcacheId`/Cache Components router caching
 - Incremental Server Action Flight responses and streamed proxy terminal responses
 - External proxy rewrites and streaming proxy IPC
 - Next's webpack/Turbopack/PostCSS plugin pipeline, Sass, Tailwind directives, and CSS `url()` asset graph rewriting
@@ -557,11 +609,9 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next bounded framework slice is prefetch: reuse streamed route data with
-explicit generation, cookie, action-invalidation and selected-slot cache keys,
-without changing the visible URL or private reload capability until navigation
-commits. Test stale entries, intercepted destinations and competing navigation
-before adding automatic Link scheduling. This checkpoint deliberately leaves
-prefetch unchanged rather than treating arbitrary cached Flight as reusable.
+The next bounded framework slice is intent-triggered Link prefetch scheduling:
+honor `prefetch={false}`, deduplicate hover/touch intent and prioritize navigation
+above speculative work. Establish limits for off-screen links and invalidation
+rescheduling before adopting stock Next's viewport scheduler or partial shells.
 Deployment validation and sandbox security review remain separate operational
 work.
