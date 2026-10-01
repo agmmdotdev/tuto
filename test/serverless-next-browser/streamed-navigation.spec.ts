@@ -27,13 +27,15 @@ async function open(page: Page, delayShellMs = 0) {
   const server = createServer((request, outgoing) => {
     void (async () => {
       const controller = new AbortController();
+      let speculative = false;
       outgoing.on("close", () => {
-        if (!outgoing.writableFinished) { stats.cancelled++; controller.abort(); }
+        if (!outgoing.writableFinished) { if (!speculative) stats.cancelled++; controller.abort(); }
       });
       const chunks = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const body = Buffer.concat(chunks).toString();
-      const input = body ? JSON.parse(body) as {navigation?:{url:string}} : {};
+      const input = body ? JSON.parse(body) as {navigation?:{url:string;prefetch?:boolean}} : {};
+      speculative = input.navigation?.prefetch === true;
       if (input.navigation) stats.requests.push(input.navigation);
       if (delayShellMs && input.navigation?.url === "/dashboard/slow") {
         await new Promise(resolve => setTimeout(resolve, delayShellMs));

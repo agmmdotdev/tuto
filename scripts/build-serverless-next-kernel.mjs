@@ -40,33 +40,7 @@ const actionClient = Object.freeze({
 });
 
 const previewRouter = createPreviewRouter(React);
-const { navigate, navigationModule } = previewRouter;
-
-const Link = React.forwardRef(function Link(
-  { children, href, onClick, replace = false, scroll = true, prefetch: _prefetch, target, ...props },
-  ref,
-) {
-  const value = href instanceof URL ? href.href : String(href);
-  return React.createElement("a", {
-    ...props,
-    href: value,
-    onClick(event) {
-      onClick?.(event);
-      if (
-        event.defaultPrevented ||
-        event.button !== 0 ||
-        event.metaKey ||
-        event.ctrlKey ||
-        event.shiftKey ||
-        event.altKey ||
-        (target && target !== "_self")
-      ) return;
-      if (navigate(replace ? "replace" : "push", value, { scroll })) event.preventDefault();
-    },
-    ref,
-    target,
-  }, children);
-});
+const { Link, navigate, navigationModule } = previewRouter;
 
 function runtimeError(message, digest) {
   const error = new Error(message || "The Server Component render failed.");
