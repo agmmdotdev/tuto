@@ -170,8 +170,11 @@ function hydrationBootstrap(
   let prefetchEpoch = 0;
   let prefetchSequence = 0;
   let prefetchPending;
+  let prefetchScheduler;
+  let actionRequests = 0;
   function invalidatePrefetch() {
     prefetchEpoch++;
+    prefetchScheduler?.pause();
     prefetchPending?.abort();
     prefetchPending = undefined;
     const entries = [...prefetchEntries.values()];
@@ -186,7 +189,7 @@ function hydrationBootstrap(
       Object.fromEntries(actionHeaders.entries()), globalThis.__TUTO_NEXT_ROUTER_STATE__, mode);
   }
   globalThis.__TUTO_NEXT_PREFETCH__ = async (href, options = {}) => {
-    if (!endpoint || navigationActive) return;
+    if (!endpoint || navigationActive || actionRequests || options._signal?.aborted) return;
     const target = new URL(String(href), new URL(globalThis.__TUTO_NEXT_URL__, "http://next.local"));
     if (target.origin !== "http://next.local") return;
     const mode = options._prefetchMode === "auto" ? "auto" : "full";
@@ -195,17 +198,26 @@ function hydrationBootstrap(
     const automatic = prefetchEntries.get(currentPrefetchKey(target, "auto"));
     let entry = full?.ticket ? full : automatic?.kind === "full" && automatic?.ticket ? automatic : prefetchEntries.get(key);
     if (entry) {
+      if (!options._signal) entry.manual = true;
       if (typeof options.onInvalidate === "function") entry.callbacks.add(options.onInvalidate);
       return entry.promise;
     }
-    if (prefetchEntries.size >= 8) invalidatePrefetch();
     // Only one speculative render at a time. Explicit callers can retry later.
     if (prefetchPending) return;
     const controller = new AbortController();
     prefetchPending = controller;
+    if (prefetchEntries.size >= 8) {
+      const [oldKey, oldEntry] = prefetchEntries.entries().next().value;
+      prefetchEntries.delete(oldKey);
+      clearTimeout(oldEntry.timer);
+      for (const callback of oldEntry.callbacks) {try {callback();} catch(error) {console.error(error);}}
+    }
     const epoch = prefetchEpoch;
-    entry = {callbacks:new Set(typeof options.onInvalidate === "function" ? [options.onInvalidate] : []), controller, mode};
+    entry = {callbacks:new Set(typeof options.onInvalidate === "function" ? [options.onInvalidate] : []), controller, mode, manual:!options._signal};
     prefetchEntries.set(key, entry);
+    const ownedEntry = entry;
+    const cancel = () => { if (!ownedEntry.manual) controller.abort(); };
+    options._signal?.addEventListener("abort", cancel, {once:true});
     entry.promise = (async () => {
       try {
         const response = await fetch(endpoint, {
@@ -220,7 +232,7 @@ function hydrationBootstrap(
           return;
         }
         const result = await response.json();
-        if (epoch !== prefetchEpoch || prefetchEntries.get(key) !== entry) return;
+        if (controller.signal.aborted || epoch !== prefetchEpoch || prefetchEntries.get(key) !== entry) return;
         entry.ticket = result.ticket;
         entry.kind = result.kind || "full";
         entry.timer = setTimeout(() => {
@@ -231,10 +243,28 @@ function hydrationBootstrap(
       } catch (error) {
         if (prefetchEntries.get(key) === entry) prefetchEntries.delete(key);
         if (error.name !== "AbortError") console.error(error);
-      } finally { if (prefetchPending === controller) prefetchPending = undefined; }
+      } finally {
+        options._signal?.removeEventListener("abort", cancel);
+        if (prefetchPending === controller) prefetchPending = undefined;
+        prefetchScheduler?.resume();
+      }
     })();
     return entry.promise;
   };
+  prefetchScheduler = kernel.createPrefetchScheduler({
+    key(href, mode) {
+      try {
+      const previous = new URL(globalThis.__TUTO_NEXT_URL__, "http://next.local");
+      const target = new URL(String(href), previous);
+      if (target.origin !== previous.origin || target.pathname === previous.pathname && target.search === previous.search) return;
+      return currentPrefetchKey(target, mode);
+      } catch { return; }
+    },
+    prefetch:globalThis.__TUTO_NEXT_PREFETCH__,
+    busy:() => navigationActive || actionRequests > 0 || Boolean(prefetchPending),
+  });
+  globalThis.__TUTO_NEXT_REGISTER_LINK__ = (element, href, mode) => prefetchScheduler.observe(element, href, mode);
+  window.addEventListener("pagehide", () => prefetchScheduler.dispose(), {once:true});
   const historyEntries = [];
   let historyIndex = -1;
   const historyToken = Math.random().toString(36).slice(2);
@@ -308,6 +338,7 @@ function hydrationBootstrap(
     const controller = new AbortController();
     pendingNavigation = controller;
     navigationActive = true;
+    prefetchScheduler.pause();
     prefetchPending?.abort();
     let shellDisplayed = false;
     try {
@@ -402,7 +433,9 @@ function hydrationBootstrap(
         kernel.react.startTransition(() => root.render(currentRootModel));
       }
       throw error;
-    } finally { if (token === navigationSequence) navigationActive = false; }
+    } finally {
+      if (token === navigationSequence) { navigationActive = false; prefetchScheduler.resume(); }
+    }
   }
   globalThis.__TUTO_NEXT_NAVIGATE__ = (navigation, path, options) => {
     navigate(navigation, path, options).catch((error) => {
@@ -486,6 +519,8 @@ function hydrationBootstrap(
   globalThis.__TUTO_NEXT_CALL_SERVER__ = async (actionId, args) => {
     const endpoint = ${JSON.stringify(config.actionEndpoint)};
     if (!endpoint) throw new Error("This preview has no Server Action endpoint.");
+    actionRequests++;
+    try {
     invalidatePrefetch();
     const body = await kernel.rscClient.encodeReply(args);
     const response = await fetch(endpoint, {
@@ -525,6 +560,7 @@ function hydrationBootstrap(
     // Waiting for that commit here would make useActionState wait on itself.
     globalThis.__TUTO_NEXT_NAVIGATE__("refresh", globalThis.__TUTO_NEXT_URL__, { scroll: false });
     return payload.actionResult;
+    } finally { actionRequests--; prefetchScheduler.resume(); }
   };
   const model = await kernel.rscClient.createFromReadableStream(stream, {
     callServer: globalThis.__TUTO_NEXT_CALL_SERVER__,

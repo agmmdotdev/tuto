@@ -14,6 +14,7 @@ const manifestPath = path.resolve(
 const entry = `
 import * as React from "react";
 import createPreviewRouter from "./lib/serverless-next/client-router.cjs";
+import createPrefetchScheduler from "./lib/serverless-next/prefetch-scheduler.cjs";
 import * as ReactJsxRuntime from "react/jsx-runtime";
 import * as ReactDom from "react-dom";
 import * as ReactDomClient from "react-dom/client";
@@ -116,6 +117,7 @@ const linkModule = Object.freeze({ __esModule: true, default: Link });
 globalThis.__TUTO_NEXT_CLIENT_MODULES__["tuto-next-runtime"] = runtimeModule;
 
 globalThis.__TUTO_NEXT_CLIENT_KERNEL__ = Object.freeze({
+  createPrefetchScheduler,
   actionClient,
   modules: Object.freeze({
     "next/link": linkModule,
