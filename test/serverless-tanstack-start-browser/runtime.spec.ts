@@ -1544,9 +1544,11 @@ test("hydrates and exercises the native Start browser runtime", async ({
   await expect(page.getByTestId("route-error-boundary")).toContainText(
     "official-fixture-route-error",
   );
-  expect(browserErrors.slice(errorsBeforeExpectedRouteError)).toEqual([
-    "Error",
-  ]);
+  const expectedRouteErrors = browserErrors.slice(errorsBeforeExpectedRouteError);
+  expect(expectedRouteErrors).toHaveLength(1);
+  // Firefox prints a console Error object as "Error"; Chromium includes its
+  // message and stack. Keep rejecting additional or unrelated browser errors.
+  expect(expectedRouteErrors[0]).toMatch(/^Error(?:$|: official-fixture-route-error\b)/);
   browserErrors.splice(errorsBeforeExpectedRouteError);
   await page.getByTestId("error-home").click();
   await expect(page.getByTestId("hydrate")).toBeVisible();

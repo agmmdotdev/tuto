@@ -8,12 +8,14 @@ The comparison is pinned to TanStack Router commit
 [`0caf6b9`](https://github.com/TanStack/router/tree/0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5/docs/start/framework/react)
 and these installed runtime versions:
 
-- `@tanstack/react-start` 1.168.49
-- `@tanstack/react-router` 1.170.32
-- `@tanstack/start-plugin-core` 1.171.39
-- `@tanstack/start-server-core` 1.169.31
-- `@vitejs/plugin-rsc` 0.5.26
+- `@tanstack/react-start` 1.168.60
+- `@tanstack/react-router` 1.170.41
+- `@tanstack/start-plugin-core` 1.171.49
+- `@tanstack/start-server-core` 1.169.39
+- `@vitejs/plugin-rsc` 0.5.30
 - Node 22 request host
+
+These versions include the fix for [GHSA-qx66-fv34-fjm8](https://github.com/TanStack/router/security/advisories/GHSA-qx66-fv34-fjm8). The embedded client/server/RSC kernels are regenerated. RSC router stores use pure Store primitives; React Store hooks remain unavailable in Server Components.
 
 The source of truth is
 [`tanstack-start-compatibility.json`](./tanstack-start-compatibility.json).
