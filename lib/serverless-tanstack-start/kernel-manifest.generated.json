@@ -1,11 +1,10 @@
 {
-  "id": "e9e10f58289eeab6c449",
+  "id": "96f8a1a5f559935c155c",
   "client": {
-    "bytes": 413300,
+    "bytes": 382757,
     "exports": {
       "@tanstack/react-start": [
         "FRAME_HEADER_SIZE",
-        "FrameType",
         "Hydrate",
         "RawStream",
         "TSS_CONTENT_TYPE_FRAMED",
@@ -25,6 +24,7 @@
         "createServerOnlyFn",
         "createStart",
         "csrfSymbol",
+        "defaultSerovalDeserializerPlugins",
         "execValidator",
         "executeMiddleware",
         "flattenMiddlewares",
@@ -32,20 +32,28 @@
         "getDefaultSerovalPlugins",
         "getGlobalStartContext",
         "getRouterInstance",
+        "getSerovalPlugins",
         "hydrate",
         "isCsrfRequestAllowed",
         "json",
         "mergeHeaders",
         "safeObjectMerge",
         "trackPostProcessPromise",
-        "useServerFn",
-        "validateFramedProtocolVersion"
+        "useServerFn"
       ],
       "@tanstack/react-start/client": [
         "StartClient",
         "hydrateStart"
       ],
       "@tanstack/react-start/client-rpc": [
+        "FRAME_HEADER_SIZE",
+        "FRAME_TYPE_CHUNK",
+        "FRAME_TYPE_END",
+        "FRAME_TYPE_ERROR",
+        "FRAME_TYPE_JSON",
+        "MAX_FRAMED_STREAMS",
+        "MAX_FRAME_PAYLOAD_SIZE",
+        "MAX_UNREAD_RAW_STREAM_BYTES",
         "createClientRpc"
       ],
       "@tanstack/react-start/hydration": [
@@ -124,8 +132,6 @@
         "interpolatePath",
         "isMatch",
         "isNotFound",
-        "isPlainArray",
-        "isPlainObject",
         "isRedirect",
         "joinPaths",
         "lazyFn",
@@ -290,25 +296,25 @@
     "routerKey": "__TUTO_TANSTACK_START_CLIENT_ROUTER_FACTORY__",
     "serverFnBaseKey": "__TUTO_TANSTACK_START_SERVER_FN_BASE__",
     "startInstanceKey": "__TUTO_TANSTACK_START_CLIENT_INSTANCE__",
-    "url": "/api/serverless/tanstack-start/kernel/client?v=e9e10f58289eeab6c449"
+    "url": "/api/serverless/tanstack-start/kernel/client?v=96f8a1a5f559935c155c"
   },
   "packages": {
-    "@tanstack/react-router": "1.170.32",
-    "@tanstack/react-start": "1.168.49",
-    "@tanstack/react-start-rsc": "0.1.48",
-    "@tanstack/start-plugin-core": "1.171.39",
-    "@tanstack/start-server-core": "1.169.31",
+    "@tanstack/react-router": "1.170.41",
+    "@tanstack/react-start": "1.168.60",
+    "@tanstack/react-start-rsc": "0.1.59",
+    "@tanstack/start-plugin-core": "1.171.49",
+    "@tanstack/start-server-core": "1.169.39",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "@vitejs/plugin-rsc": "0.5.26"
+    "@vitejs/plugin-rsc": "0.5.30"
   },
   "rsc": {
     "actionInternalPath": "/__tuto_rsc_action",
     "actionEncryptionKeyGlobalKey": "__TUTO_TANSTACK_START_RSC_ACTION_ENCRYPTION_KEY__",
-    "bytes": 135208,
+    "bytes": 136858,
     "clientReferences": {
-      "tanstack-rsc-252f26fd0ab9bc6db98c": "#tanstack-rsc-client-reference/tanstack-rsc-252f26fd0ab9bc6db98c",
-      "tanstack-rsc-fc1e778174128760058a": "#tanstack-rsc-client-reference/tanstack-rsc-fc1e778174128760058a"
+      "tanstack-rsc-1d5750cd6761f4f2b098": "#tanstack-rsc-client-reference/tanstack-rsc-1d5750cd6761f4f2b098",
+      "tanstack-rsc-b09ca03cc24467c5addd": "#tanstack-rsc-client-reference/tanstack-rsc-b09ca03cc24467c5addd"
     },
     "exports": {
       "@tanstack/react-start": [
@@ -366,6 +372,7 @@
         "setResponseHeader",
         "setResponseHeaders",
         "setResponseStatus",
+        "transferResponseBodyOwnership",
         "transformPipeableStreamWithRouter",
         "transformReadableStreamWithRouter",
         "unsealSession",
@@ -456,7 +463,7 @@
     ]
   },
   "server": {
-    "bytes": 538848,
+    "bytes": 520084,
     "exports": {
       "@tanstack/react-router": [
         "Asset",
@@ -516,8 +523,6 @@
         "interpolatePath",
         "isMatch",
         "isNotFound",
-        "isPlainArray",
-        "isPlainObject",
         "isRedirect",
         "joinPaths",
         "lazyFn",
@@ -565,7 +570,6 @@
       ],
       "@tanstack/react-start": [
         "FRAME_HEADER_SIZE",
-        "FrameType",
         "Hydrate",
         "RawStream",
         "TSS_CONTENT_TYPE_FRAMED",
@@ -585,6 +589,7 @@
         "createServerOnlyFn",
         "createStart",
         "csrfSymbol",
+        "defaultSerovalDeserializerPlugins",
         "execValidator",
         "executeMiddleware",
         "flattenMiddlewares",
@@ -592,14 +597,14 @@
         "getDefaultSerovalPlugins",
         "getGlobalStartContext",
         "getRouterInstance",
+        "getSerovalPlugins",
         "hydrate",
         "isCsrfRequestAllowed",
         "json",
         "mergeHeaders",
         "safeObjectMerge",
         "trackPostProcessPromise",
-        "useServerFn",
-        "validateFramedProtocolVersion"
+        "useServerFn"
       ],
       "@tanstack/react-start/hydration": [
         "condition",
@@ -654,6 +659,7 @@
         "setResponseHeader",
         "setResponseHeaders",
         "setResponseStatus",
+        "transferResponseBodyOwnership",
         "transformPipeableStreamWithRouter",
         "transformReadableStreamWithRouter",
         "unsealSession",

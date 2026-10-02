@@ -1725,6 +1725,20 @@ function createKernelExternalPlugin(
   return {
     name: `tuto-tanstack-start-${target}-kernel-externals`,
     setup(buildApi) {
+      if (target === "rsc") {
+        // Router's server stores need the pure store primitives. Its newer
+        // React Store barrel also reexports client-only hooks, whose imports
+        // cannot be linked against the react-server build even when unused.
+        buildApi.onResolve({ filter: /^@tanstack\/react-store$/ }, () => ({
+          path: "@tanstack/react-store", namespace: "tuto-rsc-pure-store",
+        }));
+        buildApi.onLoad({ filter: /.*/, namespace: "tuto-rsc-pure-store" }, () => ({
+          contents: `export * from '@tanstack/store';
+const unavailable=()=>{throw new Error('React Store hooks require a client component.');};
+export {unavailable as _useStore,unavailable as createStoreContext,unavailable as useAtom,unavailable as useCreateAtom,unavailable as useCreateStore,unavailable as useSelector,unavailable as useStore};`,
+          loader: "js", resolveDir: absoluteWorkingDirectory,
+        }));
+      }
       buildApi.onResolve({ filter: /.*/ }, (args) =>
         modules.has(args.path)
           ? {

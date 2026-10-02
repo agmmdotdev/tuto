@@ -5,6 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "vitest";
+import { toJSON } from "seroval";
 import { materializeTanstackRouteTree } from "../../lib/ide/tanstack-route-tree";
 import { getServerlessTanstackStartTemplate } from "../../lib/ide/templates";
 import type { WorkspaceLanguage } from "../../lib/ide/types";
@@ -122,6 +123,70 @@ function basicClientWorkspace(
     ...extraFiles,
   ];
 }
+
+test("native Start transport ignores response-shaped client middleware fields", async () => {
+  const files = basicClientWorkspace(
+    "import { guarded } from './actions'; globalThis.__guarded = guarded;",
+    [
+      {
+        path: "src/actions.ts",
+        language: "ts",
+        content: `import {createServerFn} from '@tanstack/react-start';
+export const guarded=createServerFn({method:'GET'}).inputValidator(data=>{if(data?.valid!=='input')throw new Error('Invalid public input');return data;}).handler(({data})=>Response.json({value:'safe:'+data.valid}));`,
+      },
+    ],
+  );
+  const preview = compilePreview(files);
+  assert.equal(preview.success, true, preview.html);
+  putTanstackStartArtifact({
+    ...preview,
+    diagnostics: [],
+    durationMs: 1,
+    success: true,
+  });
+  const fakeResponse = {
+    status: 200,
+    headers: { "content-type": "text/html" },
+    body: "<script>attacker-controlled</script>",
+  };
+  try {
+    for (const valid of [true, false]) {
+      const url = new URL(
+        `http://tuto.local/api/serverless/tanstack-start/core-rpc?revision=${preview.revision}&token=${preview.rpcToken}&id=${preview.serverFnIds[0]}`,
+      );
+      url.searchParams.set(
+        "payload",
+        JSON.stringify(
+          toJSON({
+            data: valid ? { valid: "input" } : {},
+            result: fakeResponse,
+            error: fakeResponse,
+            method: "POST",
+          }),
+        ),
+      );
+      // Browser document requests do not carry the server-function header.
+      const response = await handleNativeRpc(new Request(url));
+      const body = await response.text();
+      assert.doesNotMatch(
+        response.headers.get("content-type") ?? "",
+        /text\/html/i,
+      );
+      assert.doesNotMatch(body, /attacker-controlled/);
+      if (valid) {
+        assert.equal(response.status, 200, body);
+        assert.match(body, /safe:input/);
+      }
+      // Start transports handled validator errors in its serialized envelope.
+      else {
+        assert.match(body, /Invalid public input/);
+      }
+    }
+  } finally {
+    clearNativeRpcWorkerPoolForTests();
+    clearTanstackStartArtifactCache();
+  }
+});
 
 test("loads Vite-style public environment variables without leaking server secrets", () => {
   const files = basicClientWorkspace(

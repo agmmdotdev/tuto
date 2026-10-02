@@ -20,19 +20,20 @@ Verified on 2026-10-01 in the Tuto cloud environment with Node 24.19.0,
 Yarn 4.13.0, and Linux x64:
 
 - Immutable dependency installation and browser-kernel generation passed.
-  The kernel is 229,744 bytes and targets Next 16.3.6 / React 19.2.6 (artifact version 22).
-- `yarn test:serverless-next --maxWorkers=1`: 106 tests passed, including SecureExec isolation,
+  The kernel is 229,744 bytes and targets Next 16.3.6 / React 19.2.6 (artifact version 23).
+- `yarn test:serverless-next --maxWorkers=1`: 119 tests passed, including SecureExec isolation,
   streaming, cache invalidation, Cache Components, and App Router topology.
-  Forcing the entire suite through `TUTO_NEXT_EXECUTION_MODE=secure-exec`
-  yields 105 passes and one failure: the Cache Components fixture's nested
-  `CachedCard` loses Next's WorkUnitStore. The same isolated test fails on the
-  clean merged PR #30 commit `dafe77ff4468120d04e821ccfe533f0b23b6a61d`;
-  this is a preexisting SecureExec async-context compatibility gap, not a passing
-  Cache Components checkpoint for that backend.
+  The same 119 tests pass with `TUTO_NEXT_EXECUTION_MODE=secure-exec` forced on.
+  The nested Cache Components WorkUnitStore failure recorded on merged PR #30
+  (`dafe77ff4468120d04e821ccfe533f0b23b6a61d`) is repaired for compiled learner
+  continuations. Thirteen added cases exercise overlapping scopes, caught
+  rejections, parallel/nested cache fills, request isolation and forbidden
+  request reads through await, promise, timer, microtask and async-generator
+  continuations.
 - `yarn test:serverless-nextjs-runtime --maxWorkers=1`: 111 tests passed. The
   parallel run under concurrent browser/build load hit the existing Next Lite
   template's five-second timeout; the serial rerun passed without source changes.
-- The seventy-one Next browser checkpoints passed in installed Chromium 151 with
+- The seventy-two Next browser checkpoints passed in installed Chromium 151 with
   both child-process and SecureExec execution. They cover hydration,
   persistent navigation, independent slot history, refresh/state retention, native iframe reloads, Server Actions, virtual cookies, forms, and streamed slot-local
   error/not-found boundaries, recursive slots, and ancestor error propagation.
@@ -238,6 +239,38 @@ read-time patches adapt Next's hardened global-fetch assignment and its
 `performance.timeOrigin` cache clock. Both patches assert the exact pinned Next
 source shape so a Next upgrade fails closed rather than silently changing
 semantics.
+
+SecureExec's built-in AsyncLocalStorage is synchronous. The framework shim
+retains request/cache scopes by identity and releases snapshot entry frames
+synchronously, so an earlier scope cannot overwrite a still-active cache fill.
+Next's SWC server output is lowered to ES2016 with external helpers; Tuto's
+`_async_to_generator` helper selects the invocation snapshot at every learner
+continuation. Explicit Promise callbacks and available timer/microtask entry
+points are bound in SecureExec too. The child-process backend keeps Node's
+native AsyncLocalStorage and does not install those callback patches. The
+compiler fingerprint and artifact version changed to prevent reuse of server
+modules compiled with the earlier continuation strategy; the browser kernel
+is unchanged.
+
+The cache request lifecycle drains writes appended while initial revalidation
+promises settle. This retains context for nested fills and stale background
+refreshes before the worker lease is released. Tests verify delayed `cacheTag`
+calls, nested cache invalidation, cached client-reference hydration, independent
+request cookies and recovery after rejected cache fills. A compiled production
+SecureExec API checkpoint verifies navigation and refresh retain both root and
+cached-card client counters. Four stock Next 16.3.6 production comparisons from
+the same Cache Components fixture verify tag expiration and rejection of
+cookie reads through await, Promise and timer callbacks, consistent with
+[Next's public cache rules](https://nextjs.org/docs/app/api-reference/directives/use-cache).
+
+This is bounded compatibility for compiled learner modules and the pinned
+framework, not general Node async_hooks support. Dynamically constructed native
+async functions, arbitrary native/VM callback entry points, and future external
+server packages are outside this checkpoint. Tuto also propagates rejected
+pending cache writes at request completion; catching the cached function's
+error inside a Route Handler does not guarantee that request succeeds. These
+limits require native SecureExec async-context support or additional narrowly
+tested adapters before claiming full parity.
 
 The production Next bundle keeps `secure-exec` and `isolated-vm` external so
 their ESM `import.meta.url` values retain filesystem meaning. The request
@@ -950,9 +983,8 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next compatibility repair is preserving Next's WorkUnitStore for nested
-Cache Components during SecureExec rendering. After that, dependency metadata
-for speculative Flight and inherited layout/loading models can allow selective
+The next bounded compatibility slice is dependency metadata for speculative
+Flight and inherited layout/loading models, allowing selective
 tag/path eviction without invalidating unrelated destinations. PPR continuation
 and cross-instance invalidation require separate architecture and evidence.
 Deployment validation and sandbox security review remain separate operational

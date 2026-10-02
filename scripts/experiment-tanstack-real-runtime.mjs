@@ -272,13 +272,17 @@ function importOutput(output) {
 
 function hasInput(result, packageName) {
   return Object.keys(result.metafile.inputs).some((input) =>
-    input.replaceAll("\\", "/").includes(`/node_modules/${packageName}/`),
+    ("/" + input.replaceAll("\\", "/")).includes(
+      `/node_modules/${packageName}/`,
+    ),
   );
 }
 
 function hasInputFile(result, packagePath) {
   return Object.keys(result.metafile.inputs).some((input) =>
-    input.replaceAll("\\", "/").includes(`/node_modules/${packagePath}`),
+    ("/" + input.replaceAll("\\", "/")).includes(
+      `/node_modules/${packagePath}`,
+    ),
   );
 }
 

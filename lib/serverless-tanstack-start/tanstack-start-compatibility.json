@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-08-31",
+  "updatedAt": "2026-10-02",
   "upstream": {
     "repository": "TanStack/router",
     "commit": "0caf6b9a2b7e14b0b146c74cc27cb05c19d700a5",
@@ -8,11 +8,11 @@
   },
   "runtime": {
     "node": "22",
-    "reactStart": "1.168.49",
-    "reactRouter": "1.170.32",
-    "startPluginCore": "1.171.39",
-    "startServerCore": "1.169.31",
-    "viteRsc": "0.5.26",
+    "reactStart": "1.168.60",
+    "reactRouter": "1.170.41",
+    "startPluginCore": "1.171.49",
+    "startServerCore": "1.169.39",
+    "viteRsc": "0.5.30",
     "executionModel": "request-based reusable Node workers compiled with esbuild"
   },
   "features": [
