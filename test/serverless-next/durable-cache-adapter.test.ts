@@ -67,7 +67,7 @@ describe("durable Next cache adapter", () => {
     });
 
     expect(await second.get({ key: "lesson", workspaceKey })).toEqual({
-      entry: { lastModified: 1_000, value: { title: "RSC" } },
+      entry: { lastModified: 1_000, value: { title: "RSC" }, tags: ["lesson-posts"] },
       status: "hit",
     });
 
