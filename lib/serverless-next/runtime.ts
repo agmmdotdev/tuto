@@ -3,6 +3,7 @@ import path from "node:path";
 import type { NextNavigationRequest } from "./navigation";
 import type { NextRequestArtifact } from "./artifact";
 import { matchNextRouteHandler } from "./route-manifest";
+import type { NextCacheDependencies } from "./cache-invalidations";
 import { nextPrefetchKey } from "./prefetch";
 import {
   getNextRscWorkerPool,
@@ -11,6 +12,12 @@ import {
   type NextSerializedActionBody,
 } from "./rsc-worker-pool";
 import { getNextSsrWorkerPool } from "./ssr-worker-pool";
+
+// Host-only metadata: never trust request/response headers for dependencies.
+const responseDependencies = new WeakMap<Response, Promise<NextCacheDependencies | undefined>>();
+export function nextResponseCacheDependencies(response: Response) {
+  return responseDependencies.get(response);
+}
 
 export type NextRuntimeRequest = {
   headers?: HeadersInit;
@@ -1475,9 +1482,14 @@ export async function executeNextRequestArtifact(
             ? await getNextRscWorkerPool().renderStream(artifact, url, headers, options.navigation!)
             : await getNextRscWorkerPool().navigate(artifact, url, headers, options.navigation!);
           const body = result.flight instanceof ReadableStream ? result.flight : result.flight.length ? Uint8Array.from(result.flight) : null;
-          return new Response(body, {
+          const response = new Response(body, {
             headers: flightResultHeaders(artifact, result, result.contentType), status: result.status,
           });
+          const metadata = "final" in result
+            ? result.final.then(final => (final as {cacheMetrics?: {dependencies?: NextCacheDependencies}})?.cacheMetrics?.dependencies, () => undefined)
+            : Promise.resolve(result.cacheMetrics.dependencies);
+          responseDependencies.set(response, metadata);
+          return response;
         })()
       : options.loading
       ? await renderHydratableNextLoadingArtifact(artifact, {

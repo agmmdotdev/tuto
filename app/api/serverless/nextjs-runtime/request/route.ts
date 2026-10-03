@@ -398,7 +398,7 @@ export async function POST(request: Request) {
       if (typeof payload.navigation.revision !== "string" || typeof payload.navigation.url !== "string") {
         throw new Error("The preview navigation request is incomplete.");
       }
-      const [{ getNextRequestArtifact }, { executeNextRequestArtifact }] = await Promise.all([
+      const [{ getNextRequestArtifact }, { executeNextRequestArtifact, nextResponseCacheDependencies }] = await Promise.all([
         import("../../../../../lib/serverless-next/artifact"),
         import("../../../../../lib/serverless-next/runtime"),
       ]);
@@ -433,6 +433,8 @@ export async function POST(request: Request) {
         }
         request.signal.throwIfAborted();
         const epoch = nextPrefetchTickets.epoch(artifact);
+        const {nextCacheInvalidations} = await import("@/lib/serverless-next/cache-invalidations");
+        const snapshot = nextCacheInvalidations.snapshot(artifact.workspaceKey);
         let response: Response | undefined;
         let kind: "shell" | "full" = "full";
         let sharedKeys:Array<{key:string;slots:string[]}> = [];
@@ -447,9 +449,14 @@ export async function POST(request: Request) {
               headers:{"content-type":shell.contentType}});
           }
         }
-        response ??= await executeNextRequestArtifact(artifact, {
-          headers:navigation.headers, navigation, stream:true, url:url.pathname + url.search,
-        });
+        if (!response) {
+          // Full tickets (including auto fallback) contain every model: never
+          // omit reads hidden behind previously retained layout templates.
+          navigation.reuseSegments = [];
+          response = await executeNextRequestArtifact(artifact, {
+            headers:navigation.headers, navigation, stream:true, url:url.pathname + url.search,
+          });
+        }
         let body = new Uint8Array();
         if (response.body) {
           const reader = response.body.getReader();
@@ -479,7 +486,8 @@ export async function POST(request: Request) {
           response.headers.get("content-type")?.startsWith("text/x-component") &&
           !response.headers.has("set-cookie") && !response.headers.has("location") &&
           !/(?:^|\n)[0-9a-f]+:E\{/.test(text)
-          ? nextPrefetchTickets.put({artifact, owner, key:cacheKey, epoch, body, kind,
+          ? nextPrefetchTickets.put({artifact, owner, key:cacheKey, epoch, body, kind, snapshot,
+            dependencies:kind === "full" ? await nextResponseCacheDependencies(response) : undefined,
             headers:[...response.headers.entries()], status:response.status}) : null;
         return ticket ? Response.json({ticket, kind, ttlMs:nextPrefetchTickets.ttlMs,
           ...(kind === "shell" ? {segmentGrant:nextPrefetchTickets.issueSegments(artifact,owner,navigation.headers ?? {},sharedKeys),
@@ -520,7 +528,7 @@ export async function POST(request: Request) {
           });
       } finally { if (navigation.kind === "refresh") nextPrefetchTickets.invalidate(artifact); }
       response.headers.set("x-tuto-next-prefetch", combinedShell
-        ? cached?.kind === "shell" && cached.epoch === nextPrefetchTickets.epoch(artifact) ? "shell-stream-hit" : "shell-stream-miss"
+        ? cached?.kind === "shell" && nextPrefetchTickets.current(cached) ? "shell-stream-hit" : "shell-stream-miss"
         : cached && cached.kind !== "shell" ? "hit" : "miss");
       const token = new URL(request.url).searchParams.get("preview");
       const capability = resolvePreviewCapability(token);

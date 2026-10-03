@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { nextCacheInvalidations } from "./cache-invalidations";
+import { nextCacheInvalidations, type NextCacheDependencies } from "./cache-invalidations";
 
 export type NextCacheMetrics = {
+  dependencies?: NextCacheDependencies;
   hits: number;
   misses: number;
   revalidations: number;
@@ -10,6 +11,7 @@ export type NextCacheMetrics = {
 };
 
 export type NextCacheEntry = {
+  tags?: string[];
   lastModified: number;
   value: unknown;
 };
@@ -68,7 +70,7 @@ export interface NextCacheAdapter {
 // Keep Next's adapter/profile semantics; evict speculative render reuse around
 // the mutation rather than changing stale-while-revalidate into expiration.
 export async function revalidateNextCacheTags(input: NextCacheRevalidateInput) {
-  const finish = input.tags.length ? nextCacheInvalidations.begin(input.workspaceKey) : undefined;
+  const finish = input.tags.length ? nextCacheInvalidations.begin(input.workspaceKey, input.tags) : undefined;
   try { await getNextCacheAdapter().revalidateTags(input); }
   finally { finish?.(); }
 }
@@ -173,7 +175,7 @@ export class MemoryNextCacheAdapter implements NextCacheAdapter {
     cache.entries.delete(input.key);
     cache.entries.set(input.key, stored);
     return {
-      entry: { lastModified: stored.lastModified, value: stored.value },
+      entry: { lastModified: stored.lastModified, value: stored.value, tags: [...stored.tags] },
       status: isStale ? "stale" : "hit",
     };
   }

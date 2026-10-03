@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { NextRequestArtifact } from "./artifact";
 import type { NextRouterState } from "./navigation";
-import { nextCacheInvalidations } from "./cache-invalidations";
+import { nextCacheInvalidations, type NextCacheDependencies, type NextCacheSnapshot } from "./cache-invalidations";
 
 // Standalone so the hydration transport can embed exactly the same key logic.
 export function nextPrefetchKey(revision: string, url: string, headers: Record<string, string>, state?: NextRouterState, mode: "full" | "auto" = "full") {
@@ -27,6 +27,8 @@ type Entry = {
   headers: Array<[string, string]>;
   status: number;
   kind?: "full" | "shell";
+  snapshot?: NextCacheSnapshot;
+  dependencies?: NextCacheDependencies;
 };
 
 export class NextPrefetchTickets {
@@ -38,7 +40,7 @@ export class NextPrefetchTickets {
   readonly maxEntryBytes = 1024 * 1024;
   constructor(private now: () => number = Date.now) {}
   epoch(artifact: NextRequestArtifact) {
-    const version = nextCacheInvalidations.version(artifact.workspaceKey);
+    const version = nextCacheInvalidations.generation(artifact.workspaceKey);
     const previous = this.workspaceVersions.get(artifact);
     this.workspaceVersions.set(artifact, version);
     if (previous !== undefined && previous !== version) {
@@ -57,7 +59,7 @@ export class NextPrefetchTickets {
   }
   segmentContext(artifact:NextRequestArtifact, owner:string, headers:Record<string,string>) {
     return createHash("sha256").update(nextPrefetchKey(artifact.revision, "/", headers))
-      .update(JSON.stringify([artifact.generation,owner,this.epoch(artifact)])).digest("hex");
+      .update(JSON.stringify([artifact.generation,owner,this.epoch(artifact),nextCacheInvalidations.version(artifact.workspaceKey)])).digest("hex");
   }
   // Only the API's completed, bounded, error-free shell renderer issues receipts.
   issueSegments(artifact:NextRequestArtifact, owner:string, headers:Record<string,string>, segments:Array<{key:string;slots:string[]}>) {
@@ -87,7 +89,8 @@ export class NextPrefetchTickets {
     return [...keys].map(([key,slots])=>({key,slots}));
   }
   put(entry: Omit<Entry, "expiresAt">) {
-    if (entry.epoch !== this.epoch(entry.artifact) || nextCacheInvalidations.pending(entry.artifact.workspaceKey) || entry.body.byteLength > this.maxEntryBytes) return null;
+    if (entry.epoch !== this.epoch(entry.artifact) || nextCacheInvalidations.pending(entry.artifact.workspaceKey) ||
+      (entry.snapshot && !nextCacheInvalidations.valid(entry.artifact.workspaceKey, entry.snapshot, entry.kind === "shell" ? undefined : entry.dependencies)) || entry.body.byteLength > this.maxEntryBytes) return null;
     for (const [ticket, item] of this.entries) if (item.expiresAt <= this.now() ||
       (item.artifact === entry.artifact && item.owner === entry.owner && item.key === entry.key)) this.entries.delete(ticket);
     // Eight entries per document; at most sixteen MiB process-wide.
@@ -100,17 +103,21 @@ export class NextPrefetchTickets {
       this.entries.delete(oldest);
     }
     const ticket = randomBytes(24).toString("base64url");
-    this.entries.set(ticket, {...entry, expiresAt:this.now() + this.ttlMs});
+    this.entries.set(ticket, {...entry, snapshot:entry.snapshot ?? nextCacheInvalidations.snapshot(entry.artifact.workspaceKey), expiresAt:this.now() + this.ttlMs});
     return ticket;
   }
   take(ticket: string, artifact: NextRequestArtifact, owner: string, key: string) {
     const entry = this.entries.get(ticket);
     if (!entry || entry.artifact !== artifact || entry.owner !== owner || entry.key !== key) return null;
     this.entries.delete(ticket);
-    return entry.expiresAt > this.now() && entry.epoch === this.epoch(artifact) && !nextCacheInvalidations.pending(artifact.workspaceKey) ? entry : null;
+    return this.current(entry) ? entry : null;
+  }
+  current(entry: Entry) {
+    return entry.expiresAt > this.now() && entry.epoch === this.epoch(entry.artifact) && !!entry.snapshot &&
+      nextCacheInvalidations.valid(entry.artifact.workspaceKey, entry.snapshot, entry.kind === "shell" ? undefined : entry.dependencies);
   }
 }
 
-const key = Symbol.for("tuto.serverless-next.prefetch.v1");
+const key = Symbol.for("tuto.serverless-next.prefetch.v2");
 const globals = globalThis as typeof globalThis & {[key]?: NextPrefetchTickets};
 export const nextPrefetchTickets = globals[key] ??= new NextPrefetchTickets();

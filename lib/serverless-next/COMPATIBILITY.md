@@ -16,14 +16,14 @@ control-flow digests for streamed not-found boundaries.
 
 ## Next 16.3.6 regression checkpoint
 
-Verified on 2026-10-01 in the Tuto cloud environment with Node 24.19.0,
+Verified on 2026-10-02 in the Tuto cloud environment with Node 24.19.0,
 Yarn 4.13.0, and Linux x64:
 
 - Immutable dependency installation and browser-kernel generation passed.
-  The kernel is 229,744 bytes and targets Next 16.3.6 / React 19.2.6 (artifact version 23).
-- `yarn test:serverless-next --maxWorkers=1`: 119 tests passed, including SecureExec isolation,
+  The kernel is 229,744 bytes and targets Next 16.3.6 / React 19.2.6 (artifact version 24).
+- `yarn test:serverless-next --maxWorkers=1`: 135 tests passed, including SecureExec isolation,
   streaming, cache invalidation, Cache Components, and App Router topology.
-  The same 119 tests pass with `TUTO_NEXT_EXECUTION_MODE=secure-exec` forced on.
+  The same 135 tests pass with `TUTO_NEXT_EXECUTION_MODE=secure-exec` forced on.
   The nested Cache Components WorkUnitStore failure recorded on merged PR #30
   (`dafe77ff4468120d04e821ccfe533f0b23b6a61d`) is repaired for compiled learner
   continuations. Thirteen added cases exercise overlapping scopes, caught
@@ -33,7 +33,7 @@ Yarn 4.13.0, and Linux x64:
 - `yarn test:serverless-nextjs-runtime --maxWorkers=1`: 111 tests passed. The
   parallel run under concurrent browser/build load hit the existing Next Lite
   template's five-second timeout; the serial rerun passed without source changes.
-- The seventy-two Next browser checkpoints passed in installed Chromium 151 with
+- The seventy-five Next browser checkpoints passed in installed Chromium 151 with
   both child-process and SecureExec execution. They cover hydration,
   persistent navigation, independent slot history, refresh/state retention, native iframe reloads, Server Actions, virtual cookies, forms, and streamed slot-local
   error/not-found boundaries, recursive slots, and ancestor error propagation.
@@ -821,46 +821,72 @@ transport receipts and bounded policy are explicitly separate.
 
 ### Tag/path revalidation and speculative render reuse
 
-The child-process IPC bridge and SecureExec HTTP bridge route completed Next
-tag/path mutations through `revalidateNextCacheTags`. Next's own `revalidatePath`
-generates implicit tags; no separate guessed URL-to-tag mapping is introduced.
-Before entering the data adapter, and again on settlement (including partial
-failure), a workspace version changes. Artifact epochs observe that version:
-unused full Flight tickets, loading-shell tickets, and layout/loading receipts
-from any owner or hot revision of that workspace miss. Other workspaces keep
-their tickets. Invalidation versions keep 128 idle workspaces plus active
-mutations; idle eviction changes identity on the next lookup and therefore
-causes a conservative miss rather than resurrecting old receipts.
+The child-process IPC bridge and SecureExec HTTP bridge route Next tag/path
+mutations through `revalidateNextCacheTags`. Next's own `revalidatePath` and
+`getImplicitTags` generate the path tags, including selected parallel-slot,
+route-group, dynamic and retained-history branches. A completed **full Flight**
+prefetch records a bounded union of explicit and implicit dependencies from
+incremental-cache reads/writes and cold/warm Cache Components. Stored entry tags
+are included: a cache key can have been filled under a different wrapper's tags.
+Metadata stays private to the host/worker transport; caller hints or headers
+cannot authorize selective reuse.
 
-New speculative tickets/receipts cannot be issued or consumed while mutations
-are pending. Overlapping mutations remain fenced until every operation settles,
-and a render started before or during a mutation cannot publish a reusable
-ticket afterward. Receipt keys change with the epoch, so a fresh grant cannot
-reauthorize old held layout models. A miss still returns normal fresh streamed
-navigation and invokes the existing browser invalidation subscriber once when
-that unused entry is consumed. Root/layout client fibers retain their state.
-Already-consumed navigation snapshots remain pinned until completion; this is
-not a retroactive cancellation of active renders or mounted history entries.
+The host takes a mutation snapshot **before** warming. A workspace journal
+records tags before adapter invocation and again on settlement, including
+partial failures. At publication and consumption, a full ticket survives only
+if complete dependency metadata proves every subsequent mutation unrelated.
+Related mutations expire full tickets across owners/hot revisions; unrelated
+full destinations in the same workspace remain reusable. All reuse stays
+fenced while any mutation is pending. A render spanning a related mutation
+cannot publish a reusable ticket, even if its tag is discovered in a late Flight
+chunk. Overlapping operations must all settle before unrelated reuse resumes.
 
-Eviction is deliberately workspace-wide, even for a tag/path unrelated to a
-particular prefetched destination: shell models do not yet carry complete
-dependency metadata, including inherited models from sibling reuse. This does
-**not** flush the entire data cache. The adapter retains its normal selective
-tag/path expiration and stale profiles. `revalidateTag(tag, "max")` can therefore
-serve stale data on the first **fresh** render and refresh it in the background;
-`{expire:0}` blocks on a miss. Five stock Next 16.3.6 production cases compare
-these data-cache semantics on new document requests for tag, page, layout,
-dynamic page-pattern, and max-profile invalidations.
+The journal keeps 128 events per workspace and 128 idle workspaces plus active
+mutations. Incomplete/overflowed metadata, unknown mutations, missing history
+and workspace eviction cause conservative misses. Dependency sets are bounded
+at 256 tags of at most 2048 characters (implicit path tags can exceed Next's
+public 256-character explicit-tag limit). Existing ticket TTL/byte/capacity,
+owner, artifact, URL, request-header/auth/cookie, mode and slot-history checks
+remain in force. Refresh and Server Actions still invalidate the artifact
+broadly. A miss executes fresh streamed navigation and notifies its subscriber
+once when the unused entry is consumed; retained unrelated entries do not fire
+that callback. Root/layout client fibers retain their state.
 
-These comparisons do not establish identical client Router Cache behavior.
-Tuto conservatively rejects server-validated tickets on their next use after
-an out-of-band Route Handler mutation. Documents receive no push notification or eager
-`onInvalidate` callback from an external mutation. Invalidations performed in
-another process, a coordinator directly, or a database without the local host
-bridge are not observed by this process-local fence. Cross-instance invalidation
-and dependency-selective speculative eviction remain separate work. Two compiled
-SecureExec production browser cases verify full/shell misses, fresh Flight and
-root state after invoking a real Route Handler through the control API.
+**Loading shells and retained layout/loading receipts remain workspace-wide.**
+Their inherited models do not carry complete per-model dependency metadata.
+Their keys change on every mutation, so new grants cannot authorize old held
+models. Full warming—including an auto-prefetch fallback without a loading
+boundary—evaluates every template rather than omitting reads behind inherited
+receipts. Stream completion settles cache fills before declaring the dependency
+union complete. Already-consumed navigation snapshots remain pinned until
+completion; active renders and mounted history entries are not canceled
+retroactively.
+
+This policy does not flush the whole data cache or convert stale-while-revalidate
+into expiration. `revalidateTag(tag, "max")` may still serve stale data on the
+first **fresh** render and refresh in the background; `{expire:0}` blocks on a
+miss. Three additional pinned Next 16.3.6 production comparisons verify separate
+tags, page-path scope across pages sharing a tag, and a shared-key wrapper
+**difference**: stock Next checks the current wrapper's tags, while Tuto's
+adapter conservatively checks stored **and** current tags. Tuto can therefore
+miss where stock retains data in that edge case; this increment preserves the
+existing adapter contract rather than changing its invalidation semantics.
+The five existing stock tag/page/layout/dynamic/max cases also remain useful.
+These document-request comparisons do not establish identical client Router
+Cache behavior or private prefetch protocols.
+
+Fourteen new runtime cases and two journal/owner cases cover selective misses
+and hits, tag/path scope, cold/warm nested caches, stored tags, parallel patterns,
+auto fallback, late streamed dependencies, partial/overlapping mutations,
+eviction, and safe shell fallback on both backends. Three browser cases verify
+root state and notification behavior; a compiled SecureExec production browser
+case verifies an unrelated full ticket hit after a real Route Handler mutation.
+
+Documents receive no push notification or eager `onInvalidate` callback from
+external mutations. Writes from another process, a coordinator directly, or a
+database without the local bridge are not observed by this process-local
+journal. Per-layout/loading inherited dependencies, cross-instance invalidation,
+PPR continuation, and data-cache TTL-aware Flight expiry remain separate work.
 
 The pinned [revalidateTag reference](https://raw.githubusercontent.com/vercel/next.js/v16.3.6/docs/01-app/03-api-reference/04-functions/revalidateTag.mdx),
 [revalidatePath reference](https://raw.githubusercontent.com/vercel/next.js/v16.3.6/docs/01-app/03-api-reference/04-functions/revalidatePath.mdx),
@@ -983,9 +1009,9 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next bounded compatibility slice is dependency metadata for speculative
-Flight and inherited layout/loading models, allowing selective
-tag/path eviction without invalidating unrelated destinations. PPR continuation
+The next bounded compatibility slice is per-model dependency metadata for
+inherited layout/loading receipts, so unrelated shells can survive mutations
+without reauthorizing stale parent models. PPR continuation
 and cross-instance invalidation require separate architecture and evidence.
 Deployment validation and sandbox security review remain separate operational
 work.

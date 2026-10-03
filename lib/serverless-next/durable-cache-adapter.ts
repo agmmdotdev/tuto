@@ -561,7 +561,7 @@ export class DurableNextCacheAdapter implements NextCacheAdapter {
       stale = true;
     }
     return {
-      entry: { lastModified: stored.timestamp, value: stored.value },
+      entry: { lastModified: stored.timestamp, value: stored.value, tags: [...stored.tags] },
       status: stale ? "stale" : "hit",
     };
   }
