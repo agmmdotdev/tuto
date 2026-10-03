@@ -16,24 +16,23 @@ control-flow digests for streamed not-found boundaries.
 
 ## Next 16.3.6 regression checkpoint
 
-Verified on 2026-10-02 in the Tuto cloud environment with Node 24.19.0,
+Verified on 2026-10-03 in the Tuto cloud environment with Node 24.19.0,
 Yarn 4.13.0, and Linux x64:
 
-- Immutable dependency installation and browser-kernel generation passed.
-  The kernel is 229,744 bytes and targets Next 16.3.6 / React 19.2.6 (artifact version 24).
-- `yarn test:serverless-next --maxWorkers=1`: 135 tests passed, including SecureExec isolation,
+- The unchanged dependency installation and browser kernel from the preceding
+  checkpoint remain in use; package pins and generated kernel are unchanged.
+  The kernel is 229,744 bytes and targets Next 16.3.6 / React 19.2.6 (artifact version 25).
+- `yarn test:serverless-next --maxWorkers=1`: 147 tests passed, including SecureExec isolation,
   streaming, cache invalidation, Cache Components, and App Router topology.
-  The same 135 tests pass with `TUTO_NEXT_EXECUTION_MODE=secure-exec` forced on.
+  The same 147 tests pass with `TUTO_NEXT_EXECUTION_MODE=secure-exec` forced on.
   The nested Cache Components WorkUnitStore failure recorded on merged PR #30
   (`dafe77ff4468120d04e821ccfe533f0b23b6a61d`) is repaired for compiled learner
   continuations. Thirteen added cases exercise overlapping scopes, caught
   rejections, parallel/nested cache fills, request isolation and forbidden
   request reads through await, promise, timer, microtask and async-generator
   continuations.
-- `yarn test:serverless-nextjs-runtime --maxWorkers=1`: 111 tests passed. The
-  parallel run under concurrent browser/build load hit the existing Next Lite
-  template's five-second timeout; the serial rerun passed without source changes.
-- The seventy-five Next browser checkpoints passed in installed Chromium 151 with
+- `yarn test:serverless-nextjs-runtime --maxWorkers=1`: 111 tests passed.
+- The seventy-eight Next browser checkpoints passed in installed Chromium 151 with
   both child-process and SecureExec execution. They cover hydration,
   persistent navigation, independent slot history, refresh/state retention, native iframe reloads, Server Actions, virtual cookies, forms, and streamed slot-local
   error/not-found boundaries, recursive slots, and ancestor error propagation.
@@ -715,15 +714,18 @@ or mounting client components. Flight decoding can evaluate client modules and
 resolve lazy references; module-level side effects are not deferred until display.
 It advertises only templates it still holds. The API overwrites raw renderer hints
 and resolves receipts against the exact artifact object, revision/generation,
-document owner, normalized complete headers (including cookies/auth), mutation
-epoch and thirty-second expiry. Forged keys and another owner/workspace/context
-miss safely. Proxy workspaces are excluded. Receipt metadata is capped at eight
+document owner, normalized complete headers (including cookies/auth), explicit
+refresh/action epoch, dependency snapshot and the original thirty-second expiry.
+Forged keys and another owner/workspace/context miss safely. Proxy workspaces are excluded. Receipt metadata is capped at eight
 receipts per document, sixteen keys per receipt, and 128 receipts per process.
 Parameterized revisits select the held template matching the requested key; an
 active component cannot keep another parameter selection's template by accident.
 Keys over 4096 characters or layouts with over 64 rendered holes are ineligible.
 
-Keys identify module path, concrete params and declared owned slot names.
+Stable model IDs identify module path, concrete params and declared owned slot
+names. Each newly rendered model key also includes a host-issued nonce, so a
+new grant cannot reauthorize an old held template. A validated inherited model
+keeps its original key, dependency snapshot and expiry.
 Params are conservatively complete for each selected branch, so changing a
 child's dynamic params may miss an otherwise shared ancestor. Current slot
 selections are **not** captured as the template's future children: each navigation
@@ -852,15 +854,34 @@ broadly. A miss executes fresh streamed navigation and notifies its subscriber
 once when the unused entry is consumed; retained unrelated entries do not fire
 that callback. Root/layout client fibers retain their state.
 
-**Loading shells and retained layout/loading receipts remain workspace-wide.**
-Their inherited models do not carry complete per-model dependency metadata.
-Their keys change on every mutation, so new grants cannot authorize old held
-models. Full warming—including an auto-prefetch fallback without a loading
-boundary—evaluates every template rather than omitting reads behind inherited
-receipts. Stream completion settles cache fills before declaring the dependency
-union complete. Already-consumed navigation snapshots remain pinned until
-completion; active renders and mounted history entries are not canceled
-retroactively.
+**Completed loading shells and retained layout/loading receipts now carry
+bounded dependencies.** The worker collects selected branch/path tags, all
+completed cache reads/fills and the dependencies of validated inherited models.
+Each newly rendered model receives that completed shell's conservative union.
+An inherited model keeps its original union, mutation snapshot and expiry;
+reissuing it does not renew its lifetime. Receipt resolution validates each
+model independently against the journal and deduplicates validated model IDs.
+For example, warming a root separately and then warming a child lets the root
+survive a later child-layout tag mutation, while the dependent child shell and
+models miss. A root-tag mutation rejects that root too. Unrelated tag or path
+mutations can preserve the shell, root, layout and loading output while nested
+slot/page descendants execute freshly.
+
+This is conservative **shell-cohort attribution**, not exact dependency
+tracking for each React component. Models first rendered together share a
+union, so one model's dependency can invalidate its peers unnecessarily. All
+validated inherited references contribute their metadata and expiry cap even
+if a render ultimately does not use them. Missing/overflowed metadata, pending
+mutations, expired receipts, lost history and related late-discovered tags
+still force a safe miss. A shell that omits inherited templates expires no
+later than the oldest inherited model. New models get fresh opaque keys;
+scoped unrelated mutations do not change the owner/header/artifact context.
+
+Full warming—including an auto-prefetch fallback without a loading boundary—
+evaluates every template rather than omitting reads behind inherited receipts.
+Stream completion settles cache fills before declaring the union complete.
+Already-consumed navigation snapshots remain pinned until completion; active
+renders and mounted history entries are not canceled retroactively.
 
 This policy does not flush the whole data cache or convert stale-while-revalidate
 into expiration. `revalidateTag(tag, "max")` may still serve stale data on the
@@ -882,10 +903,22 @@ eviction, and safe shell fallback on both backends. Three browser cases verify
 root state and notification behavior; a compiled SecureExec production browser
 case verifies an unrelated full ticket hit after a real Route Handler mutation.
 
+Twelve further runtime cases exercise selective shell/model reuse, root/layout/
+loading tag invalidation, unrelated tag/page-path changes, inherited parent
+ownership, late loading dependencies and original-expiry caps on both backends.
+Three incremental HTTP browser cases gate fresh Flight after headers to verify
+interactive provisional loading, fresh nested slots, partial root reuse and
+client-state retention. Three additional compiled SecureExec API cases and
+three stock production document comparisons pass. Stock document comparisons
+use the same tagged root/layout cache functions with clock-valued probes,
+dynamic request reads and a root Suspense wrapper for production prerendering;
+they do not compare Tuto's private ticket/grant protocol or promise identical
+stock client Router Cache behavior.
+
 Documents receive no push notification or eager `onInvalidate` callback from
 external mutations. Writes from another process, a coordinator directly, or a
 database without the local bridge are not observed by this process-local
-journal. Per-layout/loading inherited dependencies, cross-instance invalidation,
+journal. Precise component-level attribution, cross-instance invalidation,
 PPR continuation, and data-cache TTL-aware Flight expiry remain separate work.
 
 The pinned [revalidateTag reference](https://raw.githubusercontent.com/vercel/next.js/v16.3.6/docs/01-app/03-api-reference/04-functions/revalidateTag.mdx),
@@ -1009,9 +1042,21 @@ yarn test:serverless-next
 yarn test:serverless-next-browser
 ```
 
-The next bounded compatibility slice is per-model dependency metadata for
-inherited layout/loading receipts, so unrelated shells can survive mutations
-without reauthorizing stale parent models. PPR continuation
-and cross-instance invalidation require separate architecture and evidence.
+The new stock shell fixture is reproducible from the repository root:
+
+```bash
+yarn exec esbuild test/serverless-next/fixtures/write-selective-shell-stock.ts --bundle --platform=node --outfile=.tmp/write-shell-stock.cjs
+node .tmp/write-shell-stock.cjs /tmp/tuto-shell-stock
+# In /tmp/tuto-shell-stock: run Next's production build and start on a free port.
+# Browser cases opt in with TUTO_NEXT_SHELL_STOCK_ORIGIN and
+# TUTO_NEXT_SHELL_PRODUCTION_ENDPOINT (the compiled Tuto request API URL).
+```
+
+The next bounded compatibility slice is data-cache lifetime-aware speculative
+expiry: cap warmed Flight and inherited model lifetimes to the cache values they
+represent, including short-lived and stale-while-revalidate entries. The current
+fixed thirty-second limit does not establish data-cache TTL parity. Exact
+component-level dependency attribution, PPR continuation and cross-instance
+invalidation require separate architecture and evidence.
 Deployment validation and sandbox security review remain separate operational
 work.
