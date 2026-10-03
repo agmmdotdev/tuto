@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { WorkspaceFile } from "@/lib/ide/types";
 
-export const NEXT_REQUEST_ARTIFACT_VERSION = 24 as const;
+export const NEXT_REQUEST_ARTIFACT_VERSION = 25 as const;
 
 export type NextCompiledModule = {
   canonicalPath: string;

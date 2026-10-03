@@ -1791,7 +1791,7 @@ describe("request-compiled Next RSC runtime", () => {
       workspaceKey: "next-app-router-topology",
     });
 
-    expect(artifact.version).toBe(24);
+    expect(artifact.version).toBe(25);
     expect(artifact.router.routes.map((route) => route.pattern)).toEqual([
       "/dashboard/settings",
       "/photo/[id]",
