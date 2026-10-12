@@ -14,6 +14,96 @@ RSC and SSR workers use production mode to match the shared browser kernel;
 production Flight redacts uncaught error messages while retaining Next's
 control-flow digests for streamed not-found boundaries.
 
+## Stock cache lifetime comparison (2026-10-12)
+
+PR #35 was merged as `e04e0a7db3f30fd61013b91a08d6f15ee69c67df` before this
+comparison. A shared fixture now runs the same cache functions through both
+Tuto execution backends and a stock Next.js 16.3.6 production server with Cache
+Components enabled. `connection()` keeps the API probes request-bound, so
+build-time cache values/module counters do not seed the observations. Stock is
+built with webpack; Turbopack rejects the disposable fixture's external
+`node_modules` symlink. The supported-path data lifetime probes verified the
+policies below; validation also exposed and repaired a SecureExec cache-fill
+failure during response backpressure.
+
+| Probe | Tuto | Stock Next 16.3.6 production |
+| --- | --- | --- |
+| One-second `unstable_cache` and cached `fetch` | Warm hit; first aged read is stale; a subsequent read observes the background replacement | Same data behavior; the HTTP response can finish before the background write |
+| Cache Components with one-second `revalidate` | Host-backed handler serves stale once while refreshing | Built-in memory handler discards naturally stale entries and blocks for a fresh value |
+| `stale: 1`, `revalidate: 10`, `expire: 20` | The server data remains a hit after client stale time | Same; `stale` governs client reuse, not server entry expiration |
+| Cache Components after hard `expire` | Regenerates before returning | Same |
+| Nested cache without explicit outer life | Inherits the child's short life; stale descendants refresh | Inherits the child's short life; the built-in handler returns fresh descendants at revalidation |
+| Explicit longer outer life | Retains its cached child snapshot after the separate child entry refreshes | Same; explicit outer `cacheLife` controls that cached value |
+| Overlapping parents sharing one child; repeated/different tenant arguments | Shared fills deduplicate and distinct keys stay isolated | Same in the measured cold/warm request sequences |
+| Root-parameter coarse/specific cache keys | Real Next wrapper and Tuto handler exercised at an internal seam with native and frozen clocks; host timestamps bound both writes | Generated `next/root-params` API exercised by a real dynamic-root page; tenant partitions remain isolated across short revalidation |
+
+Natural Cache Components SWR is a cache-handler policy difference, rather than
+a universal Next API rule. The pinned built-in production memory handler
+explicitly expires entries at `revalidate`; Next's cache wrapper also supports
+SWR when a handler returns a stale entry. Tuto deliberately keeps that
+host-backed path and declines speculative publication of its stale output.
+The tests do not force equality between those two policies. Incremental/fetch
+background completion is also not a timing-parity claim: Tuto drains writes at
+request completion, while stock HTTP completion can precede them. The probes
+avoid triggering duplicate request-local refreshes merely to poll a fill.
+
+One existing SecureExec browser case failed when a root cache was invalidated
+and the streamed body was held behind a gate. A deterministic transport probe
+then reproduced `The cache request is outside the active workspace`: after
+early Suspense chunks filled the host stream queue, a short cache fill finished
+while no stream-control HTTP call was active. Child-process execution passed
+the same probe. The bridge now retains the worker's single-workspace scope
+before starting a response stream and releases it exactly once on completion,
+cancellation or failure. Per-call scope accounting remains, and the worker
+registry advances to avoid retaining the older lifecycle after host reload.
+The frozen clock, tenant checks and execution limits remain in force. This is a
+Tuto transport repair, not an assertion of stock PPR/backpressure parity.
+
+An explicit outer cache may validly retain a descendant snapshot for its own
+longer lifetime. On a Tuto cold fill, the observed child deadline conservatively
+shortens speculative lifetime to at most one second. A later outer-cache hit
+can receive up to thirty seconds because the outer value itself is still valid;
+the child's separate cache entry is not reread. This does not prove persistence
+of every original descendant deadline across cached outer values, or exact
+stock client Router Cache TTL parity.
+
+Root-parameter coverage has a deliberate boundary. The handler probe invokes
+the pinned Next wrapper and `getRootParam` in a constructed request context;
+its frozen-clock variant mirrors the SecureExec clock translation while using
+native Node AsyncLocalStorage. It verifies actual coarse/redirect and specific
+writes, host timestamps, warm reads, SWR and partition isolation, without
+claiming full SecureExec root-parameter rendering parity. Tuto's learner module
+loader still rejects `next/root-params`; a separate import-guard case locks in
+that limitation. The stock page uses a real dynamic root and generated exports.
+There is no claim that stock supports root params inside Route Handlers.
+
+Fresh cloud validation for this comparison:
+
+- 178 runtime cases pass per backend with the stock origin configured: the
+  preceding 155 cases plus 23 new cases. Eighteen paired probes cover nine
+  data-cache scenarios; one Tuto-only probe covers explicit nested speculative
+  caps; two handler-only probes cover native/frozen clocks; one verifies the
+  unsupported learner import; one reproduces the stream/cache-fill scope race.
+  No runtime cases are skipped in that run. The affected selective-shell browser
+  cases also passed three consecutive SecureExec repetitions after the repair.
+- 82 Chromium 151 browser cases pass per backend: 81 Tuto regressions and one
+  stock root-partition case. Twenty optional stock/production cases unrelated
+  to this new fixture remain skipped. A combined-body recovery assertion timed
+  out once during parallel validation; three focused reruns and the final
+  isolated full SecureExec suite passed. This intermittent timeout remains a
+  validation limitation, separate from the reproduced cache-fill scope bug.
+  Firefox was not run.
+- 111 secondary-runtime cases, lint, both repository typechecks, the stock
+  fixture typecheck, the stock production build and the controlled-font Tuto
+  production build pass. The three existing lint warnings and existing
+  TanStack tracing warning remain. Live Google Fonts were not tested.
+- A local `VERCEL=1`, SecureExec production API smoke verifies component
+  stale/fresh reads, shared nested fills and argument partition isolation.
+
+The previous October 3 stock comparisons were not rerun as part of these
+results. This checkpoint is local production/runtime evidence; no GitHub
+Actions, Fluid Compute canary or deployment configuration change is involved.
+
 ## Cache lifetime checkpoint (2026-10-12)
 
 Speculative Flight, loading shells and newly rendered layout/loading receipts
@@ -1110,11 +1200,30 @@ node .tmp/write-shell-stock.cjs /tmp/tuto-shell-stock
 # TUTO_NEXT_SHELL_PRODUCTION_ENDPOINT (the compiled Tuto request API URL).
 ```
 
-The next bounded compatibility slice is a pinned stock Next 16.3.6 lifetime
-differential for short revalidation and Cache Components profiles, including
-nested/partitioned cache fills. The current conservative freshness caps do not
-establish exact data-cache/client TTL parity. Exact component-level dependency
-and lifetime attribution, PPR continuation and cross-instance invalidation
-require separate architecture and evidence.
+The next bounded compatibility slice is learner-facing `next/root-params`
+support with correct root-layout parameter attribution, using the new real
+coarse/specific partition probes as regression evidence. The current internal
+handler coverage does not establish that compiler/request-context capability.
+Exact component-level dependency/lifetime attribution, stock client Router
+Cache TTL parity, PPR continuation and cross-instance invalidation still require
+separate architecture and evidence.
 Deployment validation and sandbox security review remain separate operational
 work.
+
+The lifetime comparison is reproducible from the repository root:
+
+```bash
+yarn exec esbuild test/serverless-next/fixtures/write-cache-lifetime-stock.ts --bundle --platform=node --outfile=.tmp/write-cache-lifetime-stock.cjs
+node .tmp/write-cache-lifetime-stock.cjs /tmp/tuto-lifetime-stock
+node node_modules/next/dist/bin/next build /tmp/tuto-lifetime-stock --webpack
+node node_modules/next/dist/bin/next start /tmp/tuto-lifetime-stock -p 18771
+# In another shell; repeat the runtime command with TUTO_NEXT_EXECUTION_MODE=secure-exec.
+TUTO_NEXT_CACHE_LIFETIME_STOCK_ORIGIN=http://127.0.0.1:18771 yarn test:serverless-next --maxWorkers=1
+TUTO_NEXT_CACHE_LIFETIME_STOCK_ORIGIN=http://127.0.0.1:18771 yarn test:serverless-next-browser cache-lifetime-stock.spec.ts
+```
+
+The configured browser command defaults to Firefox. This checkpoint used an
+untracked Playwright config selecting installed Chromium 151 with its executable
+path; the repository browser configuration was not changed. Without the stock
+origin, ten runtime fixture-dependent cases and the new stock browser case skip
+explicitly; ten standalone Tuto cases and three handler/import cases run.
