@@ -94,7 +94,7 @@ export class NextCacheInvalidations {
     const record = () => {
       state.version = randomUUID();
       // Unknown mutations also advance artifact epochs; scoped mutations use
-      // the journal for full Flight and still invalidate every shell receipt.
+      // the journal to validate full Flight and shell/model receipts.
       if (!bounded) {
         state.generation = randomUUID();
         state.mutations = [];

@@ -1,3 +1,4 @@
+import type {NextSharedSegment} from "./prefetch";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { delimiter, resolve } from "node:path";
@@ -37,7 +38,7 @@ type WorkerReply = {
   streamDone?: boolean;
   streamFinal?: unknown;
   streamId?: string;
-  sharedKeys?: Array<{key:string;slots:string[]}>;
+  sharedKeys?: NextSharedSegment[];
   stylePaths?: string[];
   type?: undefined;
   url?: string;
@@ -79,7 +80,7 @@ export type NextFlightWorkerResult = {
   headers: Array<[string, string]>;
   routePattern: string | null;
   status: number;
-  sharedKeys?: Array<{key:string;slots:string[]}>;
+  sharedKeys?: NextSharedSegment[];
   stylePaths: string[];
 };
 

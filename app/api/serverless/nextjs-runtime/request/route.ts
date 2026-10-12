@@ -1,3 +1,5 @@
+import type {NextSharedSegment} from "@/lib/serverless-next/prefetch";
+import type {NextCacheDependencies} from "@/lib/serverless-next/cache-invalidations";
 import type { NextNavigationRequest } from "@/lib/serverless-next/navigation";
 import { randomBytes } from "node:crypto";
 import { nextPrefetchKey, nextPrefetchTickets } from "@/lib/serverless-next/prefetch";
@@ -413,9 +415,11 @@ export async function POST(request: Request) {
       const prefetchMode = navigation.prefetchMode ?? "full";
       if (!["auto", "full"].includes(prefetchMode)) throw new Error("Invalid preview prefetch mode.");
       // Never forward caller-supplied internal renderer hints.
+      delete navigation.segmentGeneration;
       delete navigation.segmentContext;
       delete navigation.reuseSegments;
       if (!artifact.router.proxy && typeof owner === "string" && owner.length <= 128) {
+        navigation.segmentGeneration = crypto.randomUUID();
         navigation.segmentContext = nextPrefetchTickets.segmentContext(artifact,owner,navigation.headers ?? {});
         navigation.reuseSegments = navigation.kind === "refresh" ? [] : nextPrefetchTickets.resolveSegments(
           artifact,owner,navigation.headers ?? {},navigation.segmentRefs);
@@ -437,7 +441,8 @@ export async function POST(request: Request) {
         const snapshot = nextCacheInvalidations.snapshot(artifact.workspaceKey);
         let response: Response | undefined;
         let kind: "shell" | "full" = "full";
-        let sharedKeys:Array<{key:string;slots:string[]}> = [];
+        let sharedKeys:NextSharedSegment[] = [];
+        let dependencies:NextCacheDependencies | undefined;
         if (prefetchMode === "auto") {
           const {getNextRscWorkerPool} = await import("@/lib/serverless-next/rsc-worker-pool");
           const shell = await getNextRscWorkerPool().renderPrefetchShell(artifact, url.pathname + url.search,
@@ -445,6 +450,7 @@ export async function POST(request: Request) {
           if (shell.status !== 204) {
             kind = "shell";
             sharedKeys = shell.sharedKeys ?? [];
+            dependencies = shell.cacheMetrics.dependencies;
             response = new Response(Uint8Array.from(shell.flight), {status:shell.status,
               headers:{"content-type":shell.contentType}});
           }
@@ -481,16 +487,19 @@ export async function POST(request: Request) {
             for (const chunk of chunks) {body.set(chunk, offset); offset += chunk.byteLength;}
           }
         }
+        if(kind === "full")dependencies = await nextResponseCacheDependencies(response);
+        const maxExpiresAt = kind === "shell" && navigation.reuseSegments?.length
+          ? Math.min(...navigation.reuseSegments.map(item=>item.expiresAt ?? Date.now())) : undefined;
         const text = new TextDecoder().decode(body);
         const ticket = response.status === 200 && body.length &&
           response.headers.get("content-type")?.startsWith("text/x-component") &&
           !response.headers.has("set-cookie") && !response.headers.has("location") &&
           !/(?:^|\n)[0-9a-f]+:E\{/.test(text)
           ? nextPrefetchTickets.put({artifact, owner, key:cacheKey, epoch, body, kind, snapshot,
-            dependencies:kind === "full" ? await nextResponseCacheDependencies(response) : undefined,
+            dependencies,maxExpiresAt,
             headers:[...response.headers.entries()], status:response.status}) : null;
-        return ticket ? Response.json({ticket, kind, ttlMs:nextPrefetchTickets.ttlMs,
-          ...(kind === "shell" ? {segmentGrant:nextPrefetchTickets.issueSegments(artifact,owner,navigation.headers ?? {},sharedKeys),
+        return ticket ? Response.json({ticket, kind, ttlMs:nextPrefetchTickets.remaining(ticket),
+          ...(kind === "shell" ? {segmentGrant:nextPrefetchTickets.issueSegments(artifact,owner,navigation.headers ?? {},sharedKeys,snapshot,dependencies,navigation.reuseSegments),
             shellFlight:Buffer.from(body).toString("base64")} : {}),
         }, {
           headers:{"access-control-allow-origin":"*", "cache-control":"no-store"},

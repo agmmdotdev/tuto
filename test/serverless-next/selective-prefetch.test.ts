@@ -147,7 +147,7 @@ for (const related of [true, false]) {
   });
 }
 
-test("shell receipts stay conservative and caller metadata cannot grant selective reuse", async () => {
+test("shell receipts preserve unrelated reuse and ignore caller dependency metadata", async () => {
   const artifact = await compile("selective-shell-fallback");
   const warmed = await warm(artifact, "/dashboard/shared/one", {
     prefetchMode: "auto",
@@ -165,9 +165,9 @@ test("shell receipts stay conservative and caller metadata cannot grant selectiv
     segmentRefs: [warmed.segmentGrant],
   });
   expect(response.headers.get("x-tuto-next-prefetch")).toBe(
-    "shell-stream-miss",
+    "shell-stream-hit",
   );
-  expect(await response.text()).toContain("data-tagged-layout");
+  expect(await response.text()).not.toContain("data-tagged-layout");
   await consume(artifact, "/dashboard/prefetched", full.ticket, "hit");
 });
 

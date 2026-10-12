@@ -1,3 +1,4 @@
+import type {NextRetainedSegment} from "./prefetch";
 export type NextRouterBranch = {
   page: string;
   url: string;
@@ -17,7 +18,8 @@ export type NextNavigationRequest = {
   id?: string;
   // Internal renderer hints: the HTTP API overwrites these after receipt validation.
   segmentContext?: string;
-  reuseSegments?: Array<{key:string;slots:string[]}>;
+  segmentGeneration?: string;
+  reuseSegments?: NextRetainedSegment[];
   kind: "push" | "replace" | "refresh" | "restore";
   state?: NextRouterState;
 };
