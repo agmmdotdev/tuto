@@ -9,6 +9,8 @@ import { compileNextProxyMatchers } from "./proxy-matchers";
 import { NextSecureExecWorkspacePool } from "./secure-exec-worker";
 import {
   getNextCacheAdapter,
+  readNextCacheValue,
+  writeNextCacheValue,
   revalidateNextCacheTags,
   type NextCacheGetInput,
   type NextCacheLock,
@@ -46,12 +48,13 @@ type WorkerReply = {
 
 type WorkerCacheRequest = {
   input:
+    | { workspaceKey: string }
     | NextCacheGetInput
     | NextCacheLock
     | NextCacheLockInput
     | NextCacheRevalidateInput
     | NextCacheSetInput;
-  operation: "acquireLock" | "get" | "releaseLock" | "revalidateTags" | "set";
+  operation: "acquireLock" | "get" | "now" | "releaseLock" | "revalidateTags" | "set";
   requestId: string;
   type: "cache-request";
 };
@@ -149,17 +152,19 @@ export class NextRscWorkerPool {
     try {
       const adapter = getNextCacheAdapter();
       const value =
-        message.operation === "get"
-          ? await adapter.get(message.input as NextCacheGetInput)
-          : message.operation === "set"
-            ? await adapter.set(message.input as NextCacheSetInput)
-            : message.operation === "acquireLock"
-              ? await adapter.acquireLock(message.input as NextCacheLockInput)
-              : message.operation === "releaseLock"
-                ? await adapter.releaseLock(message.input as NextCacheLock)
-                : await revalidateNextCacheTags(
-                    message.input as NextCacheRevalidateInput,
-                  );
+        message.operation === "now"
+          ? Date.now()
+          : message.operation === "get"
+            ? await readNextCacheValue(message.input as NextCacheGetInput)
+            : message.operation === "set"
+              ? await writeNextCacheValue(message.input as NextCacheSetInput)
+              : message.operation === "acquireLock"
+                ? await adapter.acquireLock(message.input as NextCacheLockInput)
+                : message.operation === "releaseLock"
+                  ? await adapter.releaseLock(message.input as NextCacheLock)
+                  : await revalidateNextCacheTags(
+                      message.input as NextCacheRevalidateInput,
+                    );
       child.send({
         ok: true,
         requestId: message.requestId,
@@ -613,7 +618,7 @@ export class NextRscWorkerPool {
   }
 }
 
-const poolKey = Symbol.for("tuto.serverless-next.rsc-worker-pool.v2");
+const poolKey = Symbol.for("tuto.serverless-next.rsc-worker-pool.v3");
 
 export function getNextRscWorkerPool() {
   const globals = globalThis as typeof globalThis & {

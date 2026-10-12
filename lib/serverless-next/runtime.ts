@@ -246,6 +246,9 @@ function hydrationBootstrap(
     options._signal?.addEventListener("abort", cancel, {once:true});
     entry.promise = (async () => {
       try {
+        // Use the request start as a conservative local origin for server TTLs.
+        // Measuring from receipt would add transport time to cached data life.
+        const requestedAt = Date.now();
         const response = await fetch(endpoint, {
           method:"POST", headers:{"content-type":"text/plain;charset=UTF-8"}, signal:controller.signal,
           body:JSON.stringify({navigation:{kind:"push", id:requestId, segmentRefs:refs,
@@ -262,7 +265,7 @@ function hydrationBootstrap(
           if (prefetchEntries.get(key) === entry) prefetchEntries.delete(key);
           return;
         }
-        const receivedAt = Date.now(), expiresAt = receivedAt + result.ttlMs;
+        const expiresAt = requestedAt + result.ttlMs;
         let decoded;
         if (result.kind === "shell" && typeof result.shellFlight === "string" && result.shellFlight.length <= 1398104) {
           let timedOut = false, timer, abort;
@@ -289,7 +292,7 @@ function hydrationBootstrap(
         }
         if (result.segmentGrant) {
           const grant = result.segmentGrant;
-          segmentGrants.set(grant.token,{keys:grant.keys,expiresAt:Math.min(expiresAt,receivedAt+grant.ttlMs)});
+          segmentGrants.set(grant.token,{keys:grant.keys,expiresAt:Math.min(expiresAt,requestedAt+grant.ttlMs)});
           while (segmentGrants.size > 8) segmentGrants.delete(segmentGrants.keys().next().value);
           if (decoded) {kernel.router.storeSegments(decoded.templates);kernel.router.pinSegments(requestId);}
         }

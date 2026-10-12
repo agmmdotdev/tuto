@@ -144,7 +144,7 @@ test("aborting combined navigation before reading its body releases the worker f
  const controller=new AbortController();
  const response=await post(artifact,{...args,prefetch:false,prefetchShell:true,prefetchShellAck:true,prefetchShellStream:true,prefetchTicket:ticket},controller.signal);
  controller.abort();await expect(response.body!.getReader().read()).rejects.toThrow();
- const next=await post(artifact,{url:"/dashboard/settings",prefetch:false});expect(next.status).toBe(200);expect(await next.text()).toContain('settings');
+ const next=await post(artifact,{url:"/dashboard/settings",prefetch:false});expect(next.status, await next.clone().text()).toBe(200);expect(await next.text()).toContain('settings');
 });
 test("combined context misses and refresh invalidation still return fresh Flight",async()=>{
  const {sharedSegmentsWorkspace}=await import("./fixtures/shared-segments-workspace");

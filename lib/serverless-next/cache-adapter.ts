@@ -66,6 +66,19 @@ export interface NextCacheAdapter {
   set(input: NextCacheSetInput): Promise<void>;
 }
 
+// Bridge clocks are host-owned: SecureExec intentionally freezes its clock.
+// Keep adapters unchanged and do not accept a timestamp from learner input.
+export async function readNextCacheValue(input: NextCacheGetInput) {
+  const result = await getNextCacheAdapter().get(input);
+  return { ...result, observedAt: Date.now() };
+}
+
+export async function writeNextCacheValue(input: NextCacheSetInput) {
+  const timestamp = Date.now();
+  await getNextCacheAdapter().set(input);
+  return { timestamp };
+}
+
 // Both execution backends use this host-side revalidation bridge.
 // Keep Next's adapter/profile semantics; evict speculative render reuse around
 // the mutation rather than changing stale-while-revalidate into expiration.

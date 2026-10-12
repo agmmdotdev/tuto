@@ -11,6 +11,8 @@ import type {
 } from "secure-exec";
 import {
   getNextCacheAdapter,
+  readNextCacheValue,
+  writeNextCacheValue,
   revalidateNextCacheTags,
   type NextCacheGetInput,
   type NextCacheLock,
@@ -431,12 +433,13 @@ function cacheOperation(
   ) {
     throw new Error("The cache request is outside the active workspace.");
   }
+  if (operation === "now") return Promise.resolve(Date.now());
   const adapter = getNextCacheAdapter();
   if (operation === "get") {
-    return adapter.get(input as NextCacheGetInput);
+    return readNextCacheValue(input as NextCacheGetInput);
   }
   if (operation === "set") {
-    return adapter.set(input as NextCacheSetInput);
+    return writeNextCacheValue(input as NextCacheSetInput);
   }
   if (operation === "acquireLock") {
     return adapter.acquireLock(input as NextCacheLockInput);
@@ -528,6 +531,7 @@ server.listen(0, "127.0.0.1");
 
 export class NextSecureExecWorker {
   private activeWorkspaceKey: string | undefined;
+  private activeRequests = 0;
   private address: string | undefined;
   private generations = new Map<string, string>();
   private queue: Promise<void> = Promise.resolve();
@@ -570,6 +574,10 @@ export class NextSecureExecWorker {
       await readFile(path.join(sourceRoot, "client-router.cjs"), "utf8"),
     );
     if (this.kind === "rsc") {
+      await filesystem.writeFile(
+        `${runtimeRoot}/cache-lifetime.cjs`,
+        await readFile(path.join(sourceRoot, "cache-lifetime.cjs"), "utf8"),
+      );
       await filesystem.writeFile(
         `${runtimeRoot}/cache-runtime.cjs`,
         await readFile(path.join(sourceRoot, "cache-runtime.cjs"), "utf8"),
@@ -975,9 +983,13 @@ export class NextSecureExecWorker {
         : typeof artifact?.generation === "string"
           ? artifact.generation
           : undefined;
-    this.activeWorkspaceKey = generation
+    const activeWorkspaceKey = generation
       ? this.generations.get(generation)
       : undefined;
+    if (activeWorkspaceKey) {
+      this.activeWorkspaceKey = activeWorkspaceKey;
+      this.activeRequests++;
+    }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
@@ -1010,7 +1022,11 @@ export class NextSecureExecWorker {
       throw error;
     } finally {
       clearTimeout(timeout);
-      this.activeWorkspaceKey = undefined;
+      // A worker is bound to one workspace. Concurrent stream controls must
+      // not clear the bridge scope of a newer render or another pending pull.
+      if (activeWorkspaceKey && --this.activeRequests === 0) {
+        this.activeWorkspaceKey = undefined;
+      }
     }
   }
 
