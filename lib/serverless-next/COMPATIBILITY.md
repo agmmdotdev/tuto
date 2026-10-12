@@ -14,6 +14,63 @@ RSC and SSR workers use production mode to match the shared browser kernel;
 production Flight redacts uncaught error messages while retaining Next's
 control-flow digests for streamed not-found boundaries.
 
+## Cache lifetime checkpoint (2026-10-12)
+
+Speculative Flight, loading shells and newly rendered layout/loading receipts
+now expire at the earliest data-cache deadline represented by their completed
+render, capped by the existing thirty-second maximum. `unstable_cache` and
+cached `fetch` reads use the stored modification time and revalidation lifetime.
+Cache Components use the original generation time and the minimum of `stale`,
+`revalidate` and `expire`. Warm hits spend the remaining lifetime; completing a
+slow stream or reissuing a receipt cannot restart it. Inherited models retain
+their original deadlines independently of newly rendered models.
+
+Stale reads permanently disqualify that render from speculative reuse, even if
+its completion drains a successful background cache write. Normal navigation
+still serves stale-while-revalidate data, and hard-expired Cache Components
+regenerate before returning a value. Missing or malformed lifetime metadata on
+an observed cache value fails closed. Uncached renders retain the existing
+thirty-second bound. Caller-supplied dependency metadata remains untrusted.
+
+The two cache bridges supply host observation/write times. Cache Component
+generation captures a host timestamp before filling, with request-start time
+as a conservative fallback for partitioned writes. Reads translate cache age
+into Next's internal clock without changing persisted timestamps or disabling
+SecureExec's frozen-clock mitigation. Overlapping stream-control requests retain
+the worker's single-workspace bridge scope until all active requests finish;
+cancellation cannot clear a following render's scope.
+The ticket and worker registry versions advance so a host module reload cannot
+reuse fixed-TTL tickets or workers running the older cache bridge protocol.
+Package pins, compiler transforms and the generated browser kernel are unchanged.
+
+The browser measures returned TTLs from prefetch request start, including model
+grants, so transport and decoding cannot extend reuse. This intentionally loses
+some warming time on slow requests and needs no synchronized browser clock.
+New models still share their completed render's conservative dependency/lifetime
+union; this establishes an upper bound, not exact Next client-cache TTL parity
+or component-level dependency attribution.
+
+Fresh checks in the Tuto cloud workspace (Node 24.19.0, Yarn 4.13.0):
+
+- 155 runtime tests pass with each of child-process and SecureExec execution.
+  Eight added cases cover cold/aged reads, cached fetch, natural SWR, hard
+  expiration, late streamed completion, shell grants, inherited independent
+  deadlines, malformed lifetimes and ignored caller metadata. The existing
+  cancellation regression also checks recovery after overlapping controls.
+- 81 browser cases pass in Chromium 151 with each backend, including three
+  added lifetime/transport/state-retention cases. Twenty optional stock or
+  separately configured production cases are skipped; stock comparisons and
+  Firefox were not rerun for this checkpoint.
+- 111 secondary-runtime tests, lint, `typecheck:tsgo` and the cache-coordinator
+  typecheck pass. Lint retains the three previously documented warnings.
+- The production build passes with controlled Google Fonts CSS and real
+  Fontsource WOFF2 files served locally. The existing TanStack runtime-store
+  tracing warning remains; live Google Fonts retrieval was not tested.
+- A local `VERCEL=1`, SecureExec production API smoke verifies a sub-second
+  remaining lifetime, an expired ticket miss serving stale data, and a refreshed
+  ticket hit returning updated data. This is local evidence, not a deployed
+  Fluid Compute canary.
+
 ## Next 16.3.6 regression checkpoint
 
 Verified on 2026-10-03 in the Tuto cloud environment with Node 24.19.0,
@@ -568,7 +625,8 @@ streamed navigation. Subscribers are notified once on invalidation/expiry, and
 also if a ticket misses server-side. Callback rescheduling cannot mutate the
 entry set being invalidated.
 
-The conservative limits are 30 seconds, eight tickets per document, one active
+The conservative limits are at most 30 seconds (further capped by observed
+data-cache lifetimes), eight tickets per document, one active
 client prefetch, one MiB per Flight payload and sixteen MiB / 128 tickets per
 process. Real navigation cancels speculative work rather than waiting for it.
 New prefetch calls during navigation are ignored until the newest navigation
@@ -715,7 +773,7 @@ resolve lazy references; module-level side effects are not deferred until displa
 It advertises only templates it still holds. The API overwrites raw renderer hints
 and resolves receipts against the exact artifact object, revision/generation,
 document owner, normalized complete headers (including cookies/auth), explicit
-refresh/action epoch, dependency snapshot and the original thirty-second expiry.
+refresh/action epoch, dependency snapshot and the original data-lifetime-capped expiry.
 Forged keys and another owner/workspace/context miss safely. Proxy workspaces are excluded. Receipt metadata is capped at eight
 receipts per document, sixteen keys per receipt, and 128 receipts per process.
 Parameterized revisits select the held template matching the requested key; an
@@ -1052,11 +1110,11 @@ node .tmp/write-shell-stock.cjs /tmp/tuto-shell-stock
 # TUTO_NEXT_SHELL_PRODUCTION_ENDPOINT (the compiled Tuto request API URL).
 ```
 
-The next bounded compatibility slice is data-cache lifetime-aware speculative
-expiry: cap warmed Flight and inherited model lifetimes to the cache values they
-represent, including short-lived and stale-while-revalidate entries. The current
-fixed thirty-second limit does not establish data-cache TTL parity. Exact
-component-level dependency attribution, PPR continuation and cross-instance
-invalidation require separate architecture and evidence.
+The next bounded compatibility slice is a pinned stock Next 16.3.6 lifetime
+differential for short revalidation and Cache Components profiles, including
+nested/partitioned cache fills. The current conservative freshness caps do not
+establish exact data-cache/client TTL parity. Exact component-level dependency
+and lifetime attribution, PPR continuation and cross-instance invalidation
+require separate architecture and evidence.
 Deployment validation and sandbox security review remain separate operational
 work.

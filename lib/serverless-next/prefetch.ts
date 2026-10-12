@@ -77,6 +77,11 @@ export class NextPrefetchTickets {
   readonly ttlMs = 30_000;
   readonly maxEntryBytes = 1024 * 1024;
   constructor(private now: () => number = Date.now) {}
+  private deadline(dependencies?: NextCacheDependencies) {
+    const value = dependencies?.expiresAt;
+    return value === undefined ? Infinity :
+      Number.isFinite(value) && value >= 0 ? value : 0;
+  }
   epoch(artifact: NextRequestArtifact) {
     const version = nextCacheInvalidations.generation(artifact.workspaceKey);
     const previous = this.workspaceVersions.get(artifact);
@@ -142,6 +147,8 @@ export class NextPrefetchTickets {
       tags: Array.isArray(dependencies.tags)
         ? dependencies.tags.slice(0, 256)
         : [],
+      ...(dependencies.expiresAt === undefined ? {} :
+        { expiresAt: this.deadline(dependencies) }),
     };
     for (const segment of segments) {
       if (models.size >= 16) break;
@@ -169,6 +176,8 @@ export class NextPrefetchTickets {
           ))
       )
         return undefined;
+      const expiresAt = Math.min(this.now() + this.ttlMs, this.deadline(dependencies));
+      if (!previous && expiresAt <= this.now()) continue;
       models.set(
         segment.key,
         previous
@@ -177,7 +186,7 @@ export class NextPrefetchTickets {
               ...segment,
               snapshot: { ...snapshot },
               dependencies: validDependencies,
-              expiresAt: this.now() + this.ttlMs,
+              expiresAt,
             },
       );
     }
@@ -269,6 +278,7 @@ export class NextPrefetchTickets {
           entry.dependencies,
         )) ||
       (entry.maxExpiresAt !== undefined && entry.maxExpiresAt <= this.now()) ||
+      this.deadline(entry.dependencies) <= this.now() ||
       entry.body.byteLength > this.maxEntryBytes
     )
       return null;
@@ -307,6 +317,7 @@ export class NextPrefetchTickets {
       expiresAt: Math.min(
         this.now() + this.ttlMs,
         entry.maxExpiresAt ?? Infinity,
+        this.deadline(entry.dependencies),
       ),
     });
     return ticket;
@@ -348,7 +359,7 @@ export class NextPrefetchTickets {
   }
 }
 
-const key = Symbol.for("tuto.serverless-next.prefetch.v3");
+const key = Symbol.for("tuto.serverless-next.prefetch.v4");
 const globals = globalThis as typeof globalThis & {
   [key]?: NextPrefetchTickets;
 };

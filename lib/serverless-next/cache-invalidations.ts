@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 
-export type NextCacheDependencies = { complete: boolean; tags: string[] };
+export type NextCacheDependencies = {
+  complete: boolean;
+  tags: string[];
+  // Absolute freshness deadline; absent only when no finite cache lifetime was
+  // observed. Zero permanently disqualifies a render that served stale data.
+  expiresAt?: number;
+};
 export type NextCacheSnapshot = { generation: string; sequence: number };
 type Mutation = { sequence: number; tags?: string[] };
 type State = {
