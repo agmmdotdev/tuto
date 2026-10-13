@@ -95,6 +95,9 @@ function matcherFor(directorySegments: string[]): {
     ) {
       throw new Error(`Catch-all route segments must be last: ${segment.name}`);
     }
+    if (params.some((param) => param.name === segment.name)) {
+      throw new Error(`A route cannot repeat the dynamic parameter ${segment.name}.`);
+    }
     params.push(segment);
     if (segment.kind === "dynamic") {
       source += "/([^/]+)";
@@ -175,6 +178,12 @@ function routeDefinition(
   const { matcher, pattern } = matcherFor(
     options.routeSegments ?? appSegments(directory),
   );
+  const rootLayout = ancestors(directory)
+    .map((entry) => routeFile(paths, entry, "layout"))
+    .find(Boolean);
+  const rootParamNames = rootLayout ? publicSegments(appSegments(path.posix.dirname(rootLayout)))
+    .filter((segment) => segment.kind !== "static")
+    .map((segment) => segment.name) : [];
   const nearest = (
     basename: "error" | "loading" | "not-found",
     candidates = directories,
@@ -211,6 +220,8 @@ function routeDefinition(
     ...(nearest("not-found") ? { notFound: nearest("not-found") } : {}),
     page,
     pattern,
+    ...(rootLayout ? { rootLayout } : {}),
+    rootParamNames,
     templates: directories
       .map((entry) => routeFile(paths, entry, "template"))
       .filter((entry): entry is string => Boolean(entry)),
@@ -459,6 +470,14 @@ export function buildNextRouteManifest(
   );
 
   return {
+    // Like Next's root-params loader: stop at the first layout in each tree;
+    // never discover roots inside private directories or parallel slots.
+    rootParamNames: [...new Set([...paths]
+      .filter((modulePath) => /^app(?:\/.*)?\/layout\.(tsx|ts|jsx|js)$/.test(modulePath) &&
+        !appSegments(path.posix.dirname(modulePath)).some((segment) => segment.startsWith("_") || segment.startsWith("@")) &&
+        !ancestors(path.posix.dirname(modulePath)).slice(0, -1).some((entry) => routeFile(paths, entry, "layout")))
+      .flatMap((layout) => publicSegments(appSegments(path.posix.dirname(layout)))
+        .filter((segment) => segment.kind !== "static").map((segment) => segment.name)))].sort(),
     handlers,
     interceptions,
     parallelRoutes,
@@ -495,12 +514,12 @@ function matchDefinitions<
     const params: Record<string, string | string[] | undefined> = {};
     route.matcher.params.forEach((param, index) => {
       const value = match[index + 1];
-      params[param.name] =
-        value === undefined || value === ""
+      const decoded = value === undefined || value === ""
           ? undefined
           : param.kind === "dynamic"
             ? decodeURIComponent(value)
             : value.split("/").map(decodeURIComponent);
+      Object.defineProperty(params, param.name, { value: decoded, enumerable: true, writable: true, configurable: true });
     });
     return { params, route };
   }

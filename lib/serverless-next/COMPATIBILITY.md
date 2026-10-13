@@ -14,6 +14,76 @@ RSC and SSR workers use production mode to match the shared browser kernel;
 production Flight redacts uncaught error messages while retaining Next's
 control-flow digests for streamed not-found boundaries.
 
+## Learner root parameters (2026-10-13)
+
+PR #36 was merged as `03e080428bc968119f542b2e4ff4ef01f2a5018b` before this
+slice. Learner modules can now import `next/root-params`. The manifest follows
+the pinned Next root-params loader: the first layout in each app tree determines
+its root parameters; route groups contribute no URL parameters and private
+directories/parallel slots cannot introduce additional roots. Exports are the
+union across those roots. A getter for another root resolves to `undefined`.
+The selected primary branch supplies the request's root map, including loading,
+streamed rendering and retained intercepted backgrounds. Root-layout `params`
+props stop at that layout; pages continue receiving their complete parameters.
+
+The runtime delegates getters to Next 16.3.6's actual `getRootParam`, so reads
+participate in its coarse/specific cache partition keys and nested cache read
+propagation. Root-tag invalidation and speculative deadlines continue through
+the existing host cache. Next's request/action async stores apply its phase
+restrictions: direct getters in Server Actions and Route
+Handlers reject, as do getters inside `unstable_cache`. A root-dependent
+`"use cache"` function called from a page's Server Action can fill successfully;
+its cache-generation phase is render. A cached function called from a Route
+Handler can resolve getters against an empty root map after Next clears the
+action store for cache generation; that partition cannot reuse a page tenant's
+value. Stock production confirmed both distinctions.
+SecureExec's bounded async-context bridge releases a clean snapshot before
+framework await continuations. The root getter adapter clears ActionStore only
+when reading inside a real Next cache store, matching that measured stock path
+without changing the bridge's general scope lifecycle.
+Missing named exports and client value imports fail compilation; erased
+type-only imports remain valid. Artifact version 26, the compiler fingerprint
+and the worker registry invalidate the previous compiled/runtime shape.
+
+Fresh cloud verification for this slice:
+
+- 184 runtime cases pass per backend with the lifetime stock fixture enabled,
+  including six new root-parameter cases. They cover root attribution, promised
+  props, multiple roots/catch-all arrays, nested cache partitions, tags, loading,
+  workspace separation, retained interception versus canonical rendering,
+  prototype-named parameters, import guards and `unstable_cache` recovery.
+- 93 Chromium 151 cases pass per backend with both stock origins enabled: the
+  preceding 82 cases plus eleven new browser cases. Five pairs compare Tuto and
+  stock production for independent roots, sibling/owner navigation, intercepted
+  history, tag refresh with retained state, and direct versus cached action
+  access. One Tuto case validates root-dependent full-prefetch invalidation.
+  Twenty unrelated optional stock/production cases skip explicitly; Firefox
+  was not run. Earlier stock counter assertions read a cache value filled by
+  another test's action bundle; resetting each test's tenant cache fixed the
+  harness, and the preceding nine-case version passed three consecutive runs.
+  One parallel child-process full run failed an existing action-cookie case
+  with Chromium's `Resulting promise was garbage collected` error; three focused
+  repetitions passed. This intermittent prefetch/evaluation failure remains a
+  validation limitation rather than a reproduced root-parameter defect.
+- 111 secondary-runtime cases, lint, both repository typechecks, the stock
+  fixture typecheck and both production builds pass. The stock fixture uses
+  webpack and Cache Components with normal type checking. The Tuto build used
+  live Google Fonts. Three existing lint warnings and the existing TanStack
+  filesystem tracing warning remain.
+- A local `VERCEL=1` production API/browser smoke confirms SecureExec execution,
+  bounded root-layout props, retained client state on sibling navigation, a
+  cold root-dependent cached action after tag invalidation, a changed owner,
+  independent roots/catch-all arrays and Route Handler rejection.
+
+This replaces the learner-import limitation recorded in the historical
+checkpoint below. It does not execute `generateStaticParams` in Tuto, establish
+general PPR/stock Router Cache parity, or narrow the conservative dependency
+unions of jointly rendered models. Only root-layout props are newly bounded;
+intermediate nested-layout props retain the earlier conservative full parameter
+map. The cross-owner intercepted-context runtime probe is a Tuto regression;
+the paired stock history probe uses the same owner. Action refresh retains the
+existing routing architecture and is not a new full router-state replay proof.
+
 ## Stock cache lifetime comparison (2026-10-12)
 
 PR #35 was merged as `e04e0a7db3f30fd61013b91a08d6f15ee69c67df` before this
@@ -72,9 +142,9 @@ the pinned Next wrapper and `getRootParam` in a constructed request context;
 its frozen-clock variant mirrors the SecureExec clock translation while using
 native Node AsyncLocalStorage. It verifies actual coarse/redirect and specific
 writes, host timestamps, warm reads, SWR and partition isolation, without
-claiming full SecureExec root-parameter rendering parity. Tuto's learner module
-loader still rejects `next/root-params`; a separate import-guard case locks in
-that limitation. The stock page uses a real dynamic root and generated exports.
+claiming full SecureExec root-parameter rendering parity. At that checkpoint,
+Tuto's learner module loader rejected `next/root-params`; its import-guard case
+recorded that limitation. The stock page uses a real dynamic root and generated exports.
 There is no claim that stock supports root params inside Route Handlers.
 
 Fresh cloud validation for this comparison:
@@ -1200,10 +1270,10 @@ node .tmp/write-shell-stock.cjs /tmp/tuto-shell-stock
 # TUTO_NEXT_SHELL_PRODUCTION_ENDPOINT (the compiled Tuto request API URL).
 ```
 
-The next bounded compatibility slice is learner-facing `next/root-params`
-support with correct root-layout parameter attribution, using the new real
-coarse/specific partition probes as regression evidence. The current internal
-handler coverage does not establish that compiler/request-context capability.
+The next bounded compatibility slice is parameter attribution for intermediate
+nested layouts, with stock route-group/parallel-slot comparisons and preservation
+of `useParams` and cached-model identity across sibling navigation. Root-layout
+attribution and the learner `next/root-params` capability are now implemented.
 Exact component-level dependency/lifetime attribution, stock client Router
 Cache TTL parity, PPR continuation and cross-instance invalidation still require
 separate architecture and evidence.
@@ -1227,3 +1297,17 @@ untracked Playwright config selecting installed Chromium 151 with its executable
 path; the repository browser configuration was not changed. Without the stock
 origin, ten runtime fixture-dependent cases and the new stock browser case skip
 explicitly; ten standalone Tuto cases and three handler/import cases run.
+
+The root-parameter comparison is reproducible from the repository root:
+
+```bash
+yarn exec esbuild test/serverless-next/fixtures/write-root-params-stock.ts --bundle --platform=node --outfile=.tmp/write-root-params-stock.cjs
+node .tmp/write-root-params-stock.cjs /tmp/tuto-root-params-stock
+node node_modules/next/dist/bin/next build /tmp/tuto-root-params-stock --webpack
+node node_modules/next/dist/bin/next start /tmp/tuto-root-params-stock -p 18774
+# Repeat with TUTO_NEXT_EXECUTION_MODE=secure-exec for the second backend.
+yarn test:serverless-next root-params.test.ts --maxWorkers=1
+TUTO_NEXT_ROOT_PARAMS_STOCK_ORIGIN=http://127.0.0.1:18774 yarn test:serverless-next-browser root-params.spec.ts
+```
+
+Five stock browser cases skip explicitly without this origin; six Tuto cases run.

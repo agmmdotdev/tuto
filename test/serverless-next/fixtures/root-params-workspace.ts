@@ -1,0 +1,31 @@
+import type { WorkspaceFile } from "../../../lib/ide/types";
+
+export function rootParamsWorkspace(): WorkspaceFile[] {
+  const source: Record<string, string> = {
+    "app/data.ts": `import * as Root from "next/root-params";import {cacheLife,cacheTag} from "next/cache";
+const counts=new Map();export async function values(){return Object.fromEntries(await Promise.all(Object.keys(Root).filter(name=>name!=="__esModule").map(async name=>[name,await Root[name]()] )));}
+export async function read(){"use cache";cacheLife({stale:30,revalidate:3600,expire:7200});await new Promise(resolve=>setTimeout(resolve,25));const data=await values();const key=JSON.stringify(data),count=(counts.get(key)??0)+1;counts.set(key,count);for(const [name,value] of Object.entries(data))if(value!==undefined)cacheTag("root-"+name+":"+JSON.stringify(value));return {...data,count};}
+export async function nested(){"use cache";cacheLife({stale:30,revalidate:3600,expire:7200});return read();}`,
+    "app/counter.tsx": '"use client";import {useState} from "react";export default function Counter(){const [count,setCount]=useState(0);return <button data-root-count onClick={()=>setCount(value=>value+1)}>root:{count}</button>;}',
+    "app/controls.tsx": `"use client";import {useState} from "react";import {useRouter} from "next/navigation";import Link from "next/link";import {direct,cached,noOp} from "./actions";
+export default function Controls(){const router=useRouter(),[result,setResult]=useState(null);return <><Link data-photo href="/alpha/photo/seven" prefetch={false}>photo</Link><button data-back onClick={()=>router.back()}>back</button><button data-prefetch onClick={()=>router.prefetch("/alpha/items/two")}>prefetch</button><button data-next onClick={()=>router.push("/alpha/items/two")}>next</button><button data-beta onClick={()=>router.push("/beta/items/one")}>beta</button><button data-refresh onClick={()=>router.refresh()}>refresh</button><button data-action onClick={async()=>setResult(await direct())}>action</button><button data-cache-action onClick={async()=>setResult(await cached())}>cached action</button><button data-noop onClick={async()=>setResult(await noOp())}>noop</button><output data-action-result>{JSON.stringify(result)}</output></>;}`,
+    "app/actions.ts": `"use server";import {tenant} from "next/root-params";import {read} from "./data";
+export async function direct(){try{return {value:await tenant()};}catch(error){return {blocked:true,message:error.message};}}
+export async function cached(){try{return await read();}catch(error){return {blocked:true,message:error.message};}}
+export async function noOp(){return {ok:true};}`,
+    "app/(tenant)/[tenant]/layout.tsx": 'import Counter from "../../counter";import Controls from "../../controls";export default async function Layout({children,side,params}){return <html><body><output data-root-layout-params>{JSON.stringify(await params)}</output><Counter /><Controls />{children}{side}</body></html>;}',
+    "app/(tenant)/[tenant]/items/[id]/page.tsx": 'import {connection} from "next/server";import {values,nested} from "../../../../data";export default async function Page({params}){await connection();return <><output data-leaf-params>{JSON.stringify(await params)}</output><output data-root-values>{JSON.stringify(await values())}</output><output data-root-cache>{JSON.stringify(await nested())}</output></>;}',
+    "app/(tenant)/[tenant]/@side/default.tsx": 'import {tenant} from "next/root-params";export default async function Default(){return <output data-slot-root>{await tenant()}</output>;}',
+    "app/(tenant)/[tenant]/@side/items/[id]/page.tsx": 'import {tenant} from "next/root-params";export default async function Page(){await new Promise(resolve=>setTimeout(resolve,20));return <output data-slot-root>{await tenant()}</output>;}',
+    "app/(tenant)/[tenant]/@side/(.)photo/[photoId]/page.tsx": 'import {tenant} from "next/root-params";export default async function Modal({params}){return <><output data-modal-root>{await tenant()}</output><output data-modal-params>{JSON.stringify(await params)}</output></>;}',
+    "app/(tenant)/[tenant]/photo/[photoId]/page.tsx": 'import {values} from "../../../../data";export default async function Photo(){return <output data-canonical-root>{JSON.stringify(await values())}</output>;}',
+    "app/(tenant)/[tenant]/loading.tsx": 'import {tenant} from "next/root-params";export default async function Loading(){return <p data-root-loading>{await tenant()}</p>;}',
+    "app/(region)/other/[region]/layout.tsx": 'export default async function Layout({children,params}){return <html><body><output data-root-layout-params>{JSON.stringify(await params)}</output>{children}</body></html>;}',
+    "app/(region)/other/[region]/page.tsx": 'import {connection} from "next/server";import {values,nested} from "../../../data";export default async function Page(){await connection();return <><output data-root-values>{JSON.stringify(await values())}</output><output data-root-cache>{JSON.stringify(await nested())}</output></>;}',
+    "app/(catch)/bag/[...parts]/layout.tsx": 'export default async function Layout({children,params}){return <html><body><output data-root-layout-params>{JSON.stringify(await params)}</output>{children}</body></html>;}',
+    "app/(catch)/bag/[...parts]/page.tsx": 'import {connection} from "next/server";import {values,nested} from "../../../data";export default async function Page(){await connection();return <><output data-root-values>{JSON.stringify(await values())}</output><output data-root-cache>{JSON.stringify(await nested())}</output></>;}',
+    "app/api/roots/route.ts": 'import {tenant} from "next/root-params";import {read} from "../../data";export async function GET(request){try{return Response.json({value:new URL(request.url).searchParams.has("cache")?await read():await tenant()});}catch(error){return Response.json({blocked:true,message:error.message},{status:400});}}',
+    "app/api/invalidate/route.ts": 'import {revalidateTag} from "next/cache";export async function POST(request){const {name,value}=await request.json();revalidateTag("root-"+name+":"+JSON.stringify(value),{expire:0});return Response.json({ok:true});}',
+  };
+  return Object.entries(source).map(([path, content]) => ({ path, content, language: path.endsWith(".ts") ? "ts" : "tsx" }));
+}

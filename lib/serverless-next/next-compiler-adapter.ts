@@ -71,7 +71,7 @@ function cacheKey(
 ) {
   return createHash("sha256")
     .update(
-      `${PINNED_NEXT_VERSION}\0rsc-cache-context-v4\0${target}\0${canonicalPath}\0${actionSalt}\0${source}`,
+      `${PINNED_NEXT_VERSION}\0rsc-root-params-v5\0${target}\0${canonicalPath}\0${actionSalt}\0${source}`,
     )
     .digest("hex");
 }
@@ -227,7 +227,7 @@ export async function transformNextModule({
   return { ...value, cacheHit: false };
 }
 
-export const NEXT_COMPILER_FINGERPRINT = `next-swc:${PINNED_NEXT_VERSION}:rsc-cache-context-v4`;
+export const NEXT_COMPILER_FINGERPRINT = `next-swc:${PINNED_NEXT_VERSION}:rsc-root-params-v5`;
 export const NEXT_COMPILER_VERSION = PINNED_NEXT_VERSION;
 
 export function canonicalNextWorkspacePath(

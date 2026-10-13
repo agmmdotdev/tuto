@@ -6,7 +6,6 @@ import { afterAll, expect, test } from "vitest";
 import { getNextCacheAdapter, readNextCacheValue, writeNextCacheValue, revalidateNextCacheTags,
   type NextCacheGetInput, type NextCacheSetInput, type NextCacheLockInput, type NextCacheLock, type NextCacheRevalidateInput, type NextCacheMetrics } from "../../lib/serverless-next/cache-adapter";
 import { compileNextRequestWorkspace } from "../../lib/serverless-next/compiler";
-import { executeNextRequestArtifact } from "../../lib/serverless-next/runtime";
 import { closeNextRscWorkerPoolForTests } from "../../lib/serverless-next/rsc-worker-pool";
 import { closeNextSsrWorkerPoolForTests } from "../../lib/serverless-next/ssr-worker-pool";
 import { cacheLifetimeParityWorkspace } from "./fixtures/cache-lifetime-parity-workspace";
@@ -90,9 +89,8 @@ for (const clock of ["native", "frozen"]) {
   });
 }
 
-test("root-param partitions are a handler seam, not a supported learner compiler API", async () => {
+test("a descendant parameter below app/layout is not a root-params export", async () => {
   const files = cacheLifetimeParityWorkspace();
   files.find(file => file.path === "app/api/probe/route.ts")!.content = 'import {tenant} from "next/root-params";export async function GET(){return Response.json({tenant:await tenant()});}';
-  const artifact = await compileNextRequestWorkspace(files, { workspaceKey: "root-params-unsupported", serverReferenceHashSalt: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=" });
-  await expect(executeNextRequestArtifact(artifact, { url: "/api/probe" })).rejects.toThrow("Unsupported external server import next/root-params");
+  await expect(compileNextRequestWorkspace(files, { workspaceKey: "root-params-not-exported", serverReferenceHashSalt: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=" })).rejects.toThrow(/No matching export/);
 });
