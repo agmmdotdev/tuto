@@ -61,6 +61,10 @@ Fresh cloud verification for this slice:
   was not run. Earlier stock counter assertions read a cache value filled by
   another test's action bundle; resetting each test's tenant cache fixed the
   harness, and the preceding nine-case version passed three consecutive runs.
+  One parallel child-process full run failed an existing action-cookie case
+  with Chromium's `Resulting promise was garbage collected` error; three focused
+  repetitions passed. This intermittent prefetch/evaluation failure remains a
+  validation limitation rather than a reproduced root-parameter defect.
 - 111 secondary-runtime cases, lint, both repository typechecks, the stock
   fixture typecheck and both production builds pass. The stock fixture uses
   webpack and Cache Components with normal type checking. The Tuto build used
