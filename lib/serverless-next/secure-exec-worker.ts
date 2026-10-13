@@ -531,7 +531,7 @@ server.listen(0, "127.0.0.1");
 
 export class NextSecureExecWorker {
   private activeWorkspaceKey: string | undefined;
-  private activeRequests = 0;
+  private activeScopes = 0;
   private address: string | undefined;
   private generations = new Map<string, string>();
   private queue: Promise<void> = Promise.resolve();
@@ -837,11 +837,36 @@ export class NextSecureExecWorker {
     return this.sendOne(message);
   }
 
+  private retainWorkspace(generation: string | undefined) {
+    const workspaceKey = generation ? this.generations.get(generation) : undefined;
+    if (!workspaceKey) return () => {};
+    this.activeWorkspaceKey = workspaceKey;
+    this.activeScopes++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      if (--this.activeScopes === 0) this.activeWorkspaceKey = undefined;
+    };
+  }
+
   async openStream(
     message: Record<string, unknown>,
   ): Promise<NextSecureWorkerReply & NextSecureWorkerStream> {
-    const reply = await this.send(message);
+    const generation =
+      typeof message.generation === "string" ? message.generation : undefined;
+    // Cache fills continue between pull requests under response backpressure.
+    // Retain before rendering starts, through the stream's terminal outcome.
+    const releaseWorkspace = this.retainWorkspace(generation);
+    let reply: NextSecureWorkerReply;
+    try {
+      reply = await this.send(message);
+    } catch (error) {
+      releaseWorkspace();
+      throw error;
+    }
     if (typeof reply.streamId !== "string") {
+      releaseWorkspace();
       throw new Error(
         `The SecureExec ${this.kind.toUpperCase()} worker returned no response stream.`,
       );
@@ -849,8 +874,6 @@ export class NextSecureExecWorker {
     const streamId = reply.streamId;
     const inputStreamId =
       typeof reply.inputStreamId === "string" ? reply.inputStreamId : undefined;
-    const generation =
-      typeof message.generation === "string" ? message.generation : undefined;
     let resolveFinal!: (value: unknown) => void;
     let rejectFinal!: (error: unknown) => void;
     let settled = false;
@@ -865,12 +888,14 @@ export class NextSecureExecWorker {
       if (settled) return;
       settled = true;
       if (idleTimeout) clearTimeout(idleTimeout);
+      releaseWorkspace();
       resolveFinal(value);
     };
     const fail = (error: unknown) => {
       if (settled) return;
       settled = true;
       if (idleTimeout) clearTimeout(idleTimeout);
+      releaseWorkspace();
       rejectFinal(error);
     };
     const armIdleTimeout = () => {
@@ -983,13 +1008,7 @@ export class NextSecureExecWorker {
         : typeof artifact?.generation === "string"
           ? artifact.generation
           : undefined;
-    const activeWorkspaceKey = generation
-      ? this.generations.get(generation)
-      : undefined;
-    if (activeWorkspaceKey) {
-      this.activeWorkspaceKey = activeWorkspaceKey;
-      this.activeRequests++;
-    }
+    const releaseWorkspace = this.retainWorkspace(generation);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
@@ -1022,11 +1041,8 @@ export class NextSecureExecWorker {
       throw error;
     } finally {
       clearTimeout(timeout);
-      // A worker is bound to one workspace. Concurrent stream controls must
-      // not clear the bridge scope of a newer render or another pending pull.
-      if (activeWorkspaceKey && --this.activeRequests === 0) {
-        this.activeWorkspaceKey = undefined;
-      }
+      // The single-workspace scope also includes any live response streams.
+      releaseWorkspace();
     }
   }
 
