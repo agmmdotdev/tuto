@@ -243,6 +243,7 @@ function clientClosure(
   clientEntries: string[],
   modules: Map<string, SourceModule>,
   resources: Map<string, { path: string }>,
+  rootParamImports: Set<string>,
 ) {
   const closure = new Set<string>();
   const queue = [...clientEntries];
@@ -261,6 +262,9 @@ function clientClosure(
     }
     if (isActionModule) continue;
     for (const specifier of importSpecifiers(source.content)) {
+      if (specifier === "next/root-params" && rootParamImports.has(modulePath)) {
+        throw new Error(`Client Component graph imports server-only next/root-params: ${modulePath}`);
+      }
       const resolved = resolveWorkspaceImport(modulePath, specifier, resources);
       if (!resolved && specifier.startsWith(".")) {
         throw new Error(`Unable to resolve ${specifier} from ${modulePath}.`);
@@ -433,6 +437,32 @@ export async function compileNextRequestWorkspaceWithStatus(
     ),
   ]);
   const router = buildNextRouteManifest(modules.keys());
+  const rootParamImports = new Set<string>();
+  const rootImports = [...modules.values()].filter((source) => importSpecifiers(source.content).includes("next/root-params"));
+  if (rootImports.length) {
+    const names = router.rootParamNames ?? [];
+    if (names.some((name) => !/^[A-Za-z_$][\w$]*$/.test(name))) {
+      throw new Error("next/root-params requires root parameter names that are JavaScript export identifiers.");
+    }
+    // Let esbuild link actual value imports/reexports against the generated
+    // export set. Type-only imports disappear; comments/strings aren't imports.
+    const api = names.map((name) => `export function ${name}(){}`).join("\n") || "export {};";
+    for (const source of rootImports) {
+      await build({ bundle: true, write: false, platform: "node", format: "esm", logLevel: "silent",
+        stdin: { contents: source.content, sourcefile: source.path, loader: source.path.endsWith("x") ? "tsx" : "ts" },
+        plugins: [{ name: "tuto-root-params-exports", setup(builder) {
+          builder.onResolve({ filter: /.*/ }, (args) => {
+            if (args.path === "next/root-params") {
+              rootParamImports.add(source.path);
+              return { path: args.path, namespace: "root-params" };
+            }
+            return { path: args.path, external: true };
+          });
+          builder.onLoad({ filter: /.*/, namespace: "root-params" }, () => ({ contents: api, loader: "js" }));
+        } }],
+      });
+    }
+  }
   const revision = createNextWorkspaceRevision(
     files,
     workspaceKey,
@@ -493,6 +523,7 @@ export async function compileNextRequestWorkspaceWithStatus(
     clientEntries,
     modules,
     dependencyResources,
+    rootParamImports,
   )) {
     const source = modules.get(modulePath)!;
     const transformed = await transformNextModule({
