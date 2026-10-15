@@ -14,6 +14,74 @@ RSC and SSR workers use production mode to match the shared browser kernel;
 production Flight redacts uncaught error messages while retaining Next's
 control-flow digests for streamed not-found boundaries.
 
+## Intermediate layout parameters (2026-10-13)
+
+PR #37 was merged as `e65fa68c93ae3855a212e680184e14c4ce7e25a8` before this
+slice. Every server or client layout now receives promised `params` accumulated
+through its own segment, following Next 16.3.6's `create-component-tree` behavior.
+For `/acme/projects/red/items/one`, the organization layout receives `{org}`,
+the project and static items layouts receive `{org, project}`, and the item
+layout/page receive `{org, project, id}`. Route groups and slot folders add no
+parameters; catch-all values remain arrays. An unmatched optional catch-all
+contributes no own property to a layout's parameter map. Root not-found fallback
+rendering also scopes its wrapping layout's props.
+
+Interception markers attached directly to a dynamic folder now contribute that
+folder's parameter and concrete owner identity. Changing its value remounts
+that layout's client state, while parent client state remains. An up-level
+intercepted target can omit physical owner parameters from its URL. Those
+ancestors are recovered from the selected primary branch for new interceptions
+and from the saved historical primary for restored slots. Using the historical
+owner prevents a changed primary owner from keeping the old intercepted slot.
+Scoped ancestors and target parameters reach the modal layout without leaking
+the background page's leaf parameter.
+
+Client `useParams()` continues to receive complete active branch parameters,
+including the background leaf and active intercepted slot. Complete branch
+parameters still participate in model keys; this slice does not broadly reuse
+server output solely because layout props are equal. Layouts that explicitly
+pass their scoped params to a cached function now share that data-cache key
+across leaf siblings, as stock does. Cache tags, lifetimes, conservative model
+dependency unions and header/workspace fences remain in place. Artifact version
+27, the compiler fingerprint and worker registry advance together.
+
+Fresh cloud validation:
+
+- 189 runtime cases pass per backend with the stock lifetime origin enabled;
+  no runtime cases skip. Five new cases cover server/client intermediate props,
+  route groups/parallel branches, scoped cached arguments, catch-all/optional
+  keys, loading shells, tag invalidation, intercepted and canonical paths,
+  attached markers, up-level owner recovery and root not-found fallback props.
+- 103 Chromium 151 browser cases pass per backend with all three stock origins
+  enabled. Ten new cases pair Tuto and stock for scoped props, sibling/owner
+  state, data-cache reuse and refresh, intercepted history, attached dynamic
+  marker remounts, up-level refresh/owner changes and catch-all/optional keys.
+  Twenty unrelated optional stock/production cases skip explicitly; Firefox
+  was not run. The initial stock fixture used incompatible slug names for one
+  parallel URL pattern, which stock correctly rejected. The final fixture uses
+  a shared slug and distinct interception targets.
+- An existing parameterized-history case previously asserted the intentionally
+  incorrect leaf parameter in a static parent layout. It now asserts the scoped
+  value while continuing to check the selected leaf and retained client/model
+  history; three focused runs passed after updating the expectation. A separate
+  canonical hard-render assertion timed out once during parallel validation;
+  three focused repetitions passed. That intermittent timeout remains a
+  validation limitation, not an attributed layout-parameter defect.
+- 111 secondary-runtime cases, lint, both repository typechecks, the stock
+  fixture typecheck and both production builds pass. The builds use stock
+  webpack/Cache Components and the normal Tuto production command with live
+  Google Fonts. Three existing lint warnings and the existing TanStack tracing
+  warning remain. A local `VERCEL=1` SecureExec API/browser smoke covers scoped
+  client/server props, sibling cache reuse, tag refresh, preserved state,
+  modal history, dynamic-marker remount, up-level refresh and owner changes.
+
+The bounded comparisons use same-owner `(.)` and `(..)` interceptions. They do
+not establish general PPR, all interception-depth or cross-owner parity, full
+Server Action router-state replay, or exact component-level model dependencies.
+Tuto still does not execute `generateStaticParams`. Page/default/handler parameter
+maps and client hook semantics otherwise retain their existing behavior; exact
+optional catch-all own-key parity for those contexts is a separate next slice.
+
 ## Learner root parameters (2026-10-13)
 
 PR #36 was merged as `03e080428bc968119f542b2e4ff4ef01f2a5018b` before this
@@ -78,9 +146,10 @@ Fresh cloud verification for this slice:
 This replaces the learner-import limitation recorded in the historical
 checkpoint below. It does not execute `generateStaticParams` in Tuto, establish
 general PPR/stock Router Cache parity, or narrow the conservative dependency
-unions of jointly rendered models. Only root-layout props are newly bounded;
-intermediate nested-layout props retain the earlier conservative full parameter
-map. The cross-owner intercepted-context runtime probe is a Tuto regression;
+unions of jointly rendered models. At that checkpoint only root-layout props
+were newly bounded; intermediate layouts retained the conservative full map.
+The subsequent checkpoint above scopes those intermediate props. The
+cross-owner intercepted-context runtime probe is a Tuto regression;
 the paired stock history probe uses the same owner. Action refresh retains the
 existing routing architecture and is not a new full router-state replay proof.
 
@@ -1270,9 +1339,9 @@ node .tmp/write-shell-stock.cjs /tmp/tuto-shell-stock
 # TUTO_NEXT_SHELL_PRODUCTION_ENDPOINT (the compiled Tuto request API URL).
 ```
 
-The next bounded compatibility slice is parameter attribution for intermediate
-nested layouts, with stock route-group/parallel-slot comparisons and preservation
-of `useParams` and cached-model identity across sibling navigation. Root-layout
+The next bounded compatibility slice is exact optional catch-all own-key
+attribution for page/default/handler parameter maps and client `useParams`, with
+stock hard-render, navigation and cache-key comparisons. Root/intermediate layout
 attribution and the learner `next/root-params` capability are now implemented.
 Exact component-level dependency/lifetime attribution, stock client Router
 Cache TTL parity, PPR continuation and cross-instance invalidation still require
@@ -1311,3 +1380,17 @@ TUTO_NEXT_ROOT_PARAMS_STOCK_ORIGIN=http://127.0.0.1:18774 yarn test:serverless-n
 ```
 
 Five stock browser cases skip explicitly without this origin; six Tuto cases run.
+
+The intermediate-layout comparison is reproducible from the repository root:
+
+```bash
+yarn exec esbuild test/serverless-next/fixtures/write-nested-layout-stock.ts --bundle --platform=node --outfile=.tmp/write-nested-layout-stock.cjs
+node .tmp/write-nested-layout-stock.cjs /tmp/tuto-nested-layout-stock
+node node_modules/next/dist/bin/next build /tmp/tuto-nested-layout-stock --webpack
+node node_modules/next/dist/bin/next start /tmp/tuto-nested-layout-stock -p 18781
+# Repeat with TUTO_NEXT_EXECUTION_MODE=secure-exec for the second backend.
+yarn test:serverless-next nested-layout-params.test.ts --maxWorkers=1
+TUTO_NEXT_LAYOUT_PARAMS_STOCK_ORIGIN=http://127.0.0.1:18781 yarn test:serverless-next-browser nested-layout-params.spec.ts
+```
+
+Five stock browser cases skip explicitly without this origin; five Tuto cases run.

@@ -207,12 +207,12 @@ test("expired receipts drop old templates before warming a new sibling",async({p
 });
 
 test("parameterized history selects the matching held template and retains layout client state",async({page})=>{
- test.skip(Boolean(stock),"Tuto conservatively keys complete branch params; stock parent layouts receive only owner params.");
+ test.skip(Boolean(stock),"Exercises Tuto's conservative complete-branch template keys and retained model history.");
  const stats=await open(page,300);await warm(page,stats,"/dashboard/shared/alpha");await go(page,"alpha");
- await page.locator('[data-counter="shared-layout"]').click();await expect(page.locator('[data-shared-param]')).toHaveText("alpha");
+ await page.locator('[data-counter="shared-layout"]').click();await expect(page.locator('[data-shared-param]')).toHaveText("none");
  const first=await page.locator('[data-shared-root]').textContent();
- await warm(page,stats,"/dashboard/shared/beta");await go(page,"beta");await expect(page.locator('[data-shared-param]')).toHaveText("beta");
+ await warm(page,stats,"/dashboard/shared/beta");await go(page,"beta");await expect(page.locator('[data-shared-param]')).toHaveText("none");
  await page.locator('[data-back]').click();await expect(page.locator('[data-shared-page]:visible')).toContainText("alpha:");
- await expect(page.locator('[data-shared-param]')).toHaveText("alpha");await expect(page.locator('[data-shared-root]')).toHaveText(first!);
+ await expect(page.locator('[data-shared-param]')).toHaveText("none");await expect(page.locator('[data-shared-root]')).toHaveText(first!);
  await expect(page.locator('[data-counter="shared-layout"]')).toHaveText("shared-layout:1");
 });
