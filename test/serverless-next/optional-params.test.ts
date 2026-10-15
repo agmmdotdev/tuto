@@ -23,8 +23,8 @@ test("server pages, parallel defaults, and SSR client hooks omit the same option
   const artifact=await compileNextRequestWorkspace(optionalParamsWorkspace(),{workspaceKey:"optional-own-pages",serverReferenceHashSalt:salt});
   for(const [suffix,shape] of [["",omitted],["/a/two%20words",present],["",omitted]] as const){
     const html=await(await executeNextRequestArtifact(artifact,{url:"/acme/docs"+suffix})).text();
-    for(const attr of ["data-page-params","data-default-params","data-client-params"])expect(output(html,attr)).toEqual(shape);
-    const cache=output(html,"data-cache");expect(cache.actual).toEqual({shape,count:1});expect(cache.omitted).toEqual({shape:omitted,count:1});
+    for(const attr of ["data-page-params","data-default-params","data-client-params"])expect(output(html,attr)).toEqual(shape.own?{...shape,value:["a","two%20words"]}:shape);
+    const cache=output(html,"data-cache");expect(cache.actual).toEqual({shape:shape.own?{...shape,value:["a","two%20words"]}:shape,count:1});expect(cache.omitted).toEqual({shape:omitted,count:1});
   }
 });
 
@@ -42,7 +42,7 @@ test("promised client-page props, scalar parameters and required catch-alls pres
   const files=optionalParamsWorkspace();
   files.push({path:"app/(workspace)/[tenant]/reexport/[[...parts]]/page.tsx",language:"tsx",content:'export {default} from "../../client/[[...parts]]/page";'});
   const artifact=await compileNextRequestWorkspace(files,{workspaceKey:"optional-own-client-page",serverReferenceHashSalt:salt});
-  for(const [url,attr,expected] of [["/acme/client","data-client-page",{...present,value:[""]}],["/acme/reexport","data-client-page",{...present,value:[""]}],["/acme/client/a/two%20words","data-client-page",present],["/acme/required/a/two%20words","data-page-params",present],["/acme/scalar/zero","data-page-params",{...present,value:"zero",kind:"string"}]] as const){
+  for(const [url,attr,expected] of [["/acme/client","data-client-page",{...present,value:[""]}],["/acme/reexport","data-client-page",{...present,value:[""]}],["/acme/client/a/two%20words","data-client-page",{...present,value:["a","two%20words"]}],["/acme/required/a/two%20words","data-page-params",{...present,value:["a","two%20words"]}],["/acme/scalar/zero","data-page-params",{...present,value:"zero",kind:"string"}]] as const){
     expect(output(await(await executeNextRequestArtifact(artifact,{url})).text(),attr)).toEqual(expected);
   }
 });

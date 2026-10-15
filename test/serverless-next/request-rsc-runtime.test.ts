@@ -1791,7 +1791,7 @@ describe("request-compiled Next RSC runtime", () => {
       workspaceKey: "next-app-router-topology",
     });
 
-    expect(artifact.version).toBe(28);
+    expect(artifact.version).toBe(29);
     expect(artifact.router.routes.map((route) => route.pattern)).toEqual([
       "/dashboard/settings",
       "/photo/[id]",
@@ -2099,8 +2099,8 @@ describe("request-compiled Next RSC runtime", () => {
     const matched = await renderNextRequestArtifact(artifact, { url: "/projects/acme%20team/ok" });
     const html = (await matched.text()).split("<script", 1)[0];
     expect(matched.status).toBe(200);
-    expect(html).toContain("detail:<!-- -->acme team<!-- -->:<!-- -->ok");
-    expect(html).toContain("badge:<!-- -->acme team<!-- -->:<!-- -->default");
+    expect(html).toContain("detail:<!-- -->acme%20team<!-- -->:<!-- -->ok");
+    expect(html).toContain("badge:<!-- -->acme%20team<!-- -->:<!-- -->default");
     expect(html).toContain('data-workspace-layout="true"');
     expect(html).toContain('data-project-layout="true"');
     expect(html).toContain('data-metrics-layout="true"');
@@ -2166,7 +2166,7 @@ describe("request-compiled Next RSC runtime", () => {
       serverReferenceHashSalt: actionSalt,
       workspaceKey: "next-nested-catchall",
     });
-    for (const [suffix, expected] of [["", "empty"], ["/one/two%20words", "one|two words"]]) {
+    for (const [suffix, expected] of [["", "empty"], ["/one/two%20words", "one|two%20words"]]) {
       const response = await renderNextRequestArtifact(artifact, { url: `/projects/acme${suffix}` });
       expect(response.status).toBe(200);
       expect((await response.text()).split("<script", 1)[0])
