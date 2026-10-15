@@ -618,7 +618,7 @@ export class NextRscWorkerPool {
   }
 }
 
-const poolKey = Symbol.for("tuto.serverless-next.rsc-worker-pool.v6");
+const poolKey = Symbol.for("tuto.serverless-next.rsc-worker-pool.v7");
 
 export function getNextRscWorkerPool() {
   const globals = globalThis as typeof globalThis & {

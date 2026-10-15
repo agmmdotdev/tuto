@@ -14,6 +14,77 @@ RSC and SSR workers use production mode to match the shared browser kernel;
 production Flight redacts uncaught error messages while retaining Next's
 control-flow digests for streamed not-found boundaries.
 
+## Optional catch-all own keys (2026-10-15)
+
+PR #38 was merged as `1a73b62712b9dcbd384294cb4be3b3f0a7296ef0` before this
+slice. A missing optional catch-all now contributes no own parameter key in both
+the host matcher and request worker. Previously the worker defined an enumerable
+property with value `undefined`; JSON concealed the difference, while
+`Object.keys`, `Object.hasOwn` and cache argument encoding could observe it.
+Parallel defaults copy only owned ancestor parameters. Owner identity and
+selected-segment lookup also ignore inherited properties, so an omitted key
+named `constructor` cannot enter the router model as `Object`'s constructor.
+
+Stock Next 16.3.6 production with Cache Components has distinct projections:
+
+| Context for an omitted `[[...parts]]` | Observed result |
+| --- | --- |
+| Server page and server parallel default promised params | No own `parts` key |
+| GET/POST Route Handler promised params | No own `parts` key |
+| Client `useParams()` | No own `parts` key |
+| Client-page promised props | Own `parts: [""]` |
+
+The client-page result comes from Next's `ClientPageRoot` reconstructing a
+catch-all from the empty segment cache key using `"".split("/")`. Tuto matches
+that specific prop projection, including re-exported Client Components, without
+adding the field to server maps or the hook's active-branch context. This is
+not a claim that Tuto implements Next's complete Cache Components client-page
+boundary or its SSR/PPR policy. Present arrays and required/scalar parameters
+retain Tuto's existing values.
+
+The omission makes a cached function called with page/handler params share the
+same key as the explicit `{tenant}` argument. Present catch-all values remain
+separate entries. Tag invalidation still respects tenant arguments, and an
+omitted-target speculative response cannot survive a related mutation or
+restore a phantom client key. Cache lifetimes, conservative dependency unions,
+model identities and request/workspace fences otherwise keep their existing
+policy. Artifact version 28, the compiler fingerprint and worker registry
+advance together; the browser kernel and dependency pins are unchanged.
+
+Fresh cloud validation for this slice:
+
+- 194 runtime cases pass per backend with the stock lifetime origin enabled;
+  no runtime cases skip. Five new cases cover both matchers, missing/trailing
+  optional paths, page/default/hook SSR output, actual versus explicit-empty
+  cache arguments, GET/POST and tenant invalidation, direct/re-exported client
+  pages, present/required/scalar values and omitted prototype-named defaults.
+- 110 Chromium 151 browser cases pass per backend with four stock origins
+  configured. Six new cases pair Tuto and stock across hydration, optional
+  segment transitions, back/forward, refresh, parent-state retention, handler
+  cache behavior, client-page projection and value-type controls. One Tuto case
+  checks tag invalidation of an omitted-target full prefetch. Twenty unrelated
+  optional stock/production cases skip explicitly; Firefox was not run.
+- 111 secondary-runtime cases, lint, both repository typechecks, the new stock
+  fixture typecheck and stock/Tuto production builds pass. The lifetime, root
+  and intermediate-layout stock fixtures were rebuilt for these regressions.
+  Stock uses webpack and normal type checking. Tuto's production build used
+  live Google Fonts. Three existing lint warnings and the existing TanStack
+  filesystem tracing warning remain.
+- A local `VERCEL=1` SecureExec production API/browser smoke verifies omitted
+  page/default/hook keys, equivalent empty cache arguments, tag invalidation of
+  prefetched data, retained parent state, GET/POST handlers and the distinct
+  client-page prop projection.
+
+The initial stock comparisons exposed value differences rather than a uniform
+omission rule. Tests now preserve those distinctions explicitly. In this pinned
+Cache Components fixture, `/acme/docs/a/two%20words` produces `"two%20words"` in
+stock page/default/hook values while the Route Handler receives `"two words"`.
+Tuto decodes both contexts to `"two words"`. Own-key and ASCII value comparisons
+match; encoded value projection remains a documented gap and a recommended
+next bounded comparison. This slice does not establish all Client Component
+prop projections, URI normalization, action router-state replay, PPR, stock
+client-cache TTL parity or exact component dependency attribution.
+
 ## Intermediate layout parameters (2026-10-13)
 
 PR #37 was merged as `e65fa68c93ae3855a212e680184e14c4ce7e25a8` before this
@@ -1339,10 +1410,11 @@ node .tmp/write-shell-stock.cjs /tmp/tuto-shell-stock
 # TUTO_NEXT_SHELL_PRODUCTION_ENDPOINT (the compiled Tuto request API URL).
 ```
 
-The next bounded compatibility slice is exact optional catch-all own-key
-attribution for page/default/handler parameter maps and client `useParams`, with
-stock hard-render, navigation and cache-key comparisons. Root/intermediate layout
-attribution and the learner `next/root-params` capability are now implemented.
+The next bounded compatibility slice is percent-encoded parameter value
+projection across page/default/client props, `useParams` and Route Handlers,
+using stock hard-render, navigation and cache-key comparisons before choosing
+any decoding change. Optional own-key attribution and root/intermediate layout
+scoping are now implemented; client-page props retain their measured distinction.
 Exact component-level dependency/lifetime attribution, stock client Router
 Cache TTL parity, PPR continuation and cross-instance invalidation still require
 separate architecture and evidence.
@@ -1394,3 +1466,17 @@ TUTO_NEXT_LAYOUT_PARAMS_STOCK_ORIGIN=http://127.0.0.1:18781 yarn test:serverless
 ```
 
 Five stock browser cases skip explicitly without this origin; five Tuto cases run.
+
+The optional-parameter comparison is reproducible from the repository root:
+
+```bash
+yarn exec esbuild test/serverless-next/fixtures/write-optional-params-stock.ts --bundle --platform=node --outfile=.tmp/write-optional-params-stock.cjs
+node .tmp/write-optional-params-stock.cjs /tmp/tuto-optional-params-stock
+node node_modules/next/dist/bin/next build /tmp/tuto-optional-params-stock --webpack
+node node_modules/next/dist/bin/next start /tmp/tuto-optional-params-stock -p 18801
+# Repeat with TUTO_NEXT_EXECUTION_MODE=secure-exec for the second backend.
+yarn test:serverless-next optional-params.test.ts --maxWorkers=1
+TUTO_NEXT_OPTIONAL_PARAMS_STOCK_ORIGIN=http://127.0.0.1:18801 yarn test:serverless-next-browser optional-params.spec.ts
+```
+
+Three stock browser cases skip explicitly without this origin; four Tuto cases run.

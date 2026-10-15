@@ -519,7 +519,8 @@ function matchDefinitions<
           : param.kind === "dynamic"
             ? decodeURIComponent(value)
             : value.split("/").map(decodeURIComponent);
-      Object.defineProperty(params, param.name, { value: decoded, enumerable: true, writable: true, configurable: true });
+      // An omitted optional catch-all contributes no own key, like Next's matcher.
+      if (decoded !== undefined) Object.defineProperty(params, param.name, { value: decoded, enumerable: true, writable: true, configurable: true });
     });
     return { params, route };
   }
