@@ -72,9 +72,9 @@ for(const target of ["tuto","stock"] as const){
     await open(page,"/acme/required/a/two");await shape(page,"data-page-params",present);
     await open(page,"/acme/scalar/zero");await shape(page,"data-page-params",{...present,value:"zero",kind:"string"});
     // Pinned stock Cache Components keep encoded page values; handlers decode.
-    // Record this existing value-projection gap separately from own-key parity.
+    // Both rendered projections now agree with the pinned stock behavior.
     await open(page,"/acme/docs/a/two%20words");
-    const encoded={...present,value:["a",target==="stock"?"two%20words":"two words"]};
+    const encoded={...present,value:["a","two%20words"]};
     for(const attr of ["data-page-params","data-default-params","data-client-params"])await shape(page,attr,encoded);
   });
   if(target==="tuto")check("an omitted optional prefetch cannot survive its cache tag mutation or restore a phantom client key",async({page})=>{

@@ -14,6 +14,78 @@ RSC and SSR workers use production mode to match the shared browser kernel;
 production Flight redacts uncaught error messages while retaining Next's
 control-flow digests for streamed not-found boundaries.
 
+## Encoded parameter projections (2026-10-15)
+
+PR #39 was merged as `206ff53b35b3ad19e4411abd760492e4c5e87dac` before this
+slice. Parameter values now follow the measured stock Next 16.3.6 context rather
+than one decoding rule. The matcher still splits URL segments before decoding
+each segment once. The component-tree boundary then applies `encodeURIComponent`
+to each value, matching Next's `getDynamicParam` implementation.
+
+| Context | `/acme/docs/a%2fb` value | Repeated `%252F` value |
+| --- | --- | --- |
+| Page/default/layout props, client-page props, `useParams`, selected segments and root getters | `a%2Fb` | `%252F` |
+| Route Handler params and `generateMetadata` params | `a/b` | `%2F` |
+
+The table shows individual parameter elements; catch-alls remain arrays, and
+scalar parameters remain strings. Lowercase escapes canonicalize when encoding
+the decoded value, while encoded unreserved `%41` becomes `A`. Unicode is encoded
+in component contexts and decoded for handlers/metadata. Encoded `/` and `\\`
+stay within one URL segment; a decoded slash is never split into new elements.
+Repeated encoding is decoded only once and then re-encoded for rendered values.
+The optional missing-key and client-page empty-segment distinction remains.
+
+Routing, restored owner comparisons, handler execution and metadata interpolation
+keep decoded maps internally. Only the component-facing maps and root getter
+context are projected. This avoids encoding metadata twice, and lets canonical
+escape aliases share the same explicitly keyed cached function. Segment arrays
+and repeated-encoding variants remain separate arguments. Existing URL-bound
+prefetch/receipt keys, conservative model dependency unions, header/workspace
+fences, cache lifetimes and tag policies remain in force. Artifact version 29,
+the compiler fingerprint and worker registry invalidate the prior render shape;
+dependency pins and browser kernel are unchanged.
+
+Fresh cloud validation:
+
+- 197 runtime cases pass per backend with the lifetime stock origin enabled;
+  no runtime cases skip. Three new cases cover component/root/default/hook and
+  client-page values, decoded handlers, canonical cache aliases versus actual
+  segment boundaries, metadata's separate projection and malformed-input
+  recovery. Earlier assertions expecting decoded rendered values now expect
+  the stock projection, while host matcher and handler assertions stay decoded.
+- 117 Chromium 151 cases pass per backend with five stock origins configured.
+  Six new cases pair stock and Tuto across eight separator/Unicode/repeated-
+  encoding samples, scalar metadata, client-page props, selected segments,
+  navigation/history/refresh, cache aliases, state retention and malformed
+  inputs. One Tuto case validates invalidation of an encoded full prefetch.
+  Twenty unrelated optional cases skip explicitly; Firefox was not run.
+- 111 secondary-runtime cases, lint, both repository typechecks, the new stock
+  fixture typecheck, the stock production build and Tuto production build pass.
+  Existing unchanged lifetime/root/layout/optional stock fixture builds were
+  reused for fresh HTTP/browser regressions. Tuto used live Google Fonts.
+  Three existing lint warnings and the TanStack tracing warning remain. The
+  first parallel secondary run hit two five-second Next Lite compilation/render
+  timeouts; the serial rerun passed. Those files do not import this runtime.
+- A local `VERCEL=1` SecureExec production API/browser smoke covers encoded and
+  repeated separators, Unicode, handler and metadata distinctions, cache alias
+  reuse, invalidated speculation, retained parent state and malformed recovery.
+
+Malformed `%ZZ`, truncated UTF-8, overlong UTF-8 and encoded lone-surrogate
+sequences are rejected; following valid requests still work. In the measured
+stock production fixture malformed page/handler HTTP requests return 500. Tuto's
+direct execution rejects with the decoding error, while its public control API
+retains the existing 400 diagnostic envelope. This status/envelope difference
+is explicit remaining work, not a claim of error-response parity. The initial
+stock build also required a Suspense boundary around its dynamic client hooks;
+that fixture correction does not change Tuto's rendering pipeline.
+
+This does not establish general URI/path normalization, Unicode normalization,
+all rewrites/interception/Server Action contexts, Next's complete Client
+Component reconstruction or SSR/PPR policy, stock Router Cache TTL parity, or
+exact component dependency attribution. The next bounded slice is the malformed
+parameter error contract and recovery across buffered, streamed and navigation
+requests, using stock evidence before changing response statuses or envelopes.
+
 ## Optional catch-all own keys (2026-10-15)
 
 PR #38 was merged as `1a73b62712b9dcbd384294cb4be3b3f0a7296ef0` before this
@@ -79,9 +151,9 @@ The initial stock comparisons exposed value differences rather than a uniform
 omission rule. Tests now preserve those distinctions explicitly. In this pinned
 Cache Components fixture, `/acme/docs/a/two%20words` produces `"two%20words"` in
 stock page/default/hook values while the Route Handler receives `"two words"`.
-Tuto decodes both contexts to `"two words"`. Own-key and ASCII value comparisons
-match; encoded value projection remains a documented gap and a recommended
-next bounded comparison. This slice does not establish all Client Component
+At that checkpoint Tuto decoded both contexts to `"two words"`. The subsequent
+projection checkpoint above closes that rendered-value gap. This earlier slice
+does not establish all Client Component
 prop projections, URI normalization, action router-state replay, PPR, stock
 client-cache TTL parity or exact component dependency attribution.
 
@@ -1410,11 +1482,12 @@ node .tmp/write-shell-stock.cjs /tmp/tuto-shell-stock
 # TUTO_NEXT_SHELL_PRODUCTION_ENDPOINT (the compiled Tuto request API URL).
 ```
 
-The next bounded compatibility slice is percent-encoded parameter value
-projection across page/default/client props, `useParams` and Route Handlers,
-using stock hard-render, navigation and cache-key comparisons before choosing
-any decoding change. Optional own-key attribution and root/intermediate layout
-scoping are now implemented; client-page props retain their measured distinction.
+The next bounded compatibility slice is malformed parameter failure contracts
+and recovery across buffered/streamed/navigation requests, including the
+measured stock HTTP versus Tuto diagnostic-envelope distinction. Encoded
+component values, optional own keys and root/intermediate layout scoping are
+implemented; metadata/handlers and client-page omission retain their measured
+context-specific behavior.
 Exact component-level dependency/lifetime attribution, stock client Router
 Cache TTL parity, PPR continuation and cross-instance invalidation still require
 separate architecture and evidence.
@@ -1480,3 +1553,17 @@ TUTO_NEXT_OPTIONAL_PARAMS_STOCK_ORIGIN=http://127.0.0.1:18801 yarn test:serverle
 ```
 
 Three stock browser cases skip explicitly without this origin; four Tuto cases run.
+
+The encoded-parameter comparison is reproducible from the repository root:
+
+```bash
+yarn exec esbuild test/serverless-next/fixtures/write-encoded-params-stock.ts --bundle --platform=node --outfile=.tmp/write-encoded-params-stock.cjs
+node .tmp/write-encoded-params-stock.cjs /tmp/tuto-encoded-params-stock
+node node_modules/next/dist/bin/next build /tmp/tuto-encoded-params-stock --webpack
+node node_modules/next/dist/bin/next start /tmp/tuto-encoded-params-stock -p 18811
+# Repeat with TUTO_NEXT_EXECUTION_MODE=secure-exec for the second backend.
+yarn test:serverless-next encoded-params.test.ts --maxWorkers=1
+TUTO_NEXT_ENCODED_PARAMS_STOCK_ORIGIN=http://127.0.0.1:18811 yarn test:serverless-next-browser encoded-params.spec.ts
+```
+
+Three stock browser cases skip without this origin; four Tuto cases run.
